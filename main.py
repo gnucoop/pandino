@@ -44,7 +44,8 @@ def analyst():
     response = agent.chat(chat)
     explanation = agent.explain()
 
-    return jsonify({"response": response, "explanation": explanation})
+    response_dict = response.to_dict(orient='records') if isinstance(response, pd.DataFrame) else response
+    return jsonify({"response": response_dict, "explanation": explanation})
 
 if __name__ == '__main__':
     app.run(debug=True)
