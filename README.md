@@ -28,9 +28,9 @@ To run the Pandino API service, use the following command:
 python main.py
 ```
 
-You can then access the `/analyst` endpoint with the required parameters. For example:
-```
-http://127.0.0.1:5000/analyst?model_name=mistral-model&llm_type=Mistral&chat=Print%20a%20table%20of%20Top%2010%20Organisation%20aggregate%20by%20tot_dip&data=compass.csv
+To access the `/analyst` endpoint using `curl`, you can use the following command:
+```bash
+curl -X POST "http://127.0.0.1:5000/analyst" -H "Content-Type: application/json" -d '{"model_name": "mistral-model", "llm_type": "Mistral", "chat": "Print a table of Top 10 Organisation aggregate by tot_dip", "data": "compass.csv"}'
 ```
 
 To access the `/analyst` endpoint using `curl`, you can use the following command:

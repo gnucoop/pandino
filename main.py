@@ -13,16 +13,16 @@ app = Flask(__name__)
 # Load environment variables
 load_dotenv()
 
-@app.route('/analyst', methods=['GET'])
+@app.route('/analyst', methods=['POST'])
 def analyst():
-    model_name = request.args.get('model_name')
-    llm_type = request.args.get('llm_type')
-    chat = request.args.get('chat')
+    model_name = request.json.get('model_name')
+    llm_type = request.json.get('llm_type')
+    chat = request.json.get('chat')
 
     if not model_name or not llm_type or not chat:
         return jsonify({"error": "Missing parameters"}), 400
 
-    data_param = request.args.get('data')
+    data_param = request.json.get('data')
     if not data_param:
         return jsonify({"error": "Missing data parameter"}), 400
 
@@ -37,7 +37,7 @@ def analyst():
         llm = ChatOpenAI(model_name=model_name, temperature=0, seed=26, api_key=os.environ['DEEPSEEK_API_KEY'])
     elif llm_type == 'Mistral':
         from langchain_mistralai import ChatMistral
-        llm = ChatMistral(model_name=model_name, temperature=0, api_key=os.environ['MISTRAL_API_KEY'])
+        llm = ChatMistral(model_name=model_name, temperature=0, seed=26, api_key=os.environ['MISTRAL_API_KEY'])
 
     agent = Agent(data, config={"llm": llm, "open_charts": False})
 
