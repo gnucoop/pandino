@@ -6,6 +6,7 @@ from pandasai import Agent
 
 from langchain_groq.chat_models import ChatGroq
 from langchain_openai import ChatOpenAI
+from langchain_mistralai import ChatMistralAI
 
 app = Flask(__name__)
 
