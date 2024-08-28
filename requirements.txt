@@ -1,5 +1,5 @@
 Flask
-python-dotenv
+python-dotenv==1.0.0
 pandas
 pandasai
 langchain_groq

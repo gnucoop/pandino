@@ -15,7 +15,10 @@ from langchain_mistralai import ChatMistralAI
 app = Flask(__name__)
 
 def validate_api_key(api_key):
-    if not api_key or not database.validate_api_key(api_key):
+    if not api_key:
+        abort(403)
+    result, _ = database.validate_api_key(api_key)
+    if not result:
         abort(403)
 
 # Define a route for the '/analyst' endpoint that accepts POST requests

@@ -1,16 +1,28 @@
 import sqlite3
 import sys
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 import os
+import base64
 
 # Generate a key for encryption and decryption
 # Store the key in an environment variable or a secure file
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env file
+
 KEY = os.environ.get('ENCRYPTION_KEY')
 if not KEY:
-    KEY = Fernet.generate_key()
-    print(f"Generated new encryption key: {KEY.decode()}. Please store this securely.")
-else:
-    print(f"Using existing ENCRYPTION_KEY: {KEY}")
+    print("Error: ENCRYPTION_KEY not found in environment variables.")
+    sys.exit(1)
+
+try:
+    # Ensure the key is properly formatted
+    KEY = base64.urlsafe_b64encode(base64.urlsafe_b64decode(KEY + '=' * (-len(KEY) % 4)))
+    print("Using ENCRYPTION_KEY from environment variables.")
+except Exception as e:
+    print(f"Error with ENCRYPTION_KEY: {e}")
+    sys.exit(1)
+
 cipher_suite = Fernet(KEY)
 
 def init_db():
@@ -28,24 +40,18 @@ def init_db():
     print("Database initialized successfully.")
 
 def add_user(username, api_key):
-    print(f"Connecting to database: users.db")
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     encrypted_api_key = cipher_suite.encrypt(api_key.encode())
-    print(f"Encrypted API key: {encrypted_api_key}")
     try:
-        print(f"Attempting to add user: {username}")
         cursor.execute('INSERT INTO users (username, api_key) VALUES (?, ?)', (username, encrypted_api_key))
         conn.commit()
-        print(f"User {username} added successfully.")
-    except sqlite3.IntegrityError as e:
-        print(f"Error: {e}")
-        print(f"User {username} or API key already exists.")
-    except Exception as e:
-        print(f"Unexpected error: {e}")
+    except sqlite3.IntegrityError:
+        pass
+    except Exception:
+        pass
     finally:
         conn.close()
-        print("Database connection closed.")
 
 def list_users():
     conn = sqlite3.connect('users.db')
@@ -63,20 +69,60 @@ def list_users():
 def validate_api_key(api_key):
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM users WHERE api_key = ?', (api_key,))
-    user = cursor.fetchone()
+    cursor.execute('SELECT api_key FROM users')
+    encrypted_keys = cursor.fetchall()
     conn.close()
-    return user is not None
+    
+    for (encrypted_key,) in encrypted_keys:
+        try:
+            if isinstance(encrypted_key, str):
+                encrypted_key = encrypted_key.encode()
+            decrypted_key = cipher_suite.decrypt(encrypted_key).decode().strip()
+            if decrypted_key == api_key.strip():
+                return True, "API key match found"
+        except InvalidToken:
+            pass
+        except Exception:
+            pass
+    return False, "No matching API key found"
+
+def print_stored_keys():
+    conn = sqlite3.connect('users.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT username, api_key FROM users')
+    users = cursor.fetchall()
+    conn.close()
+    print("Stored API keys:")
+    for username, encrypted_key in users:
+        print(f"Username: {username}, Encrypted key: {encrypted_key}")
+        try:
+            if isinstance(encrypted_key, str):
+                encrypted_key = encrypted_key.encode()
+            decrypted_key = cipher_suite.decrypt(encrypted_key).decode()
+            print(f"  Decrypted key: {decrypted_key}")
+        except Exception as e:
+            print(f"  Error decrypting key: {str(e)}")
+
+def print_help():
+    print("Usage: python database.py <command>")
+    print("Commands:")
+    print("  init_db                     Initialize the database")
+    print("  add_user <username> <api_key>  Add a new user")
+    print("  list_users                  List all users")
+    print("  print_keys                  Print all stored API keys")
 
 if __name__ == "__main__":
-    init_db()
     if len(sys.argv) > 1:
-        if sys.argv[1] == "add_user" and len(sys.argv) == 4:
+        if sys.argv[1] == "init_db":
+            init_db()
+        elif sys.argv[1] == "add_user" and len(sys.argv) == 4:
             username, api_key = sys.argv[2], sys.argv[3]
             add_user(username, api_key)
         elif sys.argv[1] == "list_users":
             list_users()
+        elif sys.argv[1] == "print_keys":
+            print_stored_keys()
         else:
-            print("Usage: python database.py [add_user <username> <api_key> | list_users]")
+            print_help()
     else:
-        print("Usage: python database.py [add_user <username> <api_key> | list_users]")
+        print_help()
