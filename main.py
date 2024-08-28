@@ -1,9 +1,10 @@
 # Import necessary libraries for the Flask application
-from flask import Flask, request, jsonify, abort
 import os
-from dotenv import load_dotenv
+from flask import Flask, request, jsonify, abort
 import pandas as pd
 from pandasai import Agent
+import database
+from database import validate_api_key
 
 # Import specific chat models from their respective libraries
 from langchain_groq.chat_models import ChatGroq
@@ -13,18 +14,15 @@ from langchain_mistralai import ChatMistralAI
 # Initialize the Flask application
 app = Flask(__name__)
 
-# Load environment variables from a .env file
-load_dotenv()
-
-def validate_api_key():
-    api_key = request.headers.get('X-API-KEY')
-    if not api_key or api_key != os.environ.get('API_KEY'):
+def validate_api_key(api_key):
+    if not api_key or not database.validate_api_key(api_key):
         abort(403)
 
 # Define a route for the '/analyst' endpoint that accepts POST requests
 @app.route('/analyst', methods=['POST'])
 def analyst():
-    validate_api_key()
+    api_key = request.headers.get('X-API-KEY')
+    validate_api_key(api_key)
     # Extract necessary parameters from the request JSON
     model_name = request.json.get('model_name')
     llm_type = request.json.get('llm_type')

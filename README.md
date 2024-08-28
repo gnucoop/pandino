@@ -7,6 +7,7 @@ Pandino is a powerful tool designed to analyze and visualize data using various 
 - Supports multiple LLM types including Groq, Deepseek, and Mistral.
 - Provides a Flask-based API for easy integration and usage.
 - Handles data processing and visualization using popular libraries like pandas and plotly.
+- Implements a basic user management system using SQLite for API key validation.
 
 ## Installation
 To install Pandino, follow these steps:
@@ -22,10 +23,25 @@ To install Pandino, follow these steps:
    pip install -r requirements.txt
    ```
 
+   Note: `sqlite3` is a standard library module in Python and does not need to be installed separately.
+
 ## Usage
 
 ### API Key Authentication
 To ensure secure access to the `/analyst` endpoint, Pandino uses API key authentication. You need to include the `X-API-KEY` header in your requests with a valid API key. The API key should be set in your `.env` file as `API_KEY`.
+
+### User Management
+Pandino includes a basic user management system using SQLite. The system allows you to add users and their API keys to the database. The `database.py` file contains functions to initialize the database, add users, and validate API keys.
+
+To initialize the database, run the following command:
+```bash
+python database.py
+```
+
+To add a new user and API key, you can use the following command:
+```bash
+python database.py add_user <username> <api_key>
+```
 To run the Pandino API service, use the following command:
 ```bash
 python main.py
