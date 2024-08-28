@@ -41,11 +41,11 @@ def analyst():
         model_kwargs = {'seed': 26}
         llm = ChatGroq(model_name=model_name, temperature=0, api_key=os.environ['GROQ_API_KEY'], model_kwargs=model_kwargs)
     elif llm_type == 'Deepseek':
-        llm = ChatOpenAI(model_name=model_name, temperature=0, seed=26, api_key=os.environ['DEEPSEEK_API_KEY'])
+        llm = ChatOpenAI(model_name=model_name, temperature=0, seed=26, base_url='https://api.deepseek.com', api_key=os.environ['DEEPSEEK_API_KEY'])
     elif llm_type == 'Mistral':
         llm = ChatMistralAI(model_name=model_name, temperature=0, seed=26, api_key=os.environ['MISTRAL_API_KEY'])
     elif llm_type == 'OpenAI':
-        llm = ChatOpenAI(model_name=model_name, temperature=0, api_key=os.environ['OPENAI_API_KEY'])
+        llm = ChatOpenAI(model_name=model_name, temperature=0, seed=26, api_key=os.environ['OPENAI_API_KEY'])
 
     # Initialize the agent with the data and configuration
     agent = Agent(data, config={"llm": llm, "open_charts": False})
@@ -54,13 +54,21 @@ def analyst():
     response = agent.chat(chat)
     explanation = agent.explain()
 
-    # Convert the response to a dictionary if it's a DataFrame
+    # Convert the response to a DataFrame if it's a list
+    if isinstance(response, list):
+        try:
+            response = pd.DataFrame(response)
+        except Exception as e:
+            return jsonify({"error": f"Failed to convert list to DataFrame: {str(e)}"}), 500
+
+    # Convert the response to a dictionary
     if isinstance(response, pd.DataFrame):
         response_dict = response.to_dict(orient='records')
-    elif isinstance(response, list):
-        response_dict = [item if isinstance(item, dict) else item.__dict__ for item in response]
+    elif isinstance(response, dict):
+        response_dict = response
     else:
-        response_dict = response if isinstance(response, dict) else response.__dict__
+        response_dict = {'type': type(response).__name__, 'value': str(response)}
+
     return jsonify({"response": response_dict, "explanation": explanation})
 
 # Run the Flask application in debug mode if this script is executed directly
