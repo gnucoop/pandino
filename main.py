@@ -17,9 +17,12 @@ app = Flask(__name__)
 def validate_api_key(api_key):
     if not api_key:
         abort(403)
-    result, _ = database.validate_api_key(api_key)
+    result, message = database.validate_api_key(api_key)
     if not result:
-        abort(403)
+        if "expired" in message:
+            abort(403, description="API key expired")
+        else:
+            abort(403, description="Invalid API key")
 
 # Define a route for the '/analyst' endpoint that accepts POST requests
 @app.route('/analyst', methods=['POST'])

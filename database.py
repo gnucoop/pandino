@@ -32,19 +32,20 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE,
-            api_key TEXT NOT NULL UNIQUE
+            api_key TEXT NOT NULL UNIQUE,
+            date_valid_until TEXT NOT NULL DEFAULT '2024-12-31'
         )
     ''')
     conn.commit()
     conn.close()
     print("Database initialized successfully.")
 
-def add_user(username, api_key):
+def add_user(username, api_key, date_valid_until='2024-12-31'):
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
     encrypted_api_key = cipher_suite.encrypt(api_key.encode())
     try:
-        cursor.execute('INSERT INTO users (username, api_key) VALUES (?, ?)', (username, encrypted_api_key))
+        cursor.execute('INSERT INTO users (username, api_key, date_valid_until) VALUES (?, ?, ?)', (username, encrypted_api_key, date_valid_until))
         conn.commit()
     except sqlite3.IntegrityError:
         pass
@@ -56,24 +57,28 @@ def add_user(username, api_key):
 def list_users():
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT username FROM users')
+    cursor.execute('SELECT username, date_valid_until FROM users')
     users = cursor.fetchall()
     conn.close()
     if users:
         print("Existing users:")
-        for user in users:
-            print(user[0])
+        for user, date_valid_until in users:
+            print(f"Username: {user}, Date Valid Until: {date_valid_until}")
     else:
         print("No users found in the database.")
 
 def validate_api_key(api_key):
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT api_key FROM users')
+    cursor.execute('SELECT api_key, date_valid_until FROM users')
     encrypted_keys = cursor.fetchall()
     conn.close()
     
-    for (encrypted_key,) in encrypted_keys:
+    from datetime import datetime
+    current_date = datetime.now().strftime('%Y-%m-%d')
+    for encrypted_key, date_valid_until in encrypted_keys:
+        if date_valid_until < current_date:
+            continue
         try:
             if isinstance(encrypted_key, str):
                 encrypted_key = encrypted_key.encode()
@@ -84,6 +89,8 @@ def validate_api_key(api_key):
             pass
         except Exception:
             pass
+    if date_valid_until < current_date:
+        return False, "API key expired"
     return False, "No matching API key found"
 
 def print_stored_keys():
@@ -107,7 +114,7 @@ def print_help():
     print("Usage: python database.py <command>")
     print("Commands:")
     print("  init_db                     Initialize the database")
-    print("  add_user <username> <api_key>  Add a new user")
+    print("  add_user <username> <api_key> <date_valid_until>  Add a new user")
     print("  list_users                  List all users")
     print("  print_keys                  Print all stored API keys")
 
@@ -115,9 +122,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         if sys.argv[1] == "init_db":
             init_db()
-        elif sys.argv[1] == "add_user" and len(sys.argv) == 4:
-            username, api_key = sys.argv[2], sys.argv[3]
-            add_user(username, api_key)
+        elif sys.argv[1] == "add_user" and len(sys.argv) == 5:
+            username, api_key, date_valid_until = sys.argv[2], sys.argv[3], sys.argv[4]
+            add_user(username, api_key, date_valid_until)
         elif sys.argv[1] == "list_users":
             list_users()
         elif sys.argv[1] == "print_keys":
