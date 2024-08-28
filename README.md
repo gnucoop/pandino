@@ -30,11 +30,11 @@ python main.py
 
 To access the `/analyst` endpoint using `curl`, you can use the following command:
 ```bash
-curl -X POST "http://127.0.0.1:5000/analyst" -H "Content-Type: application/json" -d '{"model_name": "llama-3.1-70b-versatile", "llm_type": "Groq", "chat": "Print a table of Top 10 Organisation aggregate by tot_dip", "data": "compass.csv"}'
+curl -X POST "http://127.0.0.1:5000/analyst" -H "Content-Type: application/json" -d '{"model_name": "llama-3.1-70b-versatile", "llm_type": "Groq", "chat": "Chat with your data...", "data": "file.csv", "config": {"open_charts": false}}'
 ```
 
 ## Contributing
 Contributions are welcome! Please read the [contributing guidelines](CONTRIBUTING.md) before getting started.
 
 ## License
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the GPLv3 License. See the [LICENSE](LICENSE) file for details.
