@@ -30,18 +30,23 @@ To install Pandino, follow these steps:
 ### API Key Authentication
 To ensure secure access to the `/analyst` endpoint, Pandino uses API key authentication. You need to include the `X-API-KEY` header in your requests with a valid API key. The API key should be set in your `.env` file as `API_KEY`.
 
-### User Management
+### User Management with SQLite
 Pandino includes a basic user management system using SQLite. The system allows you to add users and their API keys to the database. The `database.py` file contains functions to initialize the database, add users, and validate API keys.
 
-To initialize the database, run the following command:
+#### Initializing the Database
+To initialize the SQLite database, run the following command:
 ```bash
 python database.py
 ```
 
+#### Adding Users and API Keys
 To add a new user and API key, you can use the following command:
 ```bash
 python database.py add_user <username> <api_key>
 ```
+
+#### API Key Validation
+The API key validation is handled by the `validate_api_key` function in the `database.py` file. This function checks if the provided API key exists in the database and returns `True` if it does, otherwise `False`.
 To run the Pandino API service, use the following command:
 ```bash
 python main.py

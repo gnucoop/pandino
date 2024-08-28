@@ -5,4 +5,5 @@ pandasai
 langchain_groq
 langchain_openai
 langchain_mistralai
+cryptography
 numpy==1.26.4
