@@ -14,6 +14,11 @@ from langchain_mistralai import ChatMistralAI
 # Initialize the Flask application
 app = Flask(__name__)
 
+# Define a route for the '/' endpoint that returns a welcome message
+@app.route('/')
+def welcome():
+    return "Welcome to Pandino! This is the root endpoint."
+
 def validate_api_key(api_key):
     if not api_key:
         abort(403)
@@ -80,6 +85,21 @@ def analyst():
         response_dict = {'type': type(response).__name__, 'value': str(response)}
 
     return jsonify({"response": response_dict, "explanation": explanation})
+
+# Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
+@app.route('/summarize', methods=['GET'])
+def summarize():
+    return "The /summarize endpoint is not yet implemented.", 501
+
+# Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
+@app.route('/categorize', methods=['GET'])
+def categorize():
+    return "The /categorize endpoint is not yet implemented.", 501
+
+# Define a route for the '/img-comparison' endpoint that returns a "not yet implemented" message
+@app.route('/img-comparison', methods=['GET'])
+def img_comparison():
+    return "The /img-comparison endpoint is not yet implemented.", 501
 
 # Run the Flask application in debug mode if this script is executed directly
 if __name__ == '__main__':

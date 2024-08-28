@@ -41,9 +41,6 @@ If you encounter any issues during installation or usage, please check the follo
 - Verify that all required dependencies are installed by running `pip install -r requirements.txt` again.
 - If you encounter issues with API keys, ensure they are valid and not expired.
 
-## Contributing
-Contributions are welcome! Please read the [contributing guidelines](CONTRIBUTING.md) before getting started. To report bugs or suggest features, please open an issue on the GitHub repository.
-
 ## Usage
 
 ### User Management with SQLite
@@ -96,6 +93,7 @@ curl -X POST "http://127.0.0.1:5000/analyst" \
 Replace `your_api_key_here` with a valid API key from the database, and adjust the `model_name`, `llm_type`, `chat`, and `data` fields as needed.
 
 ## Contributing
+Contributions are welcome! Please read the [contributing guidelines](CONTRIBUTING.md) before getting started. To report bugs or suggest features, please open an issue on the GitHub repository.
 
 ## License
 This project is licensed under the GPLv3 License. See the [LICENSE](LICENSE) file for details.
