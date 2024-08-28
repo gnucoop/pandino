@@ -39,8 +39,14 @@ To install Pandino, follow these steps:
 ### User Management with SQLite
 Pandino includes a secure user management system using SQLite. The system allows you to add users and their API keys to the database.
 
-#### Initializing the Database and Adding Users
-To initialize the SQLite database and add a new user, use the following command:
+#### Initializing the Database
+To initialize the SQLite database, use the following command:
+```bash
+python database.py init_db
+```
+
+#### Adding Users
+To add a new user to the database:
 ```bash
 python database.py add_user <username> <api_key>
 ```
@@ -49,6 +55,12 @@ python database.py add_user <username> <api_key>
 To list all users in the database:
 ```bash
 python database.py list_users
+```
+
+#### Viewing Stored API Keys
+To view all stored (encrypted) API keys:
+```bash
+python database.py print_keys
 ```
 
 ### Running the Pandino API Service
