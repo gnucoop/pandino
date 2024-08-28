@@ -1,0 +1,8 @@
+Flask
+python-dotenv
+pandas
+pandasai
+langchain_groq
+langchain_openai
+langchain_mistralai
+numpy==1.26.4
