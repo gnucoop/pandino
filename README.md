@@ -4,10 +4,11 @@
 Pandino is a powerful tool designed to analyze and visualize data using various language models. It provides a flexible API for integrating different LLMs and processing data efficiently.
 
 ## Features
-- Supports multiple LLM types including Groq, Deepseek, and Mistral.
+- Supports multiple LLM types including Groq, Deepseek, Mistral, and OpenAI.
 - Provides a Flask-based API for easy integration and usage.
-- Handles data processing and visualization using popular libraries like pandas and plotly.
-- Implements a basic user management system using SQLite for API key validation.
+- Handles data processing and visualization using popular libraries like pandas and pandasai.
+- Implements a secure user management system using SQLite for API key validation.
+- Uses environment variables for secure storage of API keys and encryption keys.
 
 ## Installation
 To install Pandino, follow these steps:
@@ -23,39 +24,54 @@ To install Pandino, follow these steps:
    pip install -r requirements.txt
    ```
 
-   Note: `sqlite3` is a standard library module in Python and does not need to be installed separately.
+3. Set up environment variables:
+   Create a `.env` file in the project root and add the following variables:
+   ```
+   GROQ_API_KEY=your_groq_api_key
+   DEEPSEEK_API_KEY=your_deepseek_api_key
+   MISTRAL_API_KEY=your_mistral_api_key
+   OPENAI_API_KEY=your_openai_api_key
+   ENCRYPTION_KEY=your_encryption_key_for_database
+   ```
 
 ## Usage
 
-### API Key Authentication
-To ensure secure access to the `/analyst` endpoint, Pandino uses API key authentication. You need to include the `X-API-KEY` header in your requests with a valid API key. The API key should be set in your `.env` file as `API_KEY`.
-
 ### User Management with SQLite
-Pandino includes a basic user management system using SQLite. The system allows you to add users and their API keys to the database. The `database.py` file contains functions to initialize the database, add users, and validate API keys.
+Pandino includes a secure user management system using SQLite. The system allows you to add users and their API keys to the database.
 
-#### Initializing the Database
-To initialize the SQLite database, run the following command:
-```bash
-python database.py
-```
-
-#### Adding Users and API Keys
-To add a new user and API key, you can use the following command:
+#### Initializing the Database and Adding Users
+To initialize the SQLite database and add a new user, use the following command:
 ```bash
 python database.py add_user <username> <api_key>
 ```
 
-#### API Key Validation
-The API key validation is handled by the `validate_api_key` function in the `database.py` file. This function checks if the provided API key exists in the database and returns `True` if it does, otherwise `False`.
+#### Listing Users
+To list all users in the database:
+```bash
+python database.py list_users
+```
+
+### Running the Pandino API Service
 To run the Pandino API service, use the following command:
 ```bash
 python main.py
 ```
 
-To access the `/analyst` endpoint using `curl`, you can use the following command:
+### Accessing the API
+To access the `/analyst` endpoint using `curl`, use the following command:
 ```bash
-curl -X POST "http://127.0.0.1:5000/analyst" -H "Content-Type: application/json" -H "X-API-KEY: your_secret_api_key_here" -d '{"model_name": "llama-3.1-70b-versatile", "llm_type": "Groq", "chat": "Chat with your data...", "data": "file.csv", "config": {"open_charts": false}}'
+curl -X POST "http://127.0.0.1:5000/analyst" \
+     -H "Content-Type: application/json" \
+     -H "X-API-KEY: your_api_key_here" \
+     -d '{
+         "model_name": "llama-3.1-70b-versatile",
+         "llm_type": "Groq",
+         "chat": "Analyze the data and provide insights",
+         "data": "path/to/your/data.csv"
+     }'
 ```
+
+Replace `your_api_key_here` with a valid API key from the database, and adjust the `model_name`, `llm_type`, `chat`, and `data` fields as needed.
 
 ## Contributing
 Contributions are welcome! Please read the [contributing guidelines](CONTRIBUTING.md) before getting started.

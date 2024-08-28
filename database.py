@@ -9,6 +9,8 @@ KEY = os.environ.get('ENCRYPTION_KEY')
 if not KEY:
     KEY = Fernet.generate_key()
     print(f"Generated new encryption key: {KEY.decode()}. Please store this securely.")
+else:
+    print(f"Using existing ENCRYPTION_KEY: {KEY}")
 cipher_suite = Fernet(KEY)
 
 def init_db():
