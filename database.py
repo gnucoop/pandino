@@ -57,13 +57,13 @@ def add_user(username, api_key, date_valid_until='2024-12-31'):
 def list_users():
     conn = sqlite3.connect('users.db')
     cursor = conn.cursor()
-    cursor.execute('SELECT username, date_valid_until FROM users')
+    cursor.execute('SELECT username, api_key, date_valid_until FROM users')
     users = cursor.fetchall()
     conn.close()
     if users:
         print("Existing users:")
-        for user, date_valid_until in users:
-            print(f"Username: {user}, Date Valid Until: {date_valid_until}")
+        for user, api_key, date_valid_until in users:
+            print(f"Username: {user}, ApiKey: {cipher_suite.decrypt(api_key.decode())},  Date Valid Until: {date_valid_until}")
     else:
         print("No users found in the database.")
 
