@@ -77,20 +77,39 @@ python main.py
 ```
 
 ### Accessing the API
-To access the `/analyst` endpoint using `curl`, use the following command:
+To access the `/startdatachat` endpoint using `curl`, use the following command:
 ```bash
-curl -X POST "http://127.0.0.1:5000/analyst" \
+curl -X POST "http://127.0.0.1:5000/startdatachat" \
      -H "Content-Type: application/json" \
      -H "X-API-KEY: your_api_key_here" \
+     -H "X-USER-NAME: your_full_user_name_here" \
      -d '{
          "model_name": "llama-3.1-70b-versatile",
          "llm_type": "Groq",
-         "chat": "Analyze the data and provide insights",
-         "data": "path/to/your/data.csv"
+         "data": your_base64_serialized_csv
      }'
 ```
 
-Replace `your_api_key_here` with a valid API key from the database, and adjust the `model_name`, `llm_type`, `chat`, and `data` fields as needed.
+To access the `/enddatachat` endpoint using `curl`, use the following command:
+```bash
+curl -X POST "http://127.0.0.1:5000/enddatachat" \
+     -H "Content-Type: application/json" \
+     -H "X-API-KEY: your_api_key_here" \
+     -H "X-USER-NAME: your_full_user_name_here" \
+     -d '{}'
+```
+
+To access the `/datachat` endpoint using `curl`, use the following command:
+```bash
+curl -X POST "http://127.0.0.1:5000/datachat" \
+     -H "Content-Type: application/json" \
+     -H "X-API-KEY: your_api_key_here" \
+     -d '{
+         "chat": your_request_to_pandas_here
+     }'
+```
+
+Replace `your_api_key_here` with a valid API key from the database, `your_full_user_name_here` with a user name (it will be used to create the agent dedicated export folder), `your_request_to_pandas_here` with your natural language request to Pandas and adjust the `model_name`, `llm_type`, and `data` fields as needed.
 
 ## Contributing
 Contributions are welcome! Please read the [contributing guidelines](CONTRIBUTING.md) before getting started. To report bugs or suggest features, please open an issue on the GitHub repository.
