@@ -1,0 +1,11 @@
+passphrase.txt 
+logs/ 
+.git 
+__pycache__/
+*.md 
+cache/
+export/
+pandasai.log
+.env
+tmp/
+app.log
