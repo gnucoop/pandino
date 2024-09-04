@@ -6,7 +6,7 @@ from pandasai import Agent
 import database
 from database import validate_api_key
 from agent_manager import getAgent, createAgent, deleteAgent
-from file_manager import base64toFile
+from file_manager import base64toFile, isImageFilePath, fileToBase64
 
 # Import specific chat models from their respective libraries
 from langchain_groq.chat_models import ChatGroq
@@ -38,8 +38,17 @@ def validate_api_key(api_key):
 @app.route("/enddatachat", methods=["POST"])
 def endChat():
     api_key = request.headers.get("X-API-KEY")
+    user_name_header = request.headers.get("X-USER-NAME")
+    user_name = (
+        user_name_header.replace(" ", "_").strip() if user_name_header != None else None
+    )
     validate_api_key(api_key)
-    deletedAgent = deleteAgent(api_key)
+
+    # Check if all required parameters are present
+    if not user_name:
+        return jsonify({"error": "Missing X-USER-NAME header"}), 400
+
+    deletedAgent = deleteAgent(api_key, user_name)
     if deletedAgent != None and deletedAgent.conversation_id:
         return jsonify({"Agent deleted succesfully": deletedAgent.conversation_id})
     else:
@@ -50,6 +59,8 @@ def endChat():
 @app.route("/startdatachat", methods=["POST"])
 def startChat():
     api_key = request.headers.get("X-API-KEY")
+    user_name_header = request.headers.get("X-USER-NAME")
+    user_name = user_name_header.replace(" ", "_").strip()
     validate_api_key(api_key)
 
     # Extract necessary parameters from the request JSON
@@ -57,7 +68,7 @@ def startChat():
     llm_type = request.json.get("llm_type")
 
     # Check if all required parameters are present
-    if not model_name or not llm_type:
+    if not model_name or not llm_type or not user_name:
         return jsonify({"error": "Missing parameters"}), 400
 
     # Extract the data parameter from the request JSON
@@ -104,7 +115,7 @@ def startChat():
     # Initialize the agent with the data and configuration
     # agent = Agent(data, config={"llm": llm, "open_charts": False})
     try:
-        agent = createAgent(api_key, data, llm)
+        agent = createAgent(api_key, data, llm, user_name)
         return jsonify({"Agent active": agent.conversation_id})
     except Exception as e:
         return (
@@ -131,7 +142,7 @@ def dataChat():
 
     # Perform the chat operation and get the response and explanation
     response = agent.chat(chat)
-    explanation = agent.explain()
+    # explanation = agent.explain()
 
     # Convert the response to a DataFrame if it's a list
     if isinstance(response, list):
@@ -150,8 +161,13 @@ def dataChat():
         response_dict = response
     else:
         response_dict = {"type": type(response).__name__, "value": str(response)}
+        if response_dict and response_dict["value"]:
+            # Convert image file path in value to a base64 serialized file
+            if isImageFilePath(response_dict["value"]):
+                response_dict["type"] = "image"
+                response_dict["value"] = fileToBase64(response_dict["value"])
 
-    return jsonify({"response": response_dict, "explanation": explanation})
+    return jsonify({"response": response_dict})
 
 
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message

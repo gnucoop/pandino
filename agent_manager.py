@@ -1,5 +1,7 @@
 from pandasai import Agent
 from flask import jsonify
+import os
+import shutil
 
 # Dictionary of active agents associated to an Api Key
 activeAgents = {}
@@ -14,7 +16,7 @@ def getAgent(api_key) -> Agent | None:
 
 
 # Retrieves an active agents or creates a new one, adding it to the activeAgents dictionary.
-def createAgent(api_key, data, llm, open_charts=False) -> Agent | None:
+def createAgent(api_key, data, llm, user_name, open_charts=False) -> Agent | None:
     string_api_key = str(api_key)
     print(f"Creating Agent: {string_api_key}")
     if activeAgents.get(string_api_key):
@@ -22,18 +24,30 @@ def createAgent(api_key, data, llm, open_charts=False) -> Agent | None:
         return activeAgents.get(string_api_key)
     else:
         print("Generating new Agent...")
-        agent = Agent(data, config={"llm": llm, "open_charts": open_charts})
+        agentConfig = {
+            "llm": llm,
+            "open_charts": open_charts,
+            "save_charts": True,
+            "save_charts_path": f"exports/charts/{user_name}",
+        }
+        agent = Agent(data, config=agentConfig)
         activeAgents.update({string_api_key: agent})
         return agent
 
 
 # Deletes an agent from active agents.
-def deleteAgent(api_key) -> Agent | None:
+def deleteAgent(api_key, user_name) -> Agent | None:
     string_api_key = str(api_key)
     agent = activeAgents.get(string_api_key)
-    if not api_key or not agent:
+    if not api_key or not agent or not user_name:
         return
     elif agent:
+        print(user_name)
+        folderPath = f"exports/charts/{user_name}"
+        if os.path.exists(folderPath):
+            shutil.rmtree(folderPath, ignore_errors=True)
+        else:
+            print("Path does not exist")
         return activeAgents.pop(string_api_key)
 
 
