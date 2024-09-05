@@ -33,6 +33,24 @@ def validate_api_key(api_key):
         else:
             abort(403, description="Invalid API key")
 
+# Define a route for the '/validateapikey' endpoint that accepts POST requests
+@app.route("/validateapikey", methods=["POST"])
+def validate():
+    api_key = request.headers.get("X-API-KEY")
+
+    # Check if all required parameters are present
+    if not api_key:
+        return jsonify({"error": "Missing X-API-KEY header"}), 400
+    
+    result, message = database.validate_api_key(api_key)
+
+    if not result:
+        if "expired" in message:
+            return jsonify({"error": "API key expired"}), 403
+        else:
+            return jsonify({"error": "Invalid API key"}), 403
+    else:
+        return jsonify({"response": "API key match found"}), 200
 
 # Define a route for the '/endchat' endpoint that accepts POST requests
 @app.route("/enddatachat", methods=["POST"])
