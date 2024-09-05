@@ -1,6 +1,7 @@
 # Import necessary libraries for the Flask application
 import os
 from flask import Flask, request, jsonify, abort
+from flask_cors import CORS
 import pandas as pd
 from pandasai import Agent
 import database
@@ -15,6 +16,8 @@ from langchain_mistralai import ChatMistralAI
 
 # Initialize the Flask application
 app = Flask(__name__)
+# origins=["http://localhost:4200"]
+CORS(app)
 
 
 # Define a route for the '/' endpoint that returns a welcome message
@@ -33,6 +36,7 @@ def validate_api_key(api_key):
         else:
             abort(403, description="Invalid API key")
 
+
 # Define a route for the '/validateapikey' endpoint that accepts POST requests
 @app.route("/validateapikey", methods=["POST"])
 def validate():
@@ -41,7 +45,7 @@ def validate():
     # Check if all required parameters are present
     if not api_key:
         return jsonify({"error": "Missing X-API-KEY header"}), 400
-    
+
     result, message = database.validate_api_key(api_key)
 
     if not result:
@@ -51,6 +55,7 @@ def validate():
             return jsonify({"error": "Invalid API key"}), 403
     else:
         return jsonify({"response": "API key match found"}), 200
+
 
 # Define a route for the '/endchat' endpoint that accepts POST requests
 @app.route("/enddatachat", methods=["POST"])
