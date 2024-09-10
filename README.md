@@ -80,14 +80,22 @@ python main.py
 To access the `/startdatachat` endpoint using `curl`, use the following command:
 ```bash
 curl -X POST "http://127.0.0.1:5000/startdatachat" \
-     -H "Content-Type: application/json" \
+     -H "Content-Type: multipart/form-data" \
      -H "X-API-KEY: your_api_key_here" \
-     -H "X-USER-NAME: your_full_user_name_here" \
-     -d '{
-         "model_name": "llama-3.1-70b-versatile",
-         "llm_type": "Groq",
-         "data": your_base64_serialized_csv
-     }'
+     -H "X-USER-NAME: your_full_user_name_here" \  
+     -F "model_name=llama-3.1-70b-versatile"
+     -F "llm_type=Groq"
+     -F "file=your_local_csv"
+     
+# curl -X POST "http://127.0.0.1:5000/startdatachat" \
+#      -H "Content-Type: multipart/form-data" \
+#      -H "X-API-KEY: your_api_key_here" \
+#      -H "X-USER-NAME: your_full_user_name_here" \
+#      -d '{
+#          "model_name": "llama-3.1-70b-versatile",
+#          "llm_type": "Groq",
+#          "file": your_csv
+#      }'
 ```
 
 To access the `/enddatachat` endpoint using `curl`, use the following command:

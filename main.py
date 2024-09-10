@@ -7,7 +7,7 @@ from pandasai import Agent
 import database
 from database import validate_api_key
 from agent_manager import getAgent, createAgent, deleteAgent
-from file_manager import base64toFile, isImageFilePath, fileToBase64
+from file_manager import isImageFilePath, fileToBase64
 
 # Import specific chat models from their respective libraries
 from langchain_groq.chat_models import ChatGroq
@@ -86,22 +86,19 @@ def startChat():
     user_name = user_name_header.replace(" ", "_").strip()
     validate_api_key(api_key)
 
-    # Extract necessary parameters from the request JSON
-    model_name = request.json.get("model_name")
-    llm_type = request.json.get("llm_type")
+    # Extract necessary parameters from the request FORMDATA
+    request_model_name = request.form.get("model_name")
+    request_llm_type = request.form.get("llm_type")
+    request_file = request.files.get("file")
+    model_name = request_model_name if request_model_name else "llama-3.1-70b-versatile"
+    llm_type = request_llm_type if request_llm_type else "Groq"
 
     # Check if all required parameters are present
-    if not model_name or not llm_type or not user_name:
+    if not model_name or not llm_type or not user_name or not request_file:
         return jsonify({"error": "Missing parameters"}), 400
 
-    # Extract the data parameter from the request JSON
-    data_param = request.json.get("data")
-    if not data_param:
-        return jsonify({"error": "Missing data parameter"}), 400
-
     # Read the data from the provided CSV file
-    fileData = base64toFile(data_param)
-    data = pd.read_csv(fileData, sep=",")
+    data = pd.read_csv(request_file, sep=",")
 
     # Initialize the language model based on the provided type
     if llm_type == "Groq":
@@ -136,7 +133,6 @@ def startChat():
         )
 
     # Initialize the agent with the data and configuration
-    # agent = Agent(data, config={"llm": llm, "open_charts": False})
     try:
         agent = createAgent(api_key, data, llm, user_name)
         return jsonify({"Agent active": agent.conversation_id})
@@ -165,7 +161,7 @@ def dataChat():
 
     # Perform the chat operation and get the response and explanation
     response = agent.chat(chat)
-    # explanation = agent.explain()
+    explanation = agent.explain()
 
     # Convert the response to a DataFrame if it's a list
     if isinstance(response, list):
@@ -179,9 +175,13 @@ def dataChat():
 
     # Convert the response to a dictionary
     if isinstance(response, pd.DataFrame):
-        response_dict = response.to_dict(orient="records")
+        response_dict = {
+            "type": "dataframe",
+            "value": response.to_dict(orient="records"),
+        }
     elif isinstance(response, dict):
         response_dict = response
+        response_dict.update({"type": "dict"})
     else:
         response_dict = {"type": type(response).__name__, "value": str(response)}
         if response_dict and response_dict["value"]:
@@ -190,7 +190,7 @@ def dataChat():
                 response_dict["type"] = "image"
                 response_dict["value"] = fileToBase64(response_dict["value"])
 
-    return jsonify({"response": response_dict})
+    return jsonify({"response": response_dict, "explanation": explanation})
 
 
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
