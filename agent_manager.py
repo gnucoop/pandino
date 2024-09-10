@@ -29,6 +29,7 @@ def createAgent(api_key, data, llm, user_name, open_charts=False) -> Agent | Non
             "open_charts": open_charts,
             "save_charts": True,
             "save_charts_path": f"exports/charts/{user_name}",
+            "custom_whitelisted_dependencies": ["tabulate"]
         }
         agent = Agent(data, config=agentConfig)
         activeAgents.update({string_api_key: agent})
