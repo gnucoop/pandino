@@ -135,7 +135,15 @@ def startChat():
     # Initialize the agent with the data and configuration
     try:
         agent = createAgent(api_key, data, llm, user_name)
-        return jsonify({"Agent active": agent.conversation_id})
+        agentResponse = {"Agent active": agent.conversation_id}
+
+        suggestionsQuestion = f"""This is my data: {data}. What kind of questions should I ask about it? Please respond in a readable html format,
+            with no asterisks and adding a line break after each question."""
+        suggestionsResponse = llm.invoke(suggestionsQuestion)
+        if suggestionsResponse and suggestionsResponse.content is not None:
+            agentResponse.update({"suggested_questions": suggestionsResponse.content})
+
+        return jsonify(agentResponse)
     except Exception as e:
         return (
             jsonify({"error": f"Failed to create Agent: {str(e)}"}),
