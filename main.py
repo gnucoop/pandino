@@ -13,8 +13,8 @@ from langchain_openai import ChatOpenAI
 from langchain_mistralai import ChatMistralAI
 
 # Import function from ai and database
-import databasepg
-from databasepg import validate_api_key
+import database_pg
+from database_pg import validate_api_key
 import dino
 from dino import dino_authenticate
 import ai
@@ -41,7 +41,7 @@ def welcome():
 def validate_api_key(api_key):
     if not api_key:
         abort(403)
-    result, message = databasepg.validate_api_key(api_key)
+    result, message = database_pg.validate_api_key(api_key)
     if not result:
         if "expired" in message:
             abort(403, description="API key expired")
@@ -58,7 +58,7 @@ def validate():
     if not api_key:
         return jsonify({"error": "Missing X-API-KEY header"}), 400
 
-    result, message = databasepg.validate_api_key(api_key)
+    result, message = database_pg.validate_api_key(api_key)
 
     if not result:
         if "expired" in message:

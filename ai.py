@@ -18,8 +18,8 @@ from pinecone import Pinecone, ServerlessSpec
 from langchain_pinecone import PineconeVectorStore
 from langchain_postgres import PGVector
 
-import databasepg
-from databasepg import log_token_usage
+import database_pg
+from database_pg import log_token_usage
 
 load_dotenv()  # Load environment variables from .env file
 
