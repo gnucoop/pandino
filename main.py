@@ -4,8 +4,6 @@ from flask import Flask, request, jsonify, abort
 from flask_cors import CORS
 import pandas as pd
 from pandasai import Agent
-import database
-from database import validate_api_key
 from agent_manager import getAgent, createAgent, deleteAgent
 from file_manager import isImageFilePath, fileToBase64
 
@@ -13,6 +11,12 @@ from file_manager import isImageFilePath, fileToBase64
 from langchain_groq.chat_models import ChatGroq
 from langchain_openai import ChatOpenAI
 from langchain_mistralai import ChatMistralAI
+
+# Import function from ai and database
+import database
+from database import validate_api_key
+import ai
+from ai import choose_llm
 
 # Initialize the Flask application
 app = Flask(__name__)
@@ -104,38 +108,8 @@ def startChat():
 
     # Read the data from the provided CSV file
     data = pd.read_csv(request_file, sep=",")
-
     # Initialize the language model based on the provided type
-    if llm_type == "Groq":
-        model_kwargs = {"seed": 26}
-        llm = ChatGroq(
-            model_name=model_name,
-            temperature=0,
-            api_key=os.environ["GROQ_API_KEY"],
-            model_kwargs=model_kwargs,
-        )
-    elif llm_type == "Deepseek":
-        llm = ChatOpenAI(
-            model_name=model_name,
-            temperature=0,
-            seed=26,
-            base_url="https://api.deepseek.com",
-            api_key=os.environ["DEEPSEEK_API_KEY"],
-        )
-    elif llm_type == "Mistral":
-        llm = ChatMistralAI(
-            model_name=model_name,
-            temperature=0,
-            seed=26,
-            api_key=os.environ["MISTRAL_API_KEY"],
-        )
-    elif llm_type == "OpenAI":
-        llm = ChatOpenAI(
-            model_name=model_name,
-            temperature=0,
-            seed=26,
-            api_key=os.environ["OPENAI_API_KEY"],
-        )
+    llm = choose_llm(llm_type, model_name)
 
     # Initialize the agent with the data and configuration
     try:
