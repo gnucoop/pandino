@@ -15,8 +15,11 @@ from langchain_mistralai import ChatMistralAI
 # Import function from ai and database
 import database
 from database import validate_api_key
+import dino
+from dino import dino_authenticate
 import ai
-from ai import choose_llm
+from ai import complete_chat, CompletionResponse
+from ai import reply_to_prompt, choose_llm
 
 # Initialize the Flask application
 app = Flask(__name__)
@@ -180,6 +183,75 @@ def dataChat():
 
     return jsonify({"response": response_dict, "explanation": explanation})
 
+@app.route("/completion.json", methods=["POST"])
+def completion_handler():
+    try:
+        r = request.get_json()
+        if not r:
+            return jsonify({"error": "No JSON data provided"}), 400
+
+        required_keys = ["dinoGraphql", "authToken", "chat"]
+        missing_keys = [key for key in required_keys if key not in r]
+
+        if missing_keys:
+            return jsonify({"error": f"Missing required keys: {', '.join(missing_keys)}"}), 400
+
+        err = dino_authenticate(r["dinoGraphql"], r["authToken"])
+        if err:
+            return jsonify({"error": f"Authentication error: {str(err)}"}), 401
+
+        # Prepare the request for complete_chat
+        chat_request = ai.CompletionRequest(
+            dino_graphql=r["dinoGraphql"],
+            auth_token=r["authToken"],
+            namespace=r.get("namespace", ""),
+            info=r.get("info", []),
+            chat=r["chat"]
+        )
+
+        resp = complete_chat(chat_request)
+        
+        if isinstance(resp, CompletionResponse):
+            if resp.error:
+                return jsonify({"error": f"Chat completion error: {resp.error}"}), 400
+            return jsonify({"answer": resp.answer,"paragraphs": resp.paragraphs, "similarities":resp.similarities})
+        elif resp is None:
+            return jsonify({"error": "No response from chat completion"}), 500
+        else:
+            return jsonify({"error": "Unexpected response format"}), 500
+
+    except Exception as e:
+        app.logger.error(f"Unexpected error in completion_handler: {str(e)}")
+        return jsonify({"error": "An unexpected error occurred"}), 500
+
+@app.route('/prompt.txt', methods=['POST'])
+def prompt_handler():
+    graphql_url = request.form.get('graphqlUrl')
+    auth_token = request.form.get('authToken')
+    prompt = request.form.get('prompt')
+
+    if not graphql_url or not auth_token:
+        return jsonify({'error': 'Auth parameters not provided'}), 400
+    
+    try:
+        # Assuming DinoAuthenticate is replaced with a similar function in Python
+        dino_authenticate(graphql_url, auth_token)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+   
+    if not prompt:
+        return jsonify({'error': 'No prompt provided'}), 400
+    
+    try:
+        resp = reply_to_prompt(prompt)
+        if isinstance(resp, CompletionResponse):
+            return jsonify({
+                'answer': resp.answer
+            })
+        else:
+            return jsonify({'error': 'Unexpected response format'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
 @app.route("/summarize", methods=["GET"])
