@@ -3,6 +3,7 @@ import sys
 from cryptography.fernet import Fernet, InvalidToken
 import os
 import base64
+import datetime
 
 # Generate a key for encryption and decryption
 # Store the key in an environment variable or a secure file
@@ -109,6 +110,31 @@ def print_stored_keys():
             print(f"  Decrypted key: {decrypted_key}")
         except Exception as e:
             print(f"  Error decrypting key: {str(e)}")
+def log_token_usage(user_id, token_input, token_output, model, provider):                                                                                                                                                            
+        conn = sqlite3.connect('users.db')                                                                                                                                                                                                   
+        cursor = conn.cursor()                          
+        user_id = 2 #to be calculated on based the api_keys used                                                                                                                                                                                     
+        date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # Fetch the cost from the costs table
+        current_date = datetime.datetime.now().strftime('%Y-%m-%d')
+        cursor.execute('''
+            SELECT token_input_cost, token_output_cost 
+            FROM costs 
+            WHERE provider = ? AND model = ? AND start_date_valid <= ? AND end_date_valid >= ?
+        ''', (provider, model, current_date, current_date))
+        cost_row = cursor.fetchone()
+        if not cost_row:
+            raise ValueError(f"Cost not found for provider: {provider} and model: {model}")
+        
+        token_input_cost, token_output_cost = cost_row
+        cost = (token_input * token_input_cost) + (token_output * token_output_cost)
+        
+        cursor.execute('''                                                                                                                                                                                                                   
+            INSERT INTO logs (date, user_id, token_input, token_output, cost, model, provider)                                                                                                                                           
+            VALUES (?, ?, ?, ?, ?, ?, ?)                                                                                                                                                                                                     
+        ''', (date, user_id, token_input, token_output, cost, model, provider))                                                                                                                                                                
+        conn.commit()                                                                                                                                                                                                                        
+        conn.close()
 
 def print_help():
     print("Usage: python database.py <command>")
