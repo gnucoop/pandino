@@ -104,8 +104,10 @@ def startChat():
     request_model_name = request.form.get("model_name")
     request_llm_type = request.form.get("llm_type")
     request_file = request.files.get("file")
+    request_lang = request.form.get("lang")
     model_name = request_model_name if request_model_name else "gemini-1.5-flash"
     llm_type = request_llm_type if request_llm_type else "Google"
+    lang = request_lang if request_lang else "FRA"
     # Check if all required parameters are present
     if not model_name or not llm_type or not user_name or not request_file:
         return jsonify({"error": "Missing parameters"}), 400
@@ -114,15 +116,20 @@ def startChat():
     data = pd.read_csv(request_file, sep=",")
     # Initialize the language model based on the provided type
     llm = choose_llm(llm_type, model_name)
-
     # Initialize the agent with the data and configuration
     try:
         agent = createAgent(api_key, data, llm, user_name)
         agentResponse = {"Agent active": agent.conversation_id}
 
-        suggestionsQuestion = f"""Given this pandas dataframe {data}: Try to understand the nature of the data and suggest me what kind of analysis should I ask for. 
-        Explain in details your answers and do any suggestions of possible question that I could ask. 
-        DO not suggest any python code. Please reply in a readable html format, with no asterisks and adding a line break after each paragraph."""
+        question_templates = {
+            "ITA": f"""Dato questo dataframe pandas {data}. Prova a capire la natura dei dati e suggeriscimi che tipo di analisi dovrei chiedere. Spiega in dettaglio le tue risposte e fai qualsiasi suggerimento di possibile domanda che potrei fare. Non suggerire alcun codice Python. Per favore, rispondi in un formato html leggibile, senza asterischi e aggiungendo un'interruzione di riga dopo ogni paragrafo.""",
+            "ENG": f"""Given this pandas dataframe {data}. Try to understand the nature of the data and suggest me what kind of analysis should I ask for. Explain in details your answers and do any suggestions of possible question that I could ask. DO not suggest any python code. Please reply in a readable html format, with no asterisks and adding a line break after each paragraph.""",
+            "FRA": f"""Étant donné ce dataframe pandas {data}. Essayez de comprendre la nature des données et suggérez-moi quel type d'analyse je devrais demander. Expliquez en détail vos réponses et faites toutes les suggestions de questions possibles que je pourrais poser. Ne suggérez aucun code Python. Veuillez répondre dans un format html lisible, sans astérisques et en ajoutant un saut de ligne après chaque paragraphe.""",
+            "SPA": f"""Dado este dataframe pandas {data}. Intenta entender la naturaleza de los datos y sugiereme qué tipo de análisis debería preguntar. Explica en detalle tus respuestas y haz cualquier sugerencia de pregunta posible que podría hacer. No sugieras ningún código Python. Por favor, responde en un formato html legible, sin asteriscos y agregando un salto de línea después de cada párrafo.""",
+            # Add more languages as needed
+        }
+        suggestionsQuestion = question_templates.get(lang, question_templates[lang])
+        #suggestionsQuestion = f"""Given this dataframe id,user_data_ref_id,created_at,District,Sub County,Settlement,Parish,Village,Point of care,Patient id number,Nationality,Age,Gender,Disability Status,Disabilities,Pregnancy,Chief complain/Complaint of the patient,Eyes Checked,Visual acuity (VA),CF (Counting fingers)(Visual acuity (VA)),HM (Hand motion)(CF (Counting fingers)(Visual acuity (VA))),LP (Light perception)(HM (Hand motion)(CF (Counting fingers)(Visual acuity (VA)))),IOP/Intra-ocular pressure (0-21 mmHg),Eye Lid,Specify Abnormal,Conjunctiva,Cornea,Anterior chamber,Lens,Fundus,Specify Other,Pupil,Describe Irregular,Diagnosis,Any medications/Treatment,“If Other, specify”,Visual acuity (VA),CF (Counting fingers)(Visual acuity (VA)),HM (Hand motion)(CF (Counting fingers)(Visual acuity (VA))),LP (Light perception)(HM (Hand motion)(CF (Counting fingers)(Visual acuity (VA)))),IOP/Intra-ocular pressure,Eye Lid,Specify Abnormal,Conjunctiva,Cornea,Anterior chamber,Lens,Fundus,Specify Other,Pupil,Describe Irregular,Diagnosis,Any medications/Treatment,“If Other, specify”,try to understand the nature of the data and suggest me what kind of analysis should I ask for. Explain in details your answers and do any suggestions of possible question that I could ask. DO not suggest any python code. Please reply in a readable html format,with no asterisks and adding a line break after each paragraph."""
         suggestionsResponse = llm.invoke(suggestionsQuestion)
         if suggestionsResponse and suggestionsResponse.content is not None:
             agentResponse.update({"suggested_questions": suggestionsResponse.content})
