@@ -7,7 +7,9 @@ tabulate
 langchain_groq
 langchain_openai
 langchain_mistralai
+langchain-google-genai
 cryptography
 numpy==1.26.4
 scikit-learn
 seaborn
+psycopg2-binary
