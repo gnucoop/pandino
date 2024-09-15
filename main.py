@@ -1,5 +1,6 @@
 # Import necessary libraries for the Flask application
 import os
+import warnings
 from flask import Flask, request, jsonify, abort
 from flask_cors import CORS
 import pandas as pd
@@ -11,6 +12,7 @@ from file_manager import isImageFilePath, fileToBase64
 from langchain_groq.chat_models import ChatGroq
 from langchain_openai import ChatOpenAI
 from langchain_mistralai import ChatMistralAI
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 # Import function from ai and database
 import database_pg
@@ -102,9 +104,8 @@ def startChat():
     request_model_name = request.form.get("model_name")
     request_llm_type = request.form.get("llm_type")
     request_file = request.files.get("file")
-    model_name = request_model_name if request_model_name else "llama-3.1-70b-versatile"
-    llm_type = request_llm_type if request_llm_type else "Groq"
-
+    model_name = request_model_name if request_model_name else "gemini-1.5-flash"
+    llm_type = request_llm_type if request_llm_type else "Google"
     # Check if all required parameters are present
     if not model_name or not llm_type or not user_name or not request_file:
         return jsonify({"error": "Missing parameters"}), 400

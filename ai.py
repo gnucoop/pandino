@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 from langchain_groq.chat_models import ChatGroq
 from langchain_openai import ChatOpenAI
 from langchain_mistralai import ChatMistralAI
+from langchain_google_genai import ChatGoogleGenerativeAI
+
 #from langchain_ollama import ChatOllama
 
 # Import specific embeddings models from their respective libraries
@@ -61,6 +63,8 @@ def choose_llm(llm_type, model, temperature=0, seed=26, base_url=None, api_key=N
         return ChatOpenAI(model_name=model, temperature=temperature, seed=seed, base_url='https://api.deepinfra.com/v1/openai', api_key=os.environ['DEEPINFRA_API_KEY'])
     elif llm_type == 'Together':
         return ChatOpenAI(model_name=model, temperature=temperature, seed=seed, base_url='https://api.together.xyz/v1', api_key=os.environ['TOGETHER_API_KEY'])
+    elif llm_type == 'Google':
+        return ChatGoogleGenerativeAI(model=model, temperature=temperature, seed=seed, google_api_key=os.environ['GOOGLE_API_KEY'])
     elif llm_type == 'Mistral':
         return ChatMistralAI(model_name=model, temperature=temperature, seed=seed, api_key=os.environ['MISTRAL_API_KEY'])
     elif llm_type == 'OpenAI':
