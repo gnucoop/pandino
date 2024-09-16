@@ -19,6 +19,11 @@ app = Flask(__name__)
 # origins=["http://localhost:4200"]
 CORS(app)
 
+# Removing Pandas read csv columns limitations to avoid truncated dataFrames
+pd.set_option("display.max_columns", None)
+pd.set_option("display.width", None)
+pd.set_option("display.max_colwidth", None)
+
 
 # Define a route for the '/' endpoint that returns a welcome message
 @app.route("/")
@@ -137,8 +142,9 @@ def startChat():
         agent = createAgent(api_key, data, llm, user_name)
         agentResponse = {"Agent active": agent.conversation_id}
 
-        suggestionsQuestion = f"""This is my data: {data}. What kind of questions should I ask about it? Please respond in a readable html format,
-            with no asterisks and adding a line break after each question."""
+        suggestionsQuestion = f"""Given this pandas dataframe {data}: Try to understand the nature of the data and suggest me what kind of analysis should I ask for. 
+        Explain in details your answers and do any suggestions of possible question that I could ask. 
+        DO not suggest any python code. Please reply in a readable html format, with no asterisks and adding a line break after each paragraph."""
         suggestionsResponse = llm.invoke(suggestionsQuestion)
         if suggestionsResponse and suggestionsResponse.content is not None:
             agentResponse.update({"suggested_questions": suggestionsResponse.content})
