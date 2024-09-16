@@ -239,27 +239,25 @@ def prompt_handler():
     prompt = request.form.get('prompt')
 
     if not graphql_url or not auth_token:
-        return jsonify({'error': 'Auth parameters not provided'}), 400
+        return "Auth parameters not provided", 400, {'Content-Type': 'text/plain'}
     
     try:
         # Assuming DinoAuthenticate is replaced with a similar function in Python
         dino_authenticate(graphql_url, auth_token)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return str(e), 500, {'Content-Type': 'text/plain'}
    
     if not prompt:
-        return jsonify({'error': 'No prompt provided'}), 400
+        return "No prompt provided", 400, {'Content-Type': 'text/plain'}
     
     try:
         resp = reply_to_prompt(prompt)
         if isinstance(resp, CompletionResponse):
-            return jsonify({
-                'answer': resp.answer
-            })
+            return resp.answer, 200, {'Content-Type': 'text/plain'}
         else:
-            return jsonify({'error': 'Unexpected response format'}), 500
+            return "Unexpected response format", 500, {'Content-Type': 'text/plain'}
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return str(e), 500, {'Content-Type': 'text/plain'}
 
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
 @app.route("/summarize", methods=["GET"])

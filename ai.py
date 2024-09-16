@@ -227,8 +227,8 @@ def find_similar_paragraphs(text: str, top_k: int, min_similarity: float, namesp
         return [], [], str(e)
 
 def reply_to_prompt(prompt):
-    llm_type = "Ollama"
-    model = "gemma2:2b"
+    llm_type = "Groq"
+    model = "llama-3.1-70b-versatile"
     messages = [
         {"role": "system", "content": "Sei un esperto di monitoraggio e valutazione che supporta le Organizzazioni non governative a scrivere il proprio bilancio sociale."},
         {"role": "user", "content": prompt}
@@ -247,6 +247,7 @@ def reply_to_prompt(prompt):
     except Exception as e:
         logging.error(f"Error in chat completion: {str(e)}")
         return CompletionResponse(error=f"Error in chat completion: {str(e)}")
+
 def choose_emb_model(emb_llm_type, model):
     """
     Choose and initialize the appropriate embeddings model based on the provided type and model.
