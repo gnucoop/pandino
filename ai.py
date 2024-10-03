@@ -21,17 +21,18 @@ from langchain_pinecone import PineconeVectorStore
 from langchain_postgres import PGVector
 
 import database_pg
-from database_pg import log_token_usage
+from database_pg import get_user_by_username, log_token_usage
 
 load_dotenv()  # Load environment variables from .env file
 
 from typing import List
 
 class CompletionRequest:
-    def __init__(self, dino_graphql: str, auth_token: str, namespace: str, info: List[str], chat: List[str]):
+    def __init__(self, dino_graphql: str, auth_token: str, namespace: str, username:str, info: List[str], chat: List[str]):
         self.dino_graphql = dino_graphql
         self.auth_token = auth_token
         self.namespace = namespace
+        self.username = username
         self.info = info
         self.chat = chat
 
@@ -121,8 +122,11 @@ def complete_chat(req: CompletionRequest, llm_type=None, model=None):
          token_usage = resp.response_metadata.get('token_usage',{})
          token_in = token_usage.get('prompt_tokens',0)
          token_out = token_usage.get('completion_tokens',0)
-         user_id = 2
-         log_token_usage(user_id=user_id, token_input=token_in, token_output=token_out, model=model, provider=llm_type)
+         user = get_user_by_username(req.username)
+         if user is None:                                                                                                                                                                               
+            logging.error(f"Chat completion error: could not find any user with this username: {req.username}")                                                                                    
+            return CompletionResponse(error=f"Chat completion error: could not find any user with this username: {req.username}")    
+         log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
          return CompletionResponse(answer=resp.content,
                                    paragraphs=paragraphs,
                                    similarities=similarities)                                                                                                                                                       
@@ -226,7 +230,7 @@ def find_similar_paragraphs(text: str, top_k: int, min_similarity: float, namesp
         logging.error(f"Error in find_similar_paragraphs: {str(e)}")
         return [], [], str(e)
 
-def reply_to_prompt(prompt):
+def reply_to_prompt(prompt, username:str):
     llm_type = "Groq"
     model = "llama-3.1-70b-versatile"
     messages = [
@@ -241,8 +245,8 @@ def reply_to_prompt(prompt):
         token_usage = resp.response_metadata.get('token_usage',{})
         token_in = token_usage.get('prompt_tokens',0)
         token_out = token_usage.get('completion_tokens',0)
-        user_id = 2
-        log_token_usage(user_id=user_id, token_input=token_in, token_output=token_out, model=model, provider=llm_type)
+        user = get_user_by_username(username)
+        log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
         return CompletionResponse(answer=resp.content)
     except Exception as e:
         logging.error(f"Error in chat completion: {str(e)}")

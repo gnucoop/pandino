@@ -190,6 +190,7 @@ def dataChat():
 
     return jsonify({"response": response_dict, "explanation": explanation})
 
+
 @app.route("/completion.json", methods=["POST"])
 def completion_handler():
     try:
@@ -197,11 +198,14 @@ def completion_handler():
         if not r:
             return jsonify({"error": "No JSON data provided"}), 400
 
-        required_keys = ["dinoGraphql", "authToken", "chat"]
+        required_keys = ["dinoGraphql", "authToken", "chat", "username"]
         missing_keys = [key for key in required_keys if key not in r]
 
         if missing_keys:
-            return jsonify({"error": f"Missing required keys: {', '.join(missing_keys)}"}), 400
+            return (
+                jsonify({"error": f"Missing required keys: {', '.join(missing_keys)}"}),
+                400,
+            )
 
         err = dino_authenticate(r["dinoGraphql"], r["authToken"])
         if err:
@@ -212,16 +216,23 @@ def completion_handler():
             dino_graphql=r["dinoGraphql"],
             auth_token=r["authToken"],
             namespace=r.get("namespace", ""),
+            username=r["username"],
             info=r.get("info", []),
-            chat=r["chat"]
+            chat=r["chat"],
         )
 
         resp = complete_chat(chat_request)
-        
+
         if isinstance(resp, CompletionResponse):
             if resp.error:
                 return jsonify({"error": f"Chat completion error: {resp.error}"}), 400
-            return jsonify({"answer": resp.answer,"paragraphs": resp.paragraphs, "similarities":resp.similarities})
+            return jsonify(
+                {
+                    "answer": resp.answer,
+                    "paragraphs": resp.paragraphs,
+                    "similarities": resp.similarities,
+                }
+            )
         elif resp is None:
             return jsonify({"error": "No response from chat completion"}), 500
         else:
@@ -231,32 +242,38 @@ def completion_handler():
         app.logger.error(f"Unexpected error in completion_handler: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
 
-@app.route('/prompt.txt', methods=['POST'])
+
+@app.route("/prompt.txt", methods=["POST"])
 def prompt_handler():
-    graphql_url = request.form.get('graphqlUrl')
-    auth_token = request.form.get('authToken')
-    prompt = request.form.get('prompt')
+    graphql_url = request.form.get("graphqlUrl")
+    auth_token = request.form.get("authToken")
+    prompt = request.form.get("prompt")
+    username = request.form.get("username")
 
     if not graphql_url or not auth_token:
-        return "Auth parameters not provided", 400, {'Content-Type': 'text/plain'}
-    
+        return "Auth parameters not provided", 400, {"Content-Type": "text/plain"}
+
     try:
         # Assuming DinoAuthenticate is replaced with a similar function in Python
         dino_authenticate(graphql_url, auth_token)
     except Exception as e:
-        return str(e), 500, {'Content-Type': 'text/plain'}
-   
+        return str(e), 500, {"Content-Type": "text/plain"}
+
+    if not username:
+        return "Username not provided", 400, {"Content-Type": "text/plain"}
+
     if not prompt:
-        return "No prompt provided", 400, {'Content-Type': 'text/plain'}
-    
+        return "No prompt provided", 400, {"Content-Type": "text/plain"}
+
     try:
-        resp = reply_to_prompt(prompt)
+        resp = reply_to_prompt(prompt, username)
         if isinstance(resp, CompletionResponse):
-            return resp.answer, 200, {'Content-Type': 'text/plain'}
+            return resp.answer, 200, {"Content-Type": "text/plain"}
         else:
-            return "Unexpected response format", 500, {'Content-Type': 'text/plain'}
+            return "Unexpected response format", 500, {"Content-Type": "text/plain"}
     except Exception as e:
-        return str(e), 500, {'Content-Type': 'text/plain'}
+        return str(e), 500, {"Content-Type": "text/plain"}
+
 
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
 @app.route("/summarize", methods=["GET"])

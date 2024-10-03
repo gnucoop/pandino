@@ -5,11 +5,15 @@ pandas
 pandasai
 tabulate
 langchain_groq
+langchain_ollama
 langchain_openai
 langchain_mistralai
 langchain-google-genai
+langchain_pinecone
+langchain_postgres
 cryptography
 numpy==1.26.4
 scikit-learn
 seaborn
+pinecone
 psycopg2-binary

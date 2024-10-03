@@ -11,14 +11,16 @@ from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env file
 
-KEY = os.environ.get('ENCRYPTION_KEY')
+KEY = os.environ.get("ENCRYPTION_KEY")
 if not KEY:
     print("Error: ENCRYPTION_KEY not found in environment variables.")
     sys.exit(1)
 
 try:
     # Ensure the key is properly formatted
-    KEY = base64.urlsafe_b64encode(base64.urlsafe_b64decode(KEY + '=' * (-len(KEY) % 4)))
+    KEY = base64.urlsafe_b64encode(
+        base64.urlsafe_b64decode(KEY + "=" * (-len(KEY) % 4))
+    )
     print("Using ENCRYPTION_KEY from environment variables.")
 except Exception as e:
     print(f"Error with ENCRYPTION_KEY: {e}")
@@ -26,27 +28,34 @@ except Exception as e:
 
 cipher_suite = Fernet(KEY)
 
+
 def init_db():
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
-    cursor.execute('''
+    cursor.execute(
+        """
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE,
             api_key TEXT NOT NULL UNIQUE,
             date_valid_until TEXT NOT NULL DEFAULT '2024-12-31'
         )
-    ''')
+    """
+    )
     conn.commit()
     conn.close()
     print("Database initialized successfully.")
 
-def add_user(username, api_key, date_valid_until='2024-12-31'):
-    conn = sqlite3.connect('users.db')
+
+def add_user(username, api_key, date_valid_until="2024-12-31"):
+    conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
     encrypted_api_key = cipher_suite.encrypt(api_key.encode())
     try:
-        cursor.execute('INSERT INTO users (username, api_key, date_valid_until) VALUES (?, ?, ?)', (username, encrypted_api_key, date_valid_until))
+        cursor.execute(
+            "INSERT INTO users (username, api_key, date_valid_until) VALUES (?, ?, ?)",
+            (username, encrypted_api_key, date_valid_until),
+        )
         conn.commit()
     except sqlite3.IntegrityError:
         pass
@@ -55,28 +64,54 @@ def add_user(username, api_key, date_valid_until='2024-12-31'):
     finally:
         conn.close()
 
+
 def list_users():
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
-    cursor.execute('SELECT username, api_key, date_valid_until FROM users')
+    cursor.execute("SELECT id, username, api_key, date_valid_until FROM users")
     users = cursor.fetchall()
     conn.close()
     if users:
         print("Existing users:")
-        for user, api_key, date_valid_until in users:
-            print(f"Username: {user}, ApiKey: {cipher_suite.decrypt(api_key.decode())},  Date Valid Until: {date_valid_until}")
+        for id, user, api_key, date_valid_until in users:
+            print(
+                f"ID: {id}, Username: {user}, ApiKey: {cipher_suite.decrypt(api_key.decode())},  Date Valid Until: {date_valid_until}"
+            )
     else:
         print("No users found in the database.")
 
-def validate_api_key(api_key):
-    conn = sqlite3.connect('users.db')
+
+def get_user_by_username(user_name: str) -> dict | None:
+    conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
-    cursor.execute('SELECT api_key, date_valid_until FROM users')
+    query = f"SELECT id, username, api_key, date_valid_until FROM users WHERE username='{user_name}'"
+    cursor.execute(query)
+    user = cursor.fetchone()
+    conn.close()
+    if user:
+        userFound = {
+            "id": user[0],
+            "user": user[1],
+            "api_key": cipher_suite.decrypt(user[2].decode()),
+            "date_valid_until": user[3],
+        }
+        return userFound
+
+    else:
+        print("No users with this username found in the database.")
+        return None
+
+
+def validate_api_key(api_key):
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT api_key, date_valid_until FROM users")
     encrypted_keys = cursor.fetchall()
     conn.close()
-    
+
     from datetime import datetime
-    current_date = datetime.now().strftime('%Y-%m-%d')
+
+    current_date = datetime.now().strftime("%Y-%m-%d")
     for encrypted_key, date_valid_until in encrypted_keys:
         if date_valid_until < current_date:
             continue
@@ -94,10 +129,11 @@ def validate_api_key(api_key):
         return False, "API key expired"
     return False, "No matching API key found"
 
+
 def print_stored_keys():
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
-    cursor.execute('SELECT username, api_key FROM users')
+    cursor.execute("SELECT username, api_key FROM users")
     users = cursor.fetchall()
     conn.close()
     print("Stored API keys:")
@@ -110,39 +146,49 @@ def print_stored_keys():
             print(f"  Decrypted key: {decrypted_key}")
         except Exception as e:
             print(f"  Error decrypting key: {str(e)}")
-def log_token_usage(user_id, token_input, token_output, model, provider):                                                                                                                                                            
-        conn = sqlite3.connect('users.db')                                                                                                                                                                                                   
-        cursor = conn.cursor()                          
-        user_id = 2 #to be calculated on based the api_keys used                                                                                                                                                                                     
-        date = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        # Fetch the cost from the costs table
-        current_date = datetime.datetime.now().strftime('%Y-%m-%d')
-        cursor.execute('''
+
+
+def log_token_usage(user_id, token_input, token_output, model, provider):
+    conn = sqlite3.connect("users.db")
+    cursor = conn.cursor()
+    date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Fetch the cost from the costs table
+    current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+    cursor.execute(
+        """
             SELECT token_input_cost, token_output_cost 
             FROM costs 
             WHERE provider = ? AND model = ? AND start_date_valid <= ? AND end_date_valid >= ?
-        ''', (provider, model, current_date, current_date))
-        cost_row = cursor.fetchone()
-        if not cost_row:
-            raise ValueError(f"Cost not found for provider: {provider} and model: {model}")
-        
-        token_input_cost, token_output_cost = cost_row
-        cost = (token_input * token_input_cost) + (token_output * token_output_cost)
-        
-        cursor.execute('''                                                                                                                                                                                                                   
+        """,
+        (provider, model, current_date, current_date),
+    )
+    cost_row = cursor.fetchone()
+    if not cost_row:
+        raise ValueError(f"Cost not found for provider: {provider} and model: {model}")
+
+    token_input_cost, token_output_cost = cost_row
+    cost = (token_input * token_input_cost) + (token_output * token_output_cost)
+
+    cursor.execute(
+        """                                                                                                                                                                                                                   
             INSERT INTO logs (date, user_id, token_input, token_output, cost, model, provider)                                                                                                                                           
             VALUES (?, ?, ?, ?, ?, ?, ?)                                                                                                                                                                                                     
-        ''', (date, user_id, token_input, token_output, cost, model, provider))                                                                                                                                                                
-        conn.commit()                                                                                                                                                                                                                        
-        conn.close()
+        """,
+        (date, user_id, token_input, token_output, cost, model, provider),
+    )
+    conn.commit()
+    conn.close()
+
 
 def print_help():
     print("Usage: python database.py <command>")
     print("Commands:")
     print("  init_db                     Initialize the database")
     print("  add_user <username> <api_key> <date_valid_until>  Add a new user")
+    print("  get_user_by_username <user_name> Retrieve a user by its username/mail")
     print("  list_users                  List all users")
     print("  print_keys                  Print all stored API keys")
+
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
@@ -151,6 +197,9 @@ if __name__ == "__main__":
         elif sys.argv[1] == "add_user" and len(sys.argv) == 5:
             username, api_key, date_valid_until = sys.argv[2], sys.argv[3], sys.argv[4]
             add_user(username, api_key, date_valid_until)
+        elif sys.argv[1] == "get_user_by_username" and len(sys.argv) == 3:
+            user_name = sys.argv[2]
+            get_user_by_username(user_name)
         elif sys.argv[1] == "list_users":
             list_users()
         elif sys.argv[1] == "print_keys":
