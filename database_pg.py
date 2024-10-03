@@ -82,7 +82,7 @@ def list_users():
     conn.close()
     if users:
         print("Existing users:")
-        for user, api_key, date_valid_until in users:
+        for id, user, api_key, date_valid_until in users:
             try:
                 decrypted_api_key = cipher_suite.decrypt(api_key).decode()
                 print(
