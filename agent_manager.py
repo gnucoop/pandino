@@ -43,7 +43,6 @@ def deleteAgent(api_key, user_name) -> Agent | None:
     if not api_key or not agent or not user_name:
         return
     elif agent:
-        print(user_name)
         folderPath = f"exports/charts/{user_name}"
         if os.path.exists(folderPath):
             shutil.rmtree(folderPath, ignore_errors=True)
