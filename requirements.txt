@@ -17,3 +17,4 @@ scikit-learn
 seaborn
 pinecone
 psycopg2-binary
+openai-whisper

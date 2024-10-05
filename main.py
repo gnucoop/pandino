@@ -7,6 +7,9 @@ import pandas as pd
 from pandasai import Agent
 from agent_manager import getAgent, createAgent, deleteAgent
 from file_manager import isImageFilePath, fileToBase64
+import whisper
+import time
+
 
 # Import specific chat models from their respective libraries
 from langchain_groq.chat_models import ChatGroq
@@ -33,6 +36,8 @@ pd.set_option("display.max_columns", None)
 pd.set_option("display.width", None)
 pd.set_option("display.max_colwidth", None)
 
+# Load Whisper model
+model = whisper.load_model("small", device='cpu')
 
 # Define a route for the '/' endpoint that returns a welcome message
 @app.route("/")
@@ -292,6 +297,36 @@ def submit_feedback():
          return jsonify({"response": "Feedback submitted successfully"}), 200   
      except Exception as e:                                                     
          return jsonify({"error": f"Failed to submit feedback: {str(e)}"}), 500
+
+@app.route('/transcribe', methods=['POST'])
+def transcribe_audio():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+
+    file = request.files['file']
+
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    if file:
+        # Save the file temporarily
+        filepath = os.path.join("/tmp", file.filename)
+        file.save(filepath)
+
+        # Get the size of the file
+        file_size = os.path.getsize(filepath)
+
+        # Process the file with Whisper
+        result = model.transcribe(filepath)
+        os.remove(filepath)  # Remove the file after processing
+
+        result = {
+            "transcription": result["text"],
+        }
+
+        return jsonify(result)
+
+    return jsonify({"error": "Invalid request"}), 400
 
 
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
