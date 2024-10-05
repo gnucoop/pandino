@@ -51,6 +51,44 @@ def init_db():
         )
     """
     )
+    cursor.execute(                                                            
+         """                                                                    
+         CREATE TABLE IF NOT EXISTS feedback (                                  
+             id SERIAL PRIMARY KEY,                                             
+             username TEXT NOT NULL,                                            
+             feedback TEXT NOT NULL,                                           
+             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP                     
+         )                                                                      
+         """                                                                    
+    )
+    cursor.execute(                                                                                                                                             
+         """                                                                                                                                                     
+         CREATE TABLE IF NOT EXISTS logs (                                                                                                                       
+             id SERIAL PRIMARY KEY,                                                                                                                              
+             date TIMESTAMP NOT NULL,                                                                                                                            
+             user_id INTEGER NOT NULL,                                                                                                                           
+             token_input INTEGER NOT NULL,                                                                                                                       
+             token_output INTEGER NOT NULL,                                                                                                                      
+             cost NUMERIC NOT NULL,                                                                                                                              
+             model TEXT NOT NULL,                                                                                                                                
+             provider TEXT NOT NULL,                                                                                                                             
+             FOREIGN KEY (user_id) REFERENCES users(id)                                                                                                          
+         )                                                                                                                                                       
+     """                                                                                                                                                         
+     )                                                                                                                                                           
+    cursor.execute(                                                                                                                                             
+         """                                                                                                                                                     
+         CREATE TABLE IF NOT EXISTS costs (                                                                                                                      
+             id SERIAL PRIMARY KEY,                                                                                                                              
+             provider TEXT NOT NULL,                                                                                                                             
+             model TEXT NOT NULL,                                                                                                                                
+             token_input_cost NUMERIC NOT NULL,                                                                                                                  
+             token_output_cost NUMERIC NOT NULL,                                                                                                                 
+             start_date_valid DATE NOT NULL,                                                                                                                     
+             end_date_valid DATE NOT NULL                                                                                                                        
+         )                                                                                                                                                       
+     """                                                                                                                                                         
+     )                                                                                            
     conn.commit()
     conn.close()
     print("Database initialized successfully.")
@@ -190,6 +228,19 @@ def log_token_usage(user_id, token_input, token_output, model, provider):
     conn.commit()
     conn.close()
 
+def add_feedback(username, feedback, endpoint):                                                                                                                           
+     conn = connect()                                                                                                                                            
+     cursor = conn.cursor()                                                                                                                                      
+     try:                                                                                                                                                        
+         cursor.execute(                                                                                                                                         
+             "INSERT INTO feedback (username, feedback, endpoint) VALUES (%s, %s, %s)",                                                                                        
+             (username, feedback, endpoint),                                                                                                                               
+         )                                                                                                                                                       
+         conn.commit()                                                                                                                                           
+     except Exception as e:                                                                                                                                      
+         print(f"Error adding feedback: {e}")                                                                                                                    
+     finally:                                                                                                                                                    
+         conn.close()      
 
 def print_help():
     print("Usage: python database-pg.py <command>")

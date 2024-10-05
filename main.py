@@ -274,6 +274,25 @@ def prompt_handler():
     except Exception as e:
         return str(e), 500, {"Content-Type": "text/plain"}
 
+@app.route("/feedback", methods=["POST"])                                      
+def submit_feedback():                                                         
+     api_key = request.headers.get("X-API-KEY")                                 
+     user_name_header = request.headers.get("X-USER-NAME")                      
+     user_name = user_name_header.replace(" ", "_").strip()                  
+     validate_api_key(api_key)
+
+     endpoint = request.headers.get("X-Endpoint")                                                                              
+     feedback = request.json.get("feedback")
+                                                                                
+     if not feedback:                                                           
+         return jsonify({"error": "Missing feedback"}), 400                     
+                                                                                
+     try:                                                                       
+         database_pg.add_feedback(user_name, feedback, endpoint)                          
+         return jsonify({"response": "Feedback submitted successfully"}), 200   
+     except Exception as e:                                                     
+         return jsonify({"error": f"Failed to submit feedback: {str(e)}"}), 500
+
 
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
 @app.route("/summarize", methods=["GET"])
