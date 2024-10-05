@@ -13,6 +13,8 @@ exports/
 .env
 tmp/
 
+.vscode/
+
 # Compiled Java class files
 *.class
 
