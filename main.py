@@ -328,6 +328,35 @@ def transcribe_audio():
 
     return jsonify({"error": "Invalid request"}), 400
 
+@app.route('/translate', methods=['POST'])
+def transcribe_audio():
+    if 'file' not in request.files:
+        return jsonify({"error": "No file part"}), 400
+
+    file = request.files['file']
+
+    if file.filename == '':
+        return jsonify({"error": "No selected file"}), 400
+
+    if file:
+        # Save the file temporarily
+        filepath = os.path.join("/tmp", file.filename)
+        file.save(filepath)
+
+        # Get the size of the file
+        file_size = os.path.getsize(filepath)
+
+        # Process the file with Whisper
+        result = model.transcribe(filepath, language="en", task="translate")
+        os.remove(filepath)  # Remove the file after processing
+
+        result = {
+            "translation": result["text"],
+        }
+
+        return jsonify(result)
+
+    return jsonify({"error": "Invalid request"}), 400
 
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
 @app.route("/summarize", methods=["GET"])
