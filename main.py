@@ -125,10 +125,14 @@ def startChat():
             "ITA": f"""Dato questo dataframe pandas {data}. Prova a capire la natura dei dati e suggeriscimi che tipo di analisi dovrei chiedere. Spiega in dettaglio le tue risposte e fai qualsiasi suggerimento di possibile domanda che potrei fare. Non suggerire alcun codice Python. Per favore, rispondi in un formato html leggibile, senza asterischi e aggiungendo un'interruzione di riga dopo ogni paragrafo.""",
             "ENG": f"""Given this pandas dataframe {data}. Try to understand the nature of the data and suggest me what kind of analysis should I ask for. Explain in details your answers and make any suggestions about possible questions that I could ask. DO not suggest any python code. Please reply in a readable html format, with no asterisks and adding a line break after each paragraph.""",
             "FRA": f"""Étant donné ce dataframe pandas {data}. Essayez de comprendre la nature des données et suggérez-moi quel type d'analyse je devrais demander. Expliquez en détail vos réponses et faites toutes les suggestions de questions possibles que je pourrais poser. Ne suggérez aucun code Python. Veuillez répondre dans un format html lisible, sans astérisques et en ajoutant un saut de ligne après chaque paragraphe.""",
-            "SPA": f"""Dado este dataframe pandas {data}. Intenta entender la naturaleza de los datos y sugiereme qué tipo de análisis debería preguntar. Explica en detalle tus respuestas y haz cualquier sugerencia de pregunta posible que podría hacer. No sugieras ningún código Python. Por favor, responde en un formato html legible, sin asteriscos y agregando un salto de línea después de cada párrafo.""",
+            "ESP": f"""Dado este dataframe pandas {data}. Intenta entender la naturaleza de los datos y sugiereme qué tipo de análisis debería preguntar. Explica en detalle tus respuestas y haz cualquier sugerencia de pregunta posible que podría hacer. No sugieras ningún código Python. Por favor, responde en un formato html legible, sin asteriscos y agregando un salto de línea después de cada párrafo.""",
             # Add more languages as needed
         }
-        suggestionsQuestion = question_templates.get(lang, question_templates[lang])
+        suggestionsQuestion = (
+            question_templates.get(lang, question_templates[lang])
+            if lang in question_templates
+            else question_templates.get("ENG", question_templates["ENG"])
+        )
         suggestionsResponse = llm.invoke(suggestionsQuestion)
         if suggestionsResponse and suggestionsResponse.content is not None:
             agentResponse.update({"suggested_questions": suggestionsResponse.content})

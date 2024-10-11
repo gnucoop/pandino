@@ -107,9 +107,10 @@ def get_user_by_username(user_name: str) -> dict | None:
         userFound = {
             "id": user[0],
             "user": user[1],
-            "api_key": cipher_suite.decrypt(user[2].decode()),
+            "api_key": cipher_suite.decrypt(user[2]),
             "date_valid_until": user[3],
         }
+        print(userFound)
         return userFound
 
     else:
