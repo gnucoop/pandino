@@ -23,6 +23,10 @@ import ai
 from ai import complete_chat, CompletionResponse
 from ai import reply_to_prompt, choose_llm
 
+from dotenv import load_dotenv
+
+load_dotenv()  # Load environment variables from .env file
+
 # Initialize the Flask application
 app = Flask(__name__)
 # origins=["http://localhost:4200"]
@@ -32,6 +36,17 @@ CORS(app)
 pd.set_option("display.max_columns", None)
 pd.set_option("display.width", None)
 pd.set_option("display.max_colwidth", None)
+
+DATACHAT_MODEL = os.environ.get("DATACHAT_MODEL")
+DATACHAT_PROVIDER = os.environ.get("DATACHAT_PROVIDER")
+PROMPT_MODEL = os.environ.get("PROMPT_MODEL")
+PROMPT_PROVIDER = os.environ.get("PROMPT_PROVIDER")
+COMPLETION_MODEL = os.environ.get("COMPLETION_MODEL")
+COMPLETION_MODEL_PROVIDER = os.environ.get("COMPLETION_MODEL_PROVIDER")
+COMPLETION_EMBEDDING_MODEL = os.environ.get("COMPLETION_EMBEDDING_MODEL")
+COMPLETION_EMBEDDING_MODEL_PROVIDER = os.environ.get(
+    "COMPLETION_EMBEDDING_MODEL_PROVIDER"
+)
 
 
 # Define a route for the '/' endpoint that returns a welcome message
@@ -105,8 +120,8 @@ def startChat():
     request_llm_type = request.form.get("llm_type")
     request_file = request.files.get("file")
     request_lang = request.form.get("lang")
-    model_name = request_model_name if request_model_name else "llama-3.1-70b-versatile"
-    llm_type = request_llm_type if request_llm_type else "Groq"
+    model_name = request_model_name if request_model_name else DATACHAT_MODEL
+    llm_type = request_llm_type if request_llm_type else DATACHAT_PROVIDER
     lang = request_lang if request_lang else "ENG"
     # Check if all required parameters are present
     if not model_name or not llm_type or not user_name or not request_file:
@@ -225,11 +240,16 @@ def completion_handler():
             chat=r["chat"],
         )
 
-        resp = complete_chat(chat_request)
+        llm_type = COMPLETION_MODEL_PROVIDER
+        model = COMPLETION_MODEL
+        emb_llm_type = COMPLETION_EMBEDDING_MODEL_PROVIDER
+        emb_model = COMPLETION_EMBEDDING_MODEL
+
+        resp = complete_chat(chat_request, llm_type, model, emb_llm_type, emb_model)
 
         if isinstance(resp, CompletionResponse):
             if resp.error:
-                return jsonify({"error": f"Chat completion error: {resp.error}"}), 400
+                return jsonify({"error": f"Chat completion error: {resp.error}"}), 200
             return jsonify(
                 {
                     "answer": resp.answer,
@@ -253,6 +273,8 @@ def prompt_handler():
     auth_token = request.form.get("authToken")
     prompt = request.form.get("prompt")
     username = request.form.get("username")
+    model_name = PROMPT_MODEL
+    llm_type = PROMPT_PROVIDER
 
     if not graphql_url or not auth_token:
         return "Auth parameters not provided", 400, {"Content-Type": "text/plain"}
@@ -270,7 +292,7 @@ def prompt_handler():
         return "No prompt provided", 400, {"Content-Type": "text/plain"}
 
     try:
-        resp = reply_to_prompt(prompt, username)
+        resp = reply_to_prompt(prompt, username, llm_type, model_name)
         if isinstance(resp, CompletionResponse):
             return resp.answer, 200, {"Content-Type": "text/plain"}
         else:

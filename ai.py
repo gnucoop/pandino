@@ -75,20 +75,20 @@ def choose_llm(llm_type, model, temperature=0, seed=26, base_url=None, api_key=N
     else:
         raise ValueError(f"Unsupported llm_type: {llm_type}")
 
-def complete_chat(req: CompletionRequest, llm_type=None, model=None):                                                                                                                                        
-     emb_llm_type = "OpenAI"
+def complete_chat(req: CompletionRequest, llm_type:str, model:str, emb_llm_type:str, emb_model:str):                                                                                                                                        
+     #emb_llm_type = "OpenAI"
      #emb_llm_type = "Ollama"
-     llm_type = "Groq" 
-     model = "llama-3.1-8b-instant"
+     #llm_type = "Groq" 
+     #model = "llama-3.1-8b-instant"
      #emb_model ="mistral-embed"
-     emb_model ="text-embedding-ada-002"
+     #emb_model ="text-embedding-ada-002"
      #emb_model = "jeffh/intfloat-multilingual-e5-large:f16"
      #emb_model = "bge-m3:latest"
 
      logging.info(f"Starting chat completion with llm_type: {llm_type}, model: {model}")                                                                                                                      
-     if len(req.chat) % 2 == 0:                                                                                                                                                                               
-         logging.error("Chat completion error: chat must be a list of user,assistant messages ending with a user message")                                                                                    
-         return CompletionResponse(error="Chat completion error: chat must be a list of user,assistant messages ending with a user message")                                                                  
+    #  if len(req.chat) % 2 == 0:                                                                                                                                                                               
+    #      logging.error("Chat completion error: chat must be a list of user,assistant messages ending with a user message")                                                                                    
+    #      return CompletionResponse(error="Chat completion error: chat must be a list of user,assistant messages ending with a user message")                                                                  
      question = req.chat[-1]                                                                                                                                                                                  
      logging.info(f"Processing question: {question}")                                                                                                                                                         
      logging.info(f"Namespace: {req.namespace}")                                                                                                                                                              
@@ -230,9 +230,7 @@ def find_similar_paragraphs(text: str, top_k: int, min_similarity: float, namesp
         logging.error(f"Error in find_similar_paragraphs: {str(e)}")
         return [], [], str(e)
 
-def reply_to_prompt(prompt, username:str):
-    llm_type = "Groq"
-    model = "llama-3.1-70b-versatile"
+def reply_to_prompt(prompt, username:str, llm_type: str, model:str):
     messages = [
         {"role": "system", "content": "Sei un esperto di monitoraggio e valutazione che supporta le Organizzazioni non governative a scrivere il proprio bilancio sociale."},
         {"role": "user", "content": prompt}
