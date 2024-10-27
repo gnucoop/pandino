@@ -7,6 +7,9 @@ import pandas as pd
 from pandasai import Agent
 from agent_manager import getAgent, createAgent, deleteAgent
 from file_manager import isImageFilePath, fileToBase64
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+import os
 
 # Import specific chat models from their respective libraries
 from langchain_groq.chat_models import ChatGroq
@@ -31,6 +34,9 @@ load_dotenv()  # Load environment variables from .env file
 app = Flask(__name__)
 # origins=["http://localhost:4200"]
 CORS(app)
+
+# Verify Matplotlib backend
+print(f"Matplotlib backend: {matplotlib.get_backend()}")
 
 # Removing Pandas read csv columns limitations to avoid truncated dataFrames
 pd.set_option("display.max_columns", None)
@@ -178,7 +184,7 @@ def dataChat():
 
     # Perform the chat operation and get the response and explanation
     response = agent.chat(chat)
-    explanation = agent.explain()
+    #explanation = agent.explain()
 
     # Convert the response to a DataFrame if it's a list
     if isinstance(response, list):
@@ -202,12 +208,20 @@ def dataChat():
     else:
         response_dict = {"type": type(response).__name__, "value": str(response)}
         if response_dict and response_dict["value"]:
+            # Handle string type response with plot
+            if response_dict["type"] == "string" and "plot" in response_dict:
+                plot_path = response_dict.get("plot")
+                if plot_path and os.path.exists(plot_path):
+                    response_dict["type"] = "text_and_image"
+                    response_dict["image"] = fileToBase64(plot_path)
+                    # Remove the plot path from the response
+                    del response_dict["plot"]
             # Convert image file path in value to a base64 serialized file
-            if isImageFilePath(response_dict["value"]):
+            elif isImageFilePath(response_dict["value"]):
                 response_dict["type"] = "image"
                 response_dict["value"] = fileToBase64(response_dict["value"])
 
-    return jsonify({"response": response_dict, "explanation": explanation})
+    return jsonify({"response": response_dict, "explanation": None})
 
 
 @app.route("/completion.json", methods=["POST"])
@@ -246,7 +260,8 @@ def completion_handler():
         emb_model = COMPLETION_EMBEDDING_MODEL
 
         resp = complete_chat(chat_request, llm_type, model, emb_llm_type, emb_model)
-
+        if resp.similarities:
+            resp.similarities = [sim + 0.3 for sim in resp.similarities]
         if isinstance(resp, CompletionResponse):
             if resp.error:
                 return jsonify({"error": f"Chat completion error: {resp.error}"}), 200
@@ -255,6 +270,8 @@ def completion_handler():
                     "answer": resp.answer,
                     "paragraphs": resp.paragraphs,
                     "similarities": resp.similarities,
+                    "sources": resp.sources,
+                    "pages": resp.pages,
                 }
             )
         elif resp is None:
