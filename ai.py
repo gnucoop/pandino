@@ -273,7 +273,7 @@ def find_similar_paragraphs(text: str, top_k: int, min_similarity: float, namesp
         
         vec = embed(emb_llm_type, model, text)
         logging.info("Text embedded successfully")
-        index = connect_to_pinecone("langchain-test-index")
+        index = connect_to_pinecone("index")
         resp = index.query(
             vector=vec, 
             top_k=top_k, 
