@@ -272,6 +272,8 @@ def completion_handler():
                     "similarities": resp.similarities,
                     "sources": resp.sources,
                     "pages": resp.pages,
+                    "urls": resp.urls,
+                    "mimetypes": resp.mimetypes,
                 }
             )
         elif resp is None:

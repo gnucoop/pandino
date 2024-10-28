@@ -40,12 +40,14 @@ class CompletionRequest:
         self.chat = chat
 
 class CompletionResponse:
-    def __init__(self, error: str = None, paragraphs: List[str] = None, similarities: List[float] = None, pages: List[str] = None, sources: List[str] = None, answer: str = None):
+    def __init__(self, error: str = None, paragraphs: List[str] = None, similarities: List[float] = None, pages: List[str] = None, sources: List[str] = None, urls: List[str] = None, mimetypes: List[str] = None,  answer: str = None):
         self.error = error
         self.paragraphs = paragraphs
         self.similarities = similarities
         self.pages = pages
         self.sources = sources
+        self.urls = urls
+        self.mimetypes = mimetypes
         self.answer = answer
 
 def choose_llm(llm_type, model, temperature=0, seed=26, base_url=None, api_key=None):
@@ -104,7 +106,7 @@ def complete_chat(req: CompletionRequest, llm_type:str, model:str, emb_llm_type:
      question = req.chat[-1]                                                                                                                                                                                  
      logging.info(f"Processing question: {question}")                                                                                                                                                         
      logging.info(f"Namespace: {req.namespace}")                                                                                                                                                              
-     paragraphs, similarities, sources, pages, err = find_similar_paragraphs(question, 3, 0.5, req.namespace, emb_llm_type=emb_llm_type, model=emb_model) 
+     paragraphs, similarities, sources, pages, urls, mimetypes, err = find_similar_paragraphs(question, 3, 0.5, req.namespace, emb_llm_type=emb_llm_type, model=emb_model) 
      if err: 
          logging.error(f"Error finding similar paragraphs: {err}")                                                                                                                                            
          return CompletionResponse(error=f"Error finding similar paragraphs: {err}")                                                                                                                          
@@ -199,7 +201,9 @@ IMPORTANT INSTRUCTIONS:
                                      paragraphs=paragraphs,
                                      similarities=similarities,
                                      pages=pages,
-                                     sources=sources)
+                                     sources=sources,
+                                     urls=urls,
+                                     mimetypes=mimetypes)
      except Exception as e:                                                                                                                                                                                   
          logging.error(f"Error in chat completion: {str(e)}")                                                                                                                                                 
          return CompletionResponse(error=f"Error in chat completion: {str(e)}")
@@ -273,6 +277,7 @@ def find_similar_paragraphs(text: str, top_k: int, min_similarity: float, namesp
         
         vec = embed(emb_llm_type, model, text)
         logging.info("Text embedded successfully")
+        #index = connect_to_pinecone("langchain-test-index")
         index = connect_to_pinecone("index")
         resp = index.query(
             vector=vec, 
@@ -288,6 +293,8 @@ def find_similar_paragraphs(text: str, top_k: int, min_similarity: float, namesp
         similarities = []
         pages = []
         sources = []
+        urls = []
+        mimetypes = []
         if hasattr(resp, 'matches'):
                 for vec in resp.matches:
                     if vec.score >= min_similarity:
@@ -295,11 +302,13 @@ def find_similar_paragraphs(text: str, top_k: int, min_similarity: float, namesp
                         similarities.append(vec.score)
                         pages.append(vec.metadata["page"])
                         sources.append(vec.metadata["source"])
+                        urls.append(vec.metadata["url"])
+                        mimetypes.append(vec.metadata["mimetype"])
         else:
             logging.warning("The response from the vector database does not contain 'matches' attribute.")
         
         logging.info(f"Filtered to {len(paragraphs)} paragraphs above minimum similarity")
-        return paragraphs, similarities, sources, pages, None
+        return paragraphs, similarities, sources, pages, urls, mimetypes, None
     except Exception as e:
         logging.error(f"Error in find_similar_paragraphs: {str(e)}")
         return [], [], str(e)
