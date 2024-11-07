@@ -47,7 +47,9 @@ def init_db():
             id SERIAL PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
             api_key TEXT NOT NULL UNIQUE,
-            date_valid_until TEXT NOT NULL DEFAULT '2024-12-31'
+            date_valid_until TEXT NOT NULL DEFAULT '2024-12-31',
+            tokens INT NOT NULL DEFAULT 0
+            CONSTRAINT tokens_nonnegative check (tokens >= 0)
         )
     """
     )
@@ -73,24 +75,40 @@ def add_user(username, api_key, date_valid_until="2024-12-31"):
     finally:
         conn.close()
 
+def edit_tokens(username, tokens_quantity):
+    conn = connect()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "UPDATE users SET tokens = tokens + ? WHERE username = ?",
+            (tokens_quantity, username),
+        )
+        conn.commit()
+    except psycopg2.IntegrityError:
+        return False, "Error while editing Tokens"
+    except Exception:
+        return False, "Error while editing Tokens"
+    finally:
+        conn.close()
+        return True, "Tokens edited successfully"
 
 def list_users():
     conn = connect()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, api_key, date_valid_until FROM users")
+    cursor.execute("SELECT id, username, api_key, date_valid_until, tokens FROM users")
     users = cursor.fetchall()
     conn.close()
     if users:
         print("Existing users:")
-        for id, user, api_key, date_valid_until in users:
+        for id, user, api_key, date_valid_until, tokens in users:
             try:
                 decrypted_api_key = cipher_suite.decrypt(api_key).decode()
                 print(
-                    f"ID: {id}, Username: {user}, ApiKey: {decrypted_api_key},  Date Valid Until: {date_valid_until}"
+                    f"ID: {id}, Username: {user}, ApiKey: {decrypted_api_key}, Date Valid Until: {date_valid_until}, Tokens: {tokens}"
                 )
             except InvalidToken:
                 print(
-                    f"Username: {user}, ApiKey: decryption failed,  Date Valid Until: {date_valid_until}"
+                    f"Username: {user}, ApiKey: decryption failed, Date Valid Until: {date_valid_until}, Tokens: {tokens}"
                 )
     else:
         print("No users found in the database.")
@@ -99,7 +117,7 @@ def list_users():
 def get_user_by_username(user_name: str) -> dict | None:
     conn = connect()
     cursor = conn.cursor()
-    query = f"SELECT id, username, api_key, date_valid_until FROM users WHERE username='{user_name}'"
+    query = f"SELECT id, username, api_key, date_valid_until, tokens FROM users WHERE username='{user_name}'"
     cursor.execute(query)
     user = cursor.fetchone()
     conn.close()
@@ -109,6 +127,7 @@ def get_user_by_username(user_name: str) -> dict | None:
             "user": user[1],
             "api_key": cipher_suite.decrypt(user[2]),
             "date_valid_until": user[3],
+            "tokens": user[4],
         }
         print(userFound)
         return userFound
@@ -117,6 +136,11 @@ def get_user_by_username(user_name: str) -> dict | None:
         print("No users with this username found in the database.")
         return None
 
+def get_user_tokens(user_name:str) -> int | None:
+    user = get_user_by_username(user_name)
+    if user is None:
+        return None
+    return user.get('tokens')
 
 def validate_api_key(api_key):
     conn = connect()
@@ -198,6 +222,7 @@ def print_help():
     print("  init_db                     Initialize the database")
     print("  add_user <username> <api_key> <date_valid_until>  Add a new user")
     print("  get_user_by_username <user_name> Retrieve a user by its username/mail")
+    print("  edit_tokens <user_name> <quantity> Adds or removes a user's tokens by the user's username/mail")
     print("  list_users                  List all users")
     print("  print_keys                  Print all stored API keys")
 
@@ -212,6 +237,9 @@ if __name__ == "__main__":
         elif sys.argv[1] == "get_user_by_username" and len(sys.argv) == 3:
             user_name = sys.argv[2]
             get_user_by_username(user_name)
+        elif sys.argv[1] == "edit_tokens" and len(sys.argv) == 4:
+            username, tokens_quantity = sys.argv[2], sys.argv[3]
+            edit_tokens(username, tokens_quantity)
         elif sys.argv[1] == "list_users":
             list_users()
         elif sys.argv[1] == "print_keys":

@@ -8,7 +8,8 @@ from pandasai import Agent
 from agent_manager import getAgent, createAgent, deleteAgent
 from file_manager import isImageFilePath, fileToBase64
 import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
+
+matplotlib.use("Agg")  # Use non-interactive backend
 import os
 
 # Import specific chat models from their respective libraries
@@ -19,7 +20,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 
 # Import function from ai and database
 import database_pg
-from database_pg import validate_api_key
+from database_pg import edit_tokens, validate_api_key
 import dino
 from dino import dino_authenticate
 import ai
@@ -53,6 +54,10 @@ COMPLETION_EMBEDDING_MODEL = os.environ.get("COMPLETION_EMBEDDING_MODEL")
 COMPLETION_EMBEDDING_MODEL_PROVIDER = os.environ.get(
     "COMPLETION_EMBEDDING_MODEL_PROVIDER"
 )
+STRIPE_KEY = os.environ.get("STRIPE_SK_KEY")
+DATACHAT_TOKEN_COST = os.environ.get("DATACHAT_TOKEN_COST")
+COMPLETION_TOKEN_COST = os.environ.get("COMPLETION_TOKEN_COST")
+PROMPT_TOKEN_COST = os.environ.get("PROMPT_TOKEN_COST")
 
 
 # Define a route for the '/' endpoint that returns a welcome message
@@ -70,6 +75,68 @@ def validate_api_key(api_key):
             abort(403, description="API key expired")
         else:
             abort(403, description="Invalid API key")
+
+
+# Define a route for the '/edittokens' endpoint that accepts POST requests
+@app.route("/edittokens", methods=["POST"])
+def editTokens():
+    try:
+        stripe_key = request.headers.get("X-STRIPE-KEY")
+
+        # Check stripe_key is present and correct
+        if not stripe_key:
+            return jsonify({"error": "Missing X-STRIPE-KEY header"}), 400
+
+        if stripe_key != STRIPE_KEY:
+            return jsonify({"error": "Invalid STRIPE KEY"}), 403
+
+        r = request.get_json()
+        if not r:
+            return jsonify({"error": "No JSON data provided"}), 400
+
+        required_keys = ["quantity", "useremail"]
+        missing_keys = [key for key in required_keys if key not in r]
+
+        if missing_keys:
+            return (
+                jsonify({"error": f"Missing required keys: {', '.join(missing_keys)}"}),
+                400,
+            )
+
+        result, message = edit_tokens(r["useremail"], r["quantity"])
+
+        if result:
+            return (
+                jsonify(
+                    {
+                        "response": f"{message}: {r["quantity"]} for user: {r["useremail"]}"
+                    }
+                ),
+                200,
+            )
+        elif not result:
+            return (
+                jsonify({"error": f"{message}"}),
+                400,
+            )
+
+    except Exception as e:
+        app.logger.error(f"Unexpected error in edit tokens: {str(e)}")
+        return jsonify({"error": "An unexpected error occurred"}), 500
+
+
+# Define a route for the '/edittokens' endpoint that accepts POST requests
+@app.route("/getusertokens", methods=["POST"])
+def getUserTokens():
+    api_key = request.headers.get("X-API-KEY")
+    user_email = request.headers.get("X-USER-EMAIL")
+    if not api_key:
+        return jsonify({"error": "Missing X-API-KEY header"}), 400
+    if not user_email:
+        return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
+    validate_api_key(api_key)
+    tokens = database_pg.get_user_tokens(user_email)
+    return jsonify({"response": {"tokens": tokens}}), 200
 
 
 # Define a route for the '/validateapikey' endpoint that accepts POST requests
@@ -118,6 +185,7 @@ def endChat():
 def startChat():
     api_key = request.headers.get("X-API-KEY")
     user_name_header = request.headers.get("X-USER-NAME")
+    user_email = request.headers.get("X-USER-EMAIL")
     user_name = user_name_header.replace(" ", "_").strip()
     validate_api_key(api_key)
 
@@ -130,8 +198,19 @@ def startChat():
     llm_type = request_llm_type if request_llm_type else DATACHAT_PROVIDER
     lang = request_lang if request_lang else "ENG"
     # Check if all required parameters are present
-    if not model_name or not llm_type or not user_name or not request_file:
+    if (
+        not model_name
+        or not llm_type
+        or not user_name
+        or not user_email
+        or not request_file
+    ):
         return jsonify({"error": "Missing parameters"}), 400
+
+    # Checks if the User's tokens are enough for this operation
+    user_tokens = database_pg.get_user_tokens(user_email)
+    if int(DATACHAT_TOKEN_COST) > user_tokens:
+        return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
     # Read the data from the provided CSV file
     data = pd.read_csv(request_file, sep=",")
@@ -158,6 +237,9 @@ def startChat():
         if suggestionsResponse and suggestionsResponse.content is not None:
             agentResponse.update({"suggested_questions": suggestionsResponse.content})
 
+        # Spends User's tokens
+        edit_tokens(user_email, -int(DATACHAT_TOKEN_COST))
+
         return jsonify(agentResponse)
     except Exception as e:
         return (
@@ -170,6 +252,7 @@ def startChat():
 @app.route("/datachat", methods=["POST"])
 def dataChat():
     api_key = request.headers.get("X-API-KEY")
+    user_email = request.headers.get("X-USER-EMAIL")
     validate_api_key(api_key)
     chat = request.json.get("chat")
     agent: Agent | None = getAgent(api_key)
@@ -178,13 +261,22 @@ def dataChat():
     if not chat:
         return jsonify({"error": "Missing Chat string"}), 400
 
+    # Check if user email is present
+    if not user_email:
+        return jsonify({"error": "Missing User email"}), 400
+
     # Check if the Agent is active
     if not agent:
         return jsonify({"error": "Agent not active for this Api Key"}), 400
 
+    # Checks if the User's tokens are enough for this operation
+    user_tokens = database_pg.get_user_tokens(user_email)
+    if int(DATACHAT_TOKEN_COST) > user_tokens:
+        return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
+
     # Perform the chat operation and get the response and explanation
     response = agent.chat(chat)
-    #explanation = agent.explain()
+    # explanation = agent.explain()
 
     # Convert the response to a DataFrame if it's a list
     if isinstance(response, list):
@@ -221,6 +313,9 @@ def dataChat():
                 response_dict["type"] = "image"
                 response_dict["value"] = fileToBase64(response_dict["value"])
 
+    # Spends User's tokens
+    edit_tokens(user_email, -int(DATACHAT_TOKEN_COST))
+
     return jsonify({"response": response_dict, "explanation": None})
 
 
@@ -238,6 +333,17 @@ def completion_handler():
             return (
                 jsonify({"error": f"Missing required keys: {', '.join(missing_keys)}"}),
                 400,
+            )
+
+        api_key = request.headers.get("X-API-KEY")
+        validate_api_key(api_key)
+
+        # Checks if the User's tokens are enough for this operation
+        user_tokens = database_pg.get_user_tokens(r["username"])
+        if int(COMPLETION_TOKEN_COST) > user_tokens:
+            return (
+                jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
+                500,
             )
 
         err = dino_authenticate(r["dinoGraphql"], r["authToken"])
@@ -265,6 +371,10 @@ def completion_handler():
         if isinstance(resp, CompletionResponse):
             if resp.error:
                 return jsonify({"error": f"Chat completion error: {resp.error}"}), 200
+
+            # Spends User's tokens
+            edit_tokens(r["username"], -int(COMPLETION_TOKEN_COST))
+
             return jsonify(
                 {
                     "answer": resp.answer,
@@ -295,8 +405,19 @@ def prompt_handler():
     model_name = PROMPT_MODEL
     llm_type = PROMPT_PROVIDER
 
+    api_key = request.headers.get("X-API-KEY")
+    validate_api_key(api_key)
+
     if not graphql_url or not auth_token:
         return "Auth parameters not provided", 400, {"Content-Type": "text/plain"}
+
+    if not username:
+        return "Username not provided", 400, {"Content-Type": "text/plain"}
+
+    # Checks if the User's tokens are enough for this operation
+    user_tokens = database_pg.get_user_tokens(username)
+    if int(PROMPT_TOKEN_COST) > user_tokens:
+        return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
     try:
         # Assuming DinoAuthenticate is replaced with a similar function in Python
@@ -304,15 +425,15 @@ def prompt_handler():
     except Exception as e:
         return str(e), 500, {"Content-Type": "text/plain"}
 
-    if not username:
-        return "Username not provided", 400, {"Content-Type": "text/plain"}
-
     if not prompt:
         return "No prompt provided", 400, {"Content-Type": "text/plain"}
 
     try:
         resp = reply_to_prompt(prompt, username, llm_type, model_name)
         if isinstance(resp, CompletionResponse):
+            # Spends User's tokens
+            edit_tokens(username, -int(PROMPT_TOKEN_COST))
+
             return resp.answer, 200, {"Content-Type": "text/plain"}
         else:
             return "Unexpected response format", 500, {"Content-Type": "text/plain"}
