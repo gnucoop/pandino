@@ -1,4 +1,4 @@
-import psycopg2
+import psycopg
 import sys
 from cryptography.fernet import Fernet, InvalidToken
 import os
@@ -35,7 +35,7 @@ cipher_suite = Fernet(KEY)
 
 
 def connect():
-    return psycopg2.connect(host=PGHOST, database=PGDB, user=PGUSER, password=PGPWD)
+    return psycopg.connect(host=PGHOST, database=PGDB, user=PGUSER, password=PGPWD)
 
 
 def init_db():
@@ -68,7 +68,7 @@ def add_user(username, api_key, date_valid_until="2024-12-31"):
             (username, encrypted_api_key.decode(), date_valid_until),
         )
         conn.commit()
-    except psycopg2.IntegrityError:
+    except psycopg.IntegrityError:
         pass
     except Exception:
         pass
@@ -84,7 +84,7 @@ def edit_tokens(username, tokens_quantity):
             (tokens_quantity, username),
         )
         conn.commit()
-    except psycopg2.IntegrityError:
+    except psycopg.IntegrityError:
         return False, "Error while editing Tokens"
     except Exception:
         return False, "Error while editing Tokens"
