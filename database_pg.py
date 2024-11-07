@@ -35,7 +35,7 @@ cipher_suite = Fernet(KEY)
 
 
 def connect():
-    return psycopg.connect(host=PGHOST, database=PGDB, user=PGUSER, password=PGPWD)
+    return psycopg.connect(host=PGHOST, dbname=PGDB, user=PGUSER, password=PGPWD)
 
 
 def init_db():

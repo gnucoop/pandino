@@ -22,6 +22,7 @@ from langchain_ollama import OllamaEmbeddings
 from pinecone import Pinecone, ServerlessSpec
 from langchain_pinecone import PineconeVectorStore
 from langchain_postgres import PGVector
+from langchain_postgres.vectorstores import PGVector
 
 import database_pg
 from database_pg import get_user_by_username, log_token_usage
