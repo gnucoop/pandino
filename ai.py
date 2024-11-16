@@ -17,6 +17,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_mistralai import MistralAIEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from langchain_ollama import OllamaEmbeddings
+from langchain_community.embeddings import DeepInfraEmbeddings
 
 #Import specific vector store database from their specific libraries
 from pinecone import Pinecone, ServerlessSpec
@@ -26,7 +27,8 @@ from langchain_postgres.vectorstores import PGVector
 
 import database_pg
 from database_pg import get_user_by_username, log_token_usage
-
+import database
+from database import get_user_by_username, log_token_usage
 load_dotenv()  # Load environment variables from .env file
 
 from typing import List
@@ -91,23 +93,13 @@ def choose_llm(llm_type, model, temperature=0, seed=26, base_url=None, api_key=N
         raise ValueError(f"Unsupported llm_type: {llm_type}")
 
 def complete_chat(req: CompletionRequest, llm_type:str, model:str, emb_llm_type:str, emb_model:str):                                                                                                                                        
-     #emb_llm_type = "OpenAI"
-     #emb_llm_type = "Ollama"
-     #llm_type = "Groq" 
-     #model = "llama-3.1-8b-instant"
-     #emb_model ="mistral-embed"
-     #emb_model ="text-embedding-ada-002"
-     #emb_model = "jeffh/intfloat-multilingual-e5-large:f16"
-     #emb_model = "bge-m3:latest"
 
      logging.info(f"Starting chat completion with llm_type: {llm_type}, model: {model}") 
-    #  if len(req.chat) % 2 == 0:                                                                                                                                                                               
-    #      logging.error("Chat completion error: chat must be a list of user,assistant messages ending with a user message")                                                                                    
-    #      return CompletionResponse(error="Chat completion error: chat must be a list of user,assistant messages ending with a user message")                                                                  
+
      question = req.chat[-1]                                                                                                                                                                                  
      logging.info(f"Processing question: {question}")                                                                                                                                                         
      logging.info(f"Namespace: {req.namespace}")                                                                                                                                                              
-     paragraphs, similarities, sources, pages, urls, mimetypes, err = find_similar_paragraphs(question, 3, 0.5, req.namespace, emb_llm_type=emb_llm_type, model=emb_model) 
+     paragraphs, similarities, sources, pages, urls, mimetypes, err = find_similar_paragraphs(question, 3, 0.2, req.namespace, emb_llm_type=emb_llm_type, model=emb_model) 
      if err: 
          logging.error(f"Error finding similar paragraphs: {err}")                                                                                                                                            
          return CompletionResponse(error=f"Error finding similar paragraphs: {err}")                                                                                                                          
@@ -115,7 +107,7 @@ def complete_chat(req: CompletionRequest, llm_type:str, model:str, emb_llm_type:
          logging.info("No information available for the question") 
          return CompletionResponse(answer="Non ho informazioni al riguardo") 
      logging.info(f"Found {len(paragraphs)} relevant paragraphs")
-     # Start with a very explicit system message about using context
+
      # Start with a greeting for the first message
      if len(req.chat) == 1:
          return CompletionResponse(answer="Hello! How can I help you?")
@@ -230,89 +222,32 @@ def embed(emb_llm_type, model, text):
             logging.error(f"Error attributes: {e.__dict__}")
         raise ValueError(f"Error embedding text with {emb_llm_type}: {str(e)}")
 
-def connect_to_pinecone (index_name: str):
-    pinecone_api_key = os.environ.get("PINECONE_API_KEY")
-    pc = Pinecone(api_key=pinecone_api_key)
-    index = pc.Index(index_name)
-    return index
-
-def connect_to_vector_db (db_name: str, index_name: str, emb_llm_type: str, emb_model):
-    if db_name == 'pinecone':
-        pinecone_api_key = os.environ.get("PINECONE_API_KEY")
-        pc = Pinecone(api_key=pinecone_api_key)
-        index = pc.Index(index_name)
-        embeddings = choose_emb_model (emb_llm_type, emb_model)
-        vector_store = PineconeVectorStore(index=index, embedding=embeddings)
-        logging.info("VectorStore created")
-        return vector_store
-    elif db_name == 'pgvector':
-        embeddings = choose_emb_model (emb_llm_type, emb_model)
-        connection = "postgresql+psycopg://langchain:langchain@localhost:6024/langchain"
-        vector_store = PGVector(embeddings=embeddings,collection_name=index_name,connection=connection,use_jsonb=True)
-        return vector_store
+from vector_store import create_vector_store
 
 def find_similar_paragraphs(text: str, top_k: int, min_similarity: float, namespace: str, emb_llm_type: str, model: str) -> tuple:
     logging.info(f"Finding similar paragraphs for text: {text[:50]}...")
     
     try:
+        # Create embeddings model
+        embeddings = choose_emb_model(emb_llm_type, model)
         
-        """
-        db_name='pinecone'
-        index_name='index'
-        emb_llm_type ='OpenAI'
-        emb_model='text-embedding-ada-002'
-
-        vector_store = connect_to_vector_db(db_name=db_name,index_name=index_name,emb_llm_type=emb_llm_type,emb_model=emb_model)
-        print(vector_store)
-        logging.info("Connected to Vector Database")
+        # Create vector store instance (using Pinecone as default)
+        store_name = namespace
+        vector_store = create_vector_store('pgvector', store_name, embeddings)
         
-        try:
-            resp = vector_store.similarity_search_with_relevance_scores (text, k=top_k,score_threshold=min_similarity)
-            print(resp)
-            for res, score in resp:
-                print(f"* [SIM={score:3f}] {res.page_content} [{res.metadata}]")
-        except Exception as e:
-            logging.error(f"Error querying the vector database: {str(e)}")
-            return [], [], str(e)
-            """
-        
-        vec = embed(emb_llm_type, model, text)
-        logging.info("Text embedded successfully")
-        #index = connect_to_pinecone("langchain-test-index")
-        index = connect_to_pinecone("index")
-        resp = index.query(
-            vector=vec, 
-            top_k=top_k, 
-            include_metadata=True, 
-            namespace=namespace,
-            min_similarity=min_similarity
+        # Perform similarity search using the embeddings model
+        paragraphs, similarities, sources, pages, urls, mimetypes = vector_store.similarity_search(
+            query=text,
+            top_k=top_k,
+            min_similarity=min_similarity,
+            namespace=namespace
         )
         
-        logging.info(f"Vector Database query completed, found {len(resp.matches)} matches")
-        
-        paragraphs = []
-        similarities = []
-        pages = []
-        sources = []
-        urls = []
-        mimetypes = []
-        if hasattr(resp, 'matches'):
-                for vec in resp.matches:
-                    if vec.score >= min_similarity:
-                        paragraphs.append(vec.metadata["text"])
-                        similarities.append(vec.score)
-                        pages.append(vec.metadata["page"])
-                        sources.append(vec.metadata["source"])
-                        urls.append(vec.metadata["url"])
-                        mimetypes.append(vec.metadata["mimetype"])
-        else:
-            logging.warning("The response from the vector database does not contain 'matches' attribute.")
-        
-        logging.info(f"Filtered to {len(paragraphs)} paragraphs above minimum similarity")
+        logging.info(f"Vector Database query completed, found {len(paragraphs)} matches")
         return paragraphs, similarities, sources, pages, urls, mimetypes, None
     except Exception as e:
         logging.error(f"Error in find_similar_paragraphs: {str(e)}")
-        return [], [], str(e)
+        return [], [], [], [], [], [], str(e)
 
 def reply_to_prompt(prompt, username:str, llm_type: str, model:str):
     messages = [
@@ -350,6 +285,12 @@ def choose_emb_model(emb_llm_type, model):
         return MistralAIEmbeddings(model=model, api_key=mistralai_api_key)
     elif emb_llm_type == 'Ollama':
         return OllamaEmbeddings(model=model,base_url='http://192.168.1.8:11434')
+    elif emb_llm_type == 'Deepinfra':
+        deepinfra_api_token = os.getenv("DEEPINFRA_API_KEY")
+        if not openai_api_key:
+            logging.error("DEEPINFRA_API_KEY environment variable is not set")
+            raise ValueError("DEEPINFRA_API_KEY environment variable is not set")
+        return DeepInfraEmbeddings(model_id=model, deepinfra_api_token=deepinfra_api_token)
     elif emb_llm_type == 'OpenAI':
         openai_api_key = os.getenv("OPENAI_API_KEY")
         if not openai_api_key:

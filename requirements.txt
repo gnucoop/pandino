@@ -12,6 +12,7 @@ langchain-google-genai
 langchain_pinecone
 langchain_postgres
 langchain_anthropic
+langchain-community
 cryptography
 numpy==1.26.4
 scikit-learn

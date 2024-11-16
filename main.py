@@ -1,6 +1,7 @@
 # Import necessary libraries for the Flask application
 import os
 import warnings
+import logging
 from flask import Flask, request, jsonify, abort
 from flask_cors import CORS
 import pandas as pd
@@ -21,6 +22,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 # Import function from ai and database
 import database_pg
 from database_pg import edit_tokens, validate_api_key
+import database
+from database import edit_tokens, validate_api_key
 import dino
 from dino import dino_authenticate
 import ai
@@ -69,7 +72,7 @@ def welcome():
 def validate_api_key(api_key):
     if not api_key:
         abort(403)
-    result, message = database_pg.validate_api_key(api_key)
+    result, message = database.validate_api_key(api_key)
     if not result:
         if "expired" in message:
             abort(403, description="API key expired")
@@ -109,7 +112,7 @@ def editTokens():
             return (
                 jsonify(
                     {
-                        "response": f"{message}: {r["quantity"]} for user: {r["useremail"]}"
+                        "response": f'{message}: {r["quantity"]} for user: {r["useremail"]}'
                     }
                 ),
                 200,
@@ -135,7 +138,7 @@ def getUserTokens():
     if not user_email:
         return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
     validate_api_key(api_key)
-    tokens = database_pg.get_user_tokens(user_email)
+    tokens = database.get_user_tokens(user_email)
     return jsonify({"response": {"tokens": tokens}}), 200
 
 
@@ -148,7 +151,7 @@ def validate():
     if not api_key:
         return jsonify({"error": "Missing X-API-KEY header"}), 400
 
-    result, message = database_pg.validate_api_key(api_key)
+    result, message = database.validate_api_key(api_key)
 
     if not result:
         if "expired" in message:
@@ -208,7 +211,7 @@ def startChat():
         return jsonify({"error": "Missing parameters"}), 400
 
     # Checks if the User's tokens are enough for this operation
-    user_tokens = database_pg.get_user_tokens(user_email)
+    user_tokens = database.get_user_tokens(user_email)
     if int(DATACHAT_TOKEN_COST) > user_tokens:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
@@ -270,7 +273,7 @@ def dataChat():
         return jsonify({"error": "Agent not active for this Api Key"}), 400
 
     # Checks if the User's tokens are enough for this operation
-    user_tokens = database_pg.get_user_tokens(user_email)
+    user_tokens = database.get_user_tokens(user_email)
     if int(DATACHAT_TOKEN_COST) > user_tokens:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
@@ -339,12 +342,24 @@ def completion_handler():
         validate_api_key(api_key)
 
         # Checks if the User's tokens are enough for this operation
-        user_tokens = database_pg.get_user_tokens(r["username"])
-        if int(COMPLETION_TOKEN_COST) > user_tokens:
-            return (
-                jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
-                500,
-            )
+        user_tokens = database.get_user_tokens(r["username"])
+        if user_tokens is None:
+            return jsonify({"error": "User not found or no tokens available"}), 400
+
+        # Validate and get completion cost
+        try:
+            completion_cost = int(COMPLETION_TOKEN_COST) if COMPLETION_TOKEN_COST else 0
+        except (ValueError, TypeError):
+            logging.warning("COMPLETION_TOKEN_COST environment variable not properly configured, defaulting to 0")
+            completion_cost = 0
+
+        # Only check token balance if there is a cost
+        if completion_cost > 0:
+            if user_tokens < completion_cost:
+                return (
+                    jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
+                    400,
+                )
 
         err = dino_authenticate(r["dinoGraphql"], r["authToken"])
         if err:
@@ -372,8 +387,9 @@ def completion_handler():
             if resp.error:
                 return jsonify({"error": f"Chat completion error: {resp.error}"}), 200
 
-            # Spends User's tokens
-            edit_tokens(r["username"], -int(COMPLETION_TOKEN_COST))
+            # Spends User's tokens only if there is a cost
+            if completion_cost > 0:
+                edit_tokens(r["username"], -completion_cost)
 
             return jsonify(
                 {
@@ -415,7 +431,7 @@ def prompt_handler():
         return "Username not provided", 400, {"Content-Type": "text/plain"}
 
     # Checks if the User's tokens are enough for this operation
-    user_tokens = database_pg.get_user_tokens(username)
+    user_tokens = database.get_user_tokens(username)
     if int(PROMPT_TOKEN_COST) > user_tokens:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
