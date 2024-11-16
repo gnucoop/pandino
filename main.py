@@ -341,25 +341,12 @@ def completion_handler():
         api_key = request.headers.get("X-API-KEY")
         validate_api_key(api_key)
 
-        # Checks if the User's tokens are enough for this operation
         user_tokens = database.get_user_tokens(r["username"])
-        if user_tokens is None:
-            return jsonify({"error": "User not found or no tokens available"}), 400
-
-        # Validate and get completion cost
-        try:
-            completion_cost = int(COMPLETION_TOKEN_COST) if COMPLETION_TOKEN_COST else 0
-        except (ValueError, TypeError):
-            logging.warning("COMPLETION_TOKEN_COST environment variable not properly configured, defaulting to 0")
-            completion_cost = 0
-
-        # Only check token balance if there is a cost
-        if completion_cost > 0:
-            if user_tokens < completion_cost:
-                return (
-                    jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
-                    400,
-                )
+        if int(COMPLETION_TOKEN_COST) > user_tokens:
+            return (
+                jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
+                500,
+            )
 
         err = dino_authenticate(r["dinoGraphql"], r["authToken"])
         if err:
@@ -387,10 +374,11 @@ def completion_handler():
             if resp.error:
                 return jsonify({"error": f"Chat completion error: {resp.error}"}), 200
 
+            # Spends User's tokens
+            edit_tokens(r["username"], -int(COMPLETION_TOKEN_COST))
             # Spends User's tokens only if there is a cost
-            if completion_cost > 0:
-                edit_tokens(r["username"], -completion_cost)
-
+            #if completion_cost > 0:
+            #    edit_tokens(r["username"], -completion_cost)
             return jsonify(
                 {
                     "answer": resp.answer,
@@ -410,7 +398,6 @@ def completion_handler():
     except Exception as e:
         app.logger.error(f"Unexpected error in completion_handler: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
-
 
 @app.route("/prompt.txt", methods=["POST"])
 def prompt_handler():
