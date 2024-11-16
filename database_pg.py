@@ -52,11 +52,13 @@ def init_db():
         );
         CREATE TABLE IF NOT EXISTS logs (
             id SERIAL PRIMARY KEY,
-            username TEXT NOT NULL UNIQUE,
-            api_key TEXT NOT NULL UNIQUE,
-            date_valid_until TEXT NOT NULL DEFAULT '2024-12-31',
-            tokens INT NOT NULL DEFAULT 0
-            CONSTRAINT tokens_nonnegative check (tokens >= 0)
+            user_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            token_input INTEGER NOT NULL,
+            token_output INTEGER NOT NULL,
+            cost REAL NOT NULL,
+            model TEXT NOT NULL,
+            provider TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS costs (
             id SERIAL PRIMARY KEY,

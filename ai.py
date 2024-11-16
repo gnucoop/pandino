@@ -27,8 +27,6 @@ from langchain_postgres.vectorstores import PGVector
 
 import database_pg
 from database_pg import get_user_by_username, log_token_usage
-import database
-from database import get_user_by_username, log_token_usage
 load_dotenv()  # Load environment variables from .env file
 
 from typing import List
