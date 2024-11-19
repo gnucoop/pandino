@@ -8,6 +8,8 @@ from pandasai import Agent
 from agent_manager import getAgent, createAgent, deleteAgent
 from file_manager import isImageFilePath, fileToBase64
 import matplotlib
+import secrets
+from datetime import datetime
 
 matplotlib.use("Agg")  # Use non-interactive backend
 import os
@@ -21,7 +23,6 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 # Import function from ai and database
 import database_pg
 from database_pg import edit_tokens, validate_api_key
-import dino
 from dino import dino_authenticate
 import ai
 from ai import complete_chat, CompletionResponse
@@ -66,15 +67,25 @@ def welcome():
     return "Welcome to Pandino! This is the root endpoint."
 
 
-def validate_api_key(api_key):
+# Validates an API Key associated to an user email
+def validate_api_key(api_key, user_email):
     if not api_key:
         abort(403)
-    result, message = database_pg.validate_api_key(api_key)
+    result, message = database_pg.validate_api_key(api_key, user_email)
     if not result:
         if "expired" in message:
             abort(403, description="API key expired")
         else:
             abort(403, description="Invalid API key")
+
+
+# Tries to authenticate a Dino user against their Dino instance's backend
+def authenticate_dino(graphql_url, auth_token):
+    if not graphql_url or not auth_token:
+        abort(403)
+    result = dino_authenticate(graphql_url, auth_token)
+    if result:
+        abort(403, description=result)
 
 
 # Define a route for the '/edittokens' endpoint that accepts POST requests
@@ -134,21 +145,84 @@ def getUserTokens():
         return jsonify({"error": "Missing X-API-KEY header"}), 400
     if not user_email:
         return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
-    validate_api_key(api_key)
+    validate_api_key(api_key, user_email)
     tokens = database_pg.get_user_tokens(user_email)
     return jsonify({"response": {"tokens": tokens}}), 200
+
+
+# Define a route for the '/adduser' endpoint that accepts POST requests
+@app.route("/checkpandinouser", methods=["POST"])
+def addNewUser():
+    graphql_url = request.headers.get("X-GRAPHQL-URL")
+    auth_token = request.headers.get("X-AUTH-TOKEN")
+    user_email = request.headers.get("X-USER-EMAIL")
+    if not graphql_url:
+        return jsonify({"error": "Missing X-GRAPHQL-URL header"}), 400
+    if not auth_token:
+        return jsonify({"error": "Missing X-AUTH-TOKEN header"}), 400
+    if not user_email:
+        return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
+
+    try:
+        authenticate_dino(graphql_url, auth_token)
+    except Exception as e:
+        return str(e), 500, {"Content-Type": "text/plain"}
+
+    existingUser = database_pg.get_user_by_username(user_email)
+    if not existingUser:
+        generatedKey = secrets.token_urlsafe(8)
+        currentDate = datetime.now()
+        expirationDate = currentDate.replace(year=currentDate.year + 2)
+        addUserResult = database_pg.add_user(user_email, generatedKey, expirationDate)
+        if addUserResult is None:
+            return (
+                jsonify(
+                    {
+                        "response": {
+                            "user": {
+                                "user_email": user_email,
+                                "api_key": generatedKey,
+                                "expiration_date": expirationDate,
+                            }
+                        }
+                    }
+                ),
+                200,
+            )
+        else:
+            return (
+                jsonify({"error": addUserResult}),
+                500,
+            )
+    else:
+        print(existingUser)
+        return (
+            jsonify(
+                {
+                    "response": {
+                        "user": {
+                            "user_email": existingUser.get("user"),
+                            "api_key": existingUser.get("api_key"),
+                            "expiration_date": existingUser.get("date_valid_until"),
+                        }
+                    }
+                }
+            ),
+            200,
+        )
 
 
 # Define a route for the '/validateapikey' endpoint that accepts POST requests
 @app.route("/validateapikey", methods=["POST"])
 def validate():
     api_key = request.headers.get("X-API-KEY")
-
+    user_email = request.headers.get("X-USER-EMAIL")
     # Check if all required parameters are present
     if not api_key:
         return jsonify({"error": "Missing X-API-KEY header"}), 400
-
-    result, message = database_pg.validate_api_key(api_key)
+    if not user_email:
+        return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
+    result, message = database_pg.validate_api_key(api_key, user_email)
 
     if not result:
         if "expired" in message:
@@ -163,15 +237,18 @@ def validate():
 @app.route("/enddatachat", methods=["POST"])
 def endChat():
     api_key = request.headers.get("X-API-KEY")
+    user_email = request.headers.get("X-USER-EMAIL")
     user_name_header = request.headers.get("X-USER-NAME")
     user_name = (
         user_name_header.replace(" ", "_").strip() if user_name_header != None else None
     )
-    validate_api_key(api_key)
+    validate_api_key(api_key, user_email)
 
     # Check if all required parameters are present
     if not user_name:
         return jsonify({"error": "Missing X-USER-NAME header"}), 400
+    if not user_email:
+        return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
 
     deletedAgent = deleteAgent(api_key, user_name)
     if deletedAgent != None and deletedAgent.conversation_id:
@@ -187,7 +264,7 @@ def startChat():
     user_name_header = request.headers.get("X-USER-NAME")
     user_email = request.headers.get("X-USER-EMAIL")
     user_name = user_name_header.replace(" ", "_").strip()
-    validate_api_key(api_key)
+    validate_api_key(api_key, user_email)
 
     # Extract necessary parameters from the request FORMDATA
     request_model_name = request.form.get("model_name")
@@ -253,7 +330,7 @@ def startChat():
 def dataChat():
     api_key = request.headers.get("X-API-KEY")
     user_email = request.headers.get("X-USER-EMAIL")
-    validate_api_key(api_key)
+    validate_api_key(api_key, user_email)
     chat = request.json.get("chat")
     agent: Agent | None = getAgent(api_key)
 
@@ -336,7 +413,7 @@ def completion_handler():
             )
 
         api_key = request.headers.get("X-API-KEY")
-        validate_api_key(api_key)
+        validate_api_key(api_key, r["username"])
 
         # Checks if the User's tokens are enough for this operation
         user_tokens = database_pg.get_user_tokens(r["username"])
@@ -373,7 +450,8 @@ def completion_handler():
                 return jsonify({"error": f"Chat completion error: {resp.error}"}), 200
 
             # Spends User's tokens
-            edit_tokens(r["username"], -int(COMPLETION_TOKEN_COST))
+            if resp.paragraphs or resp.sources or resp.pages or resp.urls:
+                edit_tokens(r["username"], -int(COMPLETION_TOKEN_COST))
 
             return jsonify(
                 {
@@ -406,13 +484,14 @@ def prompt_handler():
     llm_type = PROMPT_PROVIDER
 
     api_key = request.headers.get("X-API-KEY")
-    validate_api_key(api_key)
 
     if not graphql_url or not auth_token:
         return "Auth parameters not provided", 400, {"Content-Type": "text/plain"}
 
     if not username:
         return "Username not provided", 400, {"Content-Type": "text/plain"}
+
+    validate_api_key(api_key, username)
 
     # Checks if the User's tokens are enough for this operation
     user_tokens = database_pg.get_user_tokens(username)

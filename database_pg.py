@@ -68,12 +68,28 @@ def add_user(username, api_key, date_valid_until="2024-12-31"):
             (username, encrypted_api_key.decode(), date_valid_until),
         )
         conn.commit()
-    except psycopg.IntegrityError:
-        pass
-    except Exception:
-        pass
+    except psycopg.IntegrityError as e:
+        return f"Error adding new user: {e}"
+    except Exception as e:
+        return f"Error adding new user: {e}"
     finally:
         conn.close()
+        return None
+    
+def remove_user(username):
+    conn = connect()
+    cursor = conn.cursor()
+    try:
+        query = f"DELETE FROM users WHERE username = '{username}'"
+        cursor.execute(query)
+        conn.commit()
+    except psycopg.IntegrityError as e:
+        return f"Error deleting user: {e}"
+    except Exception as e:
+        return f"Error deleting user: {e}"
+    finally:
+        conn.close()
+        return None
 
 def edit_tokens(username, tokens_quantity):
     conn = connect()
@@ -125,7 +141,7 @@ def get_user_by_username(user_name: str) -> dict | None:
         userFound = {
             "id": user[0],
             "user": user[1],
-            "api_key": cipher_suite.decrypt(user[2]),
+            "api_key": cipher_suite.decrypt(user[2]).decode("utf-8"),
             "date_valid_until": user[3],
             "tokens": user[4],
         }
@@ -142,13 +158,16 @@ def get_user_tokens(user_name:str) -> int | None:
         return None
     return user.get('tokens')
 
-def validate_api_key(api_key):
+def validate_api_key(api_key, user_email):
     conn = connect()
     cursor = conn.cursor()
-    cursor.execute("SELECT api_key, date_valid_until FROM users")
+    cursor.execute(f"SELECT api_key, date_valid_until FROM users WHERE username='{user_email}'")
     encrypted_keys = cursor.fetchall()
     conn.close()
 
+    matchesLength = len(encrypted_keys)
+    if not matchesLength:
+        return False, "No matching API key found"
     from datetime import datetime
 
     current_date = datetime.now().strftime("%Y-%m-%d")
@@ -221,6 +240,7 @@ def print_help():
     print("Commands:")
     print("  init_db                     Initialize the database")
     print("  add_user <username> <api_key> <date_valid_until>  Add a new user")
+    print("  remove_user <username> Removes an existing user")
     print("  get_user_by_username <user_name> Retrieve a user by its username/mail")
     print("  edit_tokens <user_name> <quantity> Adds or removes a user's tokens by the user's username/mail")
     print("  list_users                  List all users")
@@ -234,6 +254,9 @@ if __name__ == "__main__":
         elif sys.argv[1] == "add_user" and len(sys.argv) == 5:
             username, api_key, date_valid_until = sys.argv[2], sys.argv[3], sys.argv[4]
             add_user(username, api_key, date_valid_until)
+        elif sys.argv[1] == "remove_user" and len(sys.argv) == 3:
+            username = sys.argv[2]
+            remove_user(username)
         elif sys.argv[1] == "get_user_by_username" and len(sys.argv) == 3:
             user_name = sys.argv[2]
             get_user_by_username(user_name)
