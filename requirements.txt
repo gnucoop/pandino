@@ -18,3 +18,5 @@ scikit-learn
 seaborn
 pinecone
 psycopg
+psycopg_binary
+gunicorn
