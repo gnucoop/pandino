@@ -120,7 +120,7 @@ def editTokens():
             return (
                 jsonify(
                     {
-                        "response": f"{message}: {r["quantity"]} for user: {r["useremail"]}"
+                        "response": f"{message}: {r['quantity']} for user: {r['useremail']}"
                     }
                 ),
                 200,
