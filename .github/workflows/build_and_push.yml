@@ -50,5 +50,5 @@ jobs:
         with:
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}, devgnucoop/dinopay:latest
+          tags: ${{ steps.meta.outputs.tags }}, devgnucoop/pandino:latest
           labels: ${{ steps.meta.outputs.labels }}
