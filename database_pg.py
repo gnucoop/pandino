@@ -37,12 +37,10 @@ cipher_suite = Fernet(KEY)
 def connect():
     return psycopg.connect(host=PGHOST, dbname=PGDB, user=PGUSER, password=PGPWD)
 
-
 def init_db():
     conn = connect()
     cursor = conn.cursor()
-    cursor.execute(
-        """
+    sql_init =  """
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
@@ -50,13 +48,41 @@ def init_db():
             date_valid_until TEXT NOT NULL DEFAULT '2024-12-31',
             tokens INT NOT NULL DEFAULT 0
             CONSTRAINT tokens_nonnegative check (tokens >= 0)
-        )
+        );
+        CREATE TABLE IF NOT EXISTS logs (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            token_input INTEGER NOT NULL,
+            token_output INTEGER NOT NULL,
+            cost REAL NOT NULL,
+            model TEXT NOT NULL,
+            provider TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS costs (
+            id SERIAL PRIMARY KEY,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            start_date_valid TEXT NOT NULL,
+            end_date_valid TEXT NOT NULL,
+            token_input_cost REAL NOT NULL,
+            token_output_cost REAL NOT NULL
+        );
     """
-    )
-    conn.commit()
-    conn.close()
-    print("Database initialized successfully.")
-
+    # Execute the SQL script
+    try:
+        # Split the script into individual statements
+        statements = sql_init.split(';')
+        for statement in statements:
+            if statement.strip():  # Skip empty statements
+                cursor.execute(statement)
+        conn.commit()
+        print("Database initialized successfully.")
+    except Exception as e:
+        conn.rollback()
+        print(f"An error occurred: {e}")
+    finally:
+        cursor.close()
 
 def add_user(username, api_key, date_valid_until="2024-12-31"):
     conn = connect()

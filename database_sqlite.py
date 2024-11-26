@@ -32,8 +32,7 @@ cipher_suite = Fernet(KEY)
 def init_db():
     conn = sqlite3.connect("users.db")
     cursor = conn.cursor()
-    cursor.execute(
-        """
+    sql_init = """
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT NOT NULL UNIQUE,
@@ -41,9 +40,30 @@ def init_db():
             date_valid_until TEXT NOT NULL DEFAULT '2024-12-31',
             tokens INT NOT NULL DEFAULT 0,
             CONSTRAINT tokens_nonnegative check (tokens >= 0)
-        )
+        );
+        -- Create the logs table
+        CREATE TABLE IF NOT EXISTS logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            token_input INTEGER NOT NULL,
+            token_output INTEGER NOT NULL,
+            cost REAL NOT NULL,
+            model TEXT NOT NULL,
+            provider TEXT NOT NULL
+        );
+        -- Create the costs table
+        CREATE TABLE IF NOT EXISTS costs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            start_date_valid TEXT NOT NULL,
+            end_date_valid TEXT NOT NULL,
+            token_input_cost REAL NOT NULL,
+            token_output_cost REAL NOT NULL
+        );
     """
-    )
+    cursor.executescript(sql_init)
     conn.commit()
     conn.close()
     print("Database initialized successfully.")
@@ -233,7 +253,7 @@ def log_token_usage(user_id, token_input, token_output, model, provider):
 
 
 def print_help():
-    print("Usage: python database.py <command>")
+    print("Usage: python database_sqlite.py <command>")
     print("Commands:")
     print("  init_db                     Initialize the database")
     print("  add_user <username> <api_key> <date_valid_until>  Add a new user")

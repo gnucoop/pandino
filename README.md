@@ -29,6 +29,7 @@ To install Pandino, follow these steps:
    ```
    GROQ_API_KEY=your_groq_api_key
    DEEPSEEK_API_KEY=your_deepseek_api_key
+   DEEPINFRA_API_KEY=your_deepinfra_api_key
    MISTRAL_API_KEY=your_mistral_api_key
    OPENAI_API_KEY=your_openai_api_key
    ENCRYPTION_KEY=your_encryption_key_for_database
@@ -43,31 +44,31 @@ If you encounter any issues during installation or usage, please check the follo
 
 ## Usage
 
-### User Management with SQLite
-Pandino includes a secure user management system using SQLite. The system allows you to add users and their API keys to the database.
+### User Management with SQLite or Postgres (Use database\_sqlite.py or database\_pg.py accordingly with your choice)
+Pandino includes a secure user management system using SQLite and Postgres. The system allows you to add users and their API keys to the database.
 
 #### Initializing the Database
 To initialize the SQLite database, use the following command:
 ```bash
-python database.py init_db
+python database_sqlite.py init_db
 ```
 
 #### Adding Users
 To add a new user to the database:
 ```bash
-python database.py add_user <username> <api_key>
+python database_sqlite.py add_user <username> <api_key>
 ```
 
 #### Listing Users
 To list all users in the database:
 ```bash
-python database.py list_users
+python database_sqlite.py list_users
 ```
 
 #### Viewing Stored API Keys
 To view all stored (encrypted) API keys:
 ```bash
-python database.py print_keys
+python database_sqlite.py print_keys
 ```
 
 ### Running the Pandino API Service
