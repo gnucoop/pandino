@@ -121,10 +121,8 @@ def edit_tokens(username, tokens_quantity):
     conn = connect()
     cursor = conn.cursor()
     try:
-        cursor.execute(
-            "UPDATE users SET tokens = tokens + ? WHERE username = ?",
-            (tokens_quantity, username),
-        )
+        query = f"UPDATE users SET tokens = tokens + {tokens_quantity} WHERE username = '{username}'"
+        cursor.execute(query)
         conn.commit()
     except psycopg.IntegrityError:
         return False, "Error while editing Tokens"
