@@ -85,6 +85,8 @@ def choose_llm(llm_type, model, temperature=0, seed=26, base_url=None, api_key=N
         return ChatOpenAI(model_name=model, temperature=temperature, seed=seed, api_key=os.environ['OPENAI_API_KEY'])
     elif llm_type == 'Ollama':
         return ChatOpenAI(model_name=model, temperature=temperature, base_url='http://192.168.1.8:11434/v1', api_key='ollama')
+    elif llm_type == 'glhf':
+        return ChatOpenAI(model_name=model, temperature=temperature, base_url='https://glhf.chat/api/openai/v1', api_key=os.environ['GLHF_API_KEY'])
     elif llm_type == 'Llama.cpp':
         return ChatOpenAI(model_name=model, temperature=temperature, base_url='http://192.168.1.8:8080/v1', api_key='ollama')
     else:
