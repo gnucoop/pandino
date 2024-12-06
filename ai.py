@@ -24,8 +24,8 @@ from langchain_pinecone import PineconeVectorStore
 from langchain_postgres import PGVector
 from langchain_postgres.vectorstores import PGVector
 
-import database_pg
 from database_pg import get_user_by_username, log_token_usage
+# from database_sqlite import get_user_by_username, log_token_usage
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -41,15 +41,10 @@ class CompletionRequest:
         self.chat = chat
 
 class CompletionResponse:
-    def __init__(self, error: str = None, paragraphs: List[str] = None, similarities: List[float] = None, pages: List[str] = None, sources: List[str] = None, urls: List[str] = None, mimetypes: List[str] = None,  answer: str = None):
+    def __init__(self, error: str = None, answer: str = None, vectors: List[dict] = None):
         self.error = error
-        self.paragraphs = paragraphs
-        self.similarities = similarities
-        self.pages = pages
-        self.sources = sources
-        self.urls = urls
-        self.mimetypes = mimetypes
         self.answer = answer
+        self.vectors = vectors
 
 def choose_llm(llm_type, model, temperature=0, seed=26, base_url=None, api_key=None):
     """
@@ -90,38 +85,37 @@ def choose_llm(llm_type, model, temperature=0, seed=26, base_url=None, api_key=N
     else:
         raise ValueError(f"Unsupported llm_type: {llm_type}")
 
-def complete_chat(req: CompletionRequest, llm_type:str, model:str, emb_llm_type:str, emb_model:str):                                                                                                                                        
-     #emb_llm_type = "OpenAI"
-     #emb_llm_type = "Ollama"
-     #llm_type = "Groq" 
-     #model = "llama-3.1-8b-instant"
-     #emb_model ="mistral-embed"
-     #emb_model ="text-embedding-ada-002"
-     #emb_model = "jeffh/intfloat-multilingual-e5-large:f16"
-     #emb_model = "bge-m3:latest"
+def complete_chat(req: CompletionRequest, llm_type:str, model:str, emb_llm_type:str, emb_model:str):
+    #emb_llm_type = "OpenAI"
+    #emb_llm_type = "Ollama"
+    #llm_type = "Groq" 
+    #model = "llama-3.1-8b-instant"
+    #emb_model ="mistral-embed"
+    #emb_model ="text-embedding-ada-002"
+    #emb_model = "jeffh/intfloat-multilingual-e5-large:f16"
+    #emb_model = "bge-m3:latest"
 
-     logging.info(f"Starting chat completion with llm_type: {llm_type}, model: {model}") 
-    #  if len(req.chat) % 2 == 0:                                                                                                                                                                               
-    #      logging.error("Chat completion error: chat must be a list of user,assistant messages ending with a user message")                                                                                    
-    #      return CompletionResponse(error="Chat completion error: chat must be a list of user,assistant messages ending with a user message")                                                                  
-     question = req.chat[-1]                                                                                                                                                                                  
-     logging.info(f"Processing question: {question}")                                                                                                                                                         
-     logging.info(f"Namespace: {req.namespace}")                                                                                                                                                              
-     paragraphs, similarities, sources, pages, urls, mimetypes, err = find_similar_paragraphs(question, 3, 0.5, req.namespace, emb_llm_type=emb_llm_type, model=emb_model) 
-     if err: 
-         logging.error(f"Error finding similar paragraphs: {err}")                                                                                                                                            
-         return CompletionResponse(error=f"Error finding similar paragraphs: {err}")                                                                                                                          
-     if not req.info and not paragraphs: 
-         logging.info("No information available for the question") 
-         return CompletionResponse(answer="Non ho informazioni al riguardo") 
-     logging.info(f"Found {len(paragraphs)} relevant paragraphs")
-     # Start with a very explicit system message about using context
-     # Start with a greeting for the first message
-     if len(req.chat) == 1:
-         return CompletionResponse(answer="Hello! How can I help you?")
+    logging.info(f"Starting chat completion with llm_type: {llm_type}, model: {model}")
+    #if len(req.chat) % 2 == 0:
+    #    logging.error("Chat completion error: chat must be a list of user,assistant messages ending with a user message")
+    #    return CompletionResponse(error="Chat completion error: chat must be a list of user,assistant messages ending with a user message")
+    question = req.chat[-1]
+    logging.info(f"Processing question: {question}")
+    logging.info(f"Namespace: {req.namespace}")
+    vectors, err = find_similar_vectors(question, 3, 0.5, req.namespace, emb_llm_type=emb_llm_type, model=emb_model)
+    if err:
+        logging.error(f"Error finding similar paragraphs: {err}")
+        return CompletionResponse(error=f"Error finding similar paragraphs: {err}")
+    if not req.info and not vectors:
+        logging.info("No information available for the question")
+        return CompletionResponse(answer="Non ho informazioni al riguardo")
+    logging.info(f"Found {len(vectors)} relevant paragraphs")
+    # Start with a very explicit system message about using context
+    # Start with a greeting for the first message
+    if len(req.chat) == 1:
+        return CompletionResponse(answer="Hello! How can I help you?")
 
-     messages = [
-         {"role": "system", "content": """You are Dino, an assistant who helps users by answering questions concisely.
+    messages = [{"role": "system", "content": """You are Dino, an assistant who helps users by answering questions concisely.
 You will receive information divided by
 BACKGROUND INFORMATION:
 Here you will find the context of previous reply
@@ -138,30 +132,30 @@ IMPORTANT INSTRUCTIONS:
 3. You MUST NOT make up or infer information not present in the context
 4. You MUST NEVER say 'I have no information about this' if there is ANY relevant information in the context
 5. If you find ANY relevant information in the context, use it to provide a partial answer
-6. Only say 'I have no information about this' if the context contains ABSOLUTELY NOTHING relevant to the question"""}
-     ]
+6. Only say 'I have no information about this' if the context contains ABSOLUTELY NOTHING relevant to the question"""}]
 
-     # Format context with clear sections and metadata
-     context_parts = []
-     #if req.info:
-     #    context_parts.append("BACKGROUND INFORMATION:\n-------------------\n" + "\n".join(req.info))
-     if paragraphs:
-         context_parts.append("RELEVANT CONTEXT:\n----------------\n" + "\n".join(f"[Similarity: {similarities[i]:.2f}] {p}" for i, p in enumerate(paragraphs)))
-     
-     if context_parts:
-         context_message = "\n\n".join(context_parts)
-         messages.append({"role": "user", "content": "Here is the context you MUST use to answer questions:\n\n" + context_message})
-         messages.append({"role": "assistant", "content": "I have received the context and will ONLY use this information to answer questions. I will not make up or infer information not present in this context."})
+    # Format context with clear sections and metadata
+    context = ""
+    #if req.info:
+    #    context_parts.append("BACKGROUND INFORMATION:\n-------------------\n" + "\n".join(req.info))
+    if vectors:
+        context += "RELEVANT CONTEXT:\n----------------"
+    for vec in vectors:
+        context += "\n" + vec['metadata']['text']
+    
+    if context:
+        messages.append({"role": "user", "content": "Here is the context you MUST use to answer questions:\n\n" + context})
+        messages.append({"role": "assistant", "content": "I have received the context and will ONLY use this information to answer questions. I will not make up or infer information not present in this context."})
 
-     # Add the chat history if it exists
-     if len(req.chat) > 1:
-         messages.append({"role": "user", "content": "PREVIUOS CONVERSATION CONTEXT:\n-------------------------"})
-         for i in range(0, len(req.chat)-1, 2):
-             messages.append({"role": "assistant", "content": f"ASSISTANT: {req.chat[i]}"})
-             messages.append({"role": "user", "content": f"USER: {req.chat[i+1]}"})
+    # Add the chat history if it exists
+    if len(req.chat) > 1:
+        messages.append({"role": "user", "content": "PREVIUOS CONVERSATION CONTEXT:\n-------------------------"})
+        for i in range(0, len(req.chat)-1, 2):
+            messages.append({"role": "assistant", "content": f"ASSISTANT: {req.chat[i]}"})
+            messages.append({"role": "user", "content": f"USER: {req.chat[i+1]}"})
 
-     # Add the final user question with very explicit instructions
-     messages.append({"role": "user", "content": f"""CURRENT QUESTION:
+    # Add the final user question with very explicit instructions
+    messages.append({"role": "user", "content": f"""CURRENT QUESTION:
 ----------------
 {req.chat[-1]}
 
@@ -171,43 +165,37 @@ IMPORTANT INSTRUCTIONS:
 3. If you find ANY relevant information, use it to answer
 4. Only say 'I have no information about this' if you find ABSOLUTELY NOTHING relevant
 5. Your answer must ONLY use information from the provided context"""})
-     llm = choose_llm(llm_type, model)
+    llm = choose_llm(llm_type, model)
 
-     try: 
-         resp = llm.invoke(messages) 
-         token_usage = resp.response_metadata.get('token_usage',{})
-         token_in = token_usage.get('prompt_tokens',0)
-         token_out = token_usage.get('completion_tokens',0)
-         user = get_user_by_username(req.username)
-         if user is None: 
-            logging.error(f"Chat completion error: could not find any user with this username: {req.username}") 
-            return CompletionResponse(error=f"Chat completion error: could not find any user with this username: {req.username}")    
-         log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
-         
-         # Check if response indicates no information before returning
-         answer = resp.content
-         no_info_phrases = [
-             "Non ho informazioni",
-             "I have no information",
-             "I don't have any information",
-             "No information available"
-         ]
-         is_no_info = any(phrase.lower() in answer.lower() for phrase in no_info_phrases)
-         
-         # Only include paragraphs and metadata if it's not a "no information" response
-         if is_no_info:
-             return CompletionResponse(answer=answer)
-         else:
-             return CompletionResponse(answer=answer,
-                                     paragraphs=paragraphs,
-                                     similarities=similarities,
-                                     pages=pages,
-                                     sources=sources,
-                                     urls=urls,
-                                     mimetypes=mimetypes)
-     except Exception as e:                                                                                                                                                                                   
-         logging.error(f"Error in chat completion: {str(e)}")                                                                                                                                                 
-         return CompletionResponse(error=f"Error in chat completion: {str(e)}")
+    try: 
+        resp = llm.invoke(messages)
+        token_usage = resp.response_metadata.get('token_usage',{})
+        token_in = token_usage.get('prompt_tokens',0)
+        token_out = token_usage.get('completion_tokens',0)
+        user = get_user_by_username(req.username)
+        if user is None:
+            logging.error(f"Chat completion error: could not find any user with this username: {req.username}")
+            return CompletionResponse(error=f"Chat completion error: could not find any user with this username: {req.username}")
+        log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
+        
+        # Check if response indicates no information before returning
+        answer = resp.content
+        no_info_phrases = [
+            "Non ho informazioni",
+            "I have no information",
+            "I don't have any information",
+            "No information available"
+        ]
+        is_no_info = any(phrase.lower() in answer.lower() for phrase in no_info_phrases)
+        
+        # Only include paragraphs and metadata if it's not a "no information" response
+        if is_no_info:
+            return CompletionResponse(answer=answer)
+        else:
+            return CompletionResponse(answer=answer, vectors=vectors)
+    except Exception as e:   
+        logging.error(f"Error in chat completion: {str(e)}")
+        return CompletionResponse(error=f"Error in chat completion: {str(e)}")
 
 def embed(emb_llm_type, model, text):
     logging.info(f"Attempting to embed text with {emb_llm_type} model: {model}")
@@ -251,7 +239,7 @@ def connect_to_vector_db (db_name: str, index_name: str, emb_llm_type: str, emb_
         vector_store = PGVector(embeddings=embeddings,collection_name=index_name,connection=connection,use_jsonb=True)
         return vector_store
 
-def find_similar_paragraphs(text: str, top_k: int, min_similarity: float, namespace: str, emb_llm_type: str, model: str) -> tuple:
+def find_similar_vectors(text: str, top_k: int, min_similarity: float, namespace: str, emb_llm_type: str, model: str) -> tuple:
     logging.info(f"Finding similar paragraphs for text: {text[:50]}...")
     
     try:
@@ -287,32 +275,22 @@ def find_similar_paragraphs(text: str, top_k: int, min_similarity: float, namesp
             namespace=namespace,
             min_similarity=min_similarity
         )
+        if not hasattr(resp, 'matches'):
+            logging.warning("The response from the vector database does not contain 'matches' attribute.")
+            return [], None
         
         logging.info(f"Vector Database query completed, found {len(resp.matches)} matches")
         
-        paragraphs = []
-        similarities = []
-        pages = []
-        sources = []
-        urls = []
-        mimetypes = []
-        if hasattr(resp, 'matches'):
-                for vec in resp.matches:
-                    if vec.score >= min_similarity:
-                        paragraphs.append(vec.metadata["text"])
-                        similarities.append(vec.score)
-                        pages.append(vec.metadata["page"])
-                        sources.append(vec.metadata["source"])
-                        urls.append(vec.metadata["url"])
-                        mimetypes.append(vec.metadata["mimetype"])
-        else:
-            logging.warning("The response from the vector database does not contain 'matches' attribute.")
-        
-        logging.info(f"Filtered to {len(paragraphs)} paragraphs above minimum similarity")
-        return paragraphs, similarities, sources, pages, urls, mimetypes, None
+        vectors = []
+        for vec in resp.matches:
+            vectors.append({
+                "similarity": vec.score,
+                "metadata": vec.metadata,
+            })
+        return vectors, None
     except Exception as e:
-        logging.error(f"Error in find_similar_paragraphs: {str(e)}")
-        return [], [], str(e)
+        logging.error(f"Error in find_similar_vectors: {str(e)}")
+        return [], str(e)
 
 def reply_to_prompt(prompt, username:str, llm_type: str, model:str):
     messages = [

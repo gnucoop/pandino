@@ -23,6 +23,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 # Import function from ai and database
 import database_pg
 from database_pg import edit_tokens, validate_api_key
+# import database_sqlite as database_pg
+# from database_sqlite import edit_tokens, validate_api_key
 from dino import dino_authenticate
 import ai
 from ai import complete_chat, CompletionResponse
@@ -443,27 +445,20 @@ def completion_handler():
         emb_model = COMPLETION_EMBEDDING_MODEL
 
         resp = complete_chat(chat_request, llm_type, model, emb_llm_type, emb_model)
-        if resp.similarities:
-            resp.similarities = [sim + 0.3 for sim in resp.similarities]
+        for vec in resp.vectors:
+            vec['similarity'] += 0.3
         if isinstance(resp, CompletionResponse):
             if resp.error:
                 return jsonify({"error": f"Chat completion error: {resp.error}"}), 200
 
             # Spends User's tokens
-            if resp.paragraphs or resp.sources or resp.pages or resp.urls:
+            if resp.answer or resp.vectors:
                 edit_tokens(r["username"], -int(COMPLETION_TOKEN_COST))
 
-            return jsonify(
-                {
-                    "answer": resp.answer,
-                    "paragraphs": resp.paragraphs,
-                    "similarities": resp.similarities,
-                    "sources": resp.sources,
-                    "pages": resp.pages,
-                    "urls": resp.urls,
-                    "mimetypes": resp.mimetypes,
-                }
-            )
+            return jsonify({
+                "answer": resp.answer,
+                "vectors": resp.vectors,
+            })
         elif resp is None:
             return jsonify({"error": "No response from chat completion"}), 500
         else:
