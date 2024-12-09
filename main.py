@@ -1,4 +1,5 @@
 # Import necessary libraries for the Flask application
+import math
 import os
 import warnings
 from flask import Flask, request, jsonify, abort
@@ -87,6 +88,16 @@ def authenticate_dino(graphql_url, auth_token):
     if result:
         abort(403, description=result)
 
+# Recursively replace NaN with None in dictionaries or lists.
+def replace_nan(data):
+    if isinstance(data, dict):
+        return {k: replace_nan(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [replace_nan(item) for item in data]
+    elif isinstance(data, float) and math.isnan(data):
+        return None
+    else:
+        return data
 
 # Define a route for the '/edittokens' endpoint that accepts POST requests
 @app.route("/edittokens", methods=["POST"])
@@ -369,10 +380,10 @@ def dataChat():
     if isinstance(response, pd.DataFrame):
         response_dict = {
             "type": "dataframe",
-            "value": response.to_dict(orient="records"),
+            "value": replace_nan(response.to_dict(orient="records")),
         }
     elif isinstance(response, dict):
-        response_dict = response
+        response_dict = replace_nan(response)
         response_dict.update({"type": "dict"})
     else:
         response_dict = {"type": type(response).__name__, "value": str(response)}
