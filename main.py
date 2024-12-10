@@ -184,7 +184,9 @@ def addNewUser():
         generatedKey = secrets.token_urlsafe(8)
         currentDate = datetime.now()
         expirationDate = currentDate.replace(year=currentDate.year + 2)
-        addUserResult = database_pg.add_user(user_email, generatedKey, expirationDate)
+        addUserResult = database_pg.add_user(
+            user_email, generatedKey, expirationDate
+        )
         if addUserResult is None:
             return (
                 jsonify(
@@ -407,6 +409,33 @@ def dataChat():
     return jsonify({"response": response_dict, "explanation": None})
 
 
+# Define a route for the /datachat endpoint
+@app.route("/buyreport", methods=["POST"])
+def buyReport():
+    api_key = request.headers.get("X-API-KEY")
+    user_email = request.headers.get("X-USER-EMAIL")
+    validate_api_key(api_key, user_email)
+    prompts = request.json.get("prompts")
+
+    # Check if the Chat parameter is present
+    if not prompts or not isinstance(prompts, int):
+        return jsonify({"error": "Missing Prompts numeric parameter"}), 400
+
+    # Check if user email is present
+    if not user_email:
+        return jsonify({"error": "Missing User email"}), 400
+
+    # Checks if the User's tokens are enough for this operation
+    user_tokens = database_pg.get_user_tokens(user_email)
+    if int(prompts) > user_tokens:
+        return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
+
+    # Spends User's tokens
+    result, message = edit_tokens(user_email, -int(prompts))
+
+    return jsonify({"response": result, "message": f"{message}"}), 200
+
+
 @app.route("/completion.json", methods=["POST"])
 def completion_handler():
     try:
@@ -521,9 +550,6 @@ def prompt_handler():
     try:
         resp = reply_to_prompt(prompt, username, llm_type, model_name)
         if isinstance(resp, CompletionResponse):
-            # Spends User's tokens
-            edit_tokens(username, -int(PROMPT_TOKEN_COST))
-
             return resp.answer, 200, {"Content-Type": "text/plain"}
         else:
             return "Unexpected response format", 500, {"Content-Type": "text/plain"}
