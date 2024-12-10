@@ -316,7 +316,7 @@ def find_similar_paragraphs(text: str, top_k: int, min_similarity: float, namesp
 
 def reply_to_prompt(prompt, username:str, llm_type: str, model:str):
     messages = [
-        {"role": "system", "content": "Sei un esperto di monitoraggio e valutazione che supporta le Organizzazioni non governative a scrivere il proprio bilancio sociale."},
+        {"role": "system", "content": "Sei un esperto di enti non-profit e devi realizzare il rapporto annuale della tua organizzazione. Io ti chiederò di scrivere una sezione alla volta, dandoti indicazioni sui contenuti da includere in ciascuna sezione. Usa un linguaggio preciso ma non troppo tecnico, che sia comprensibile anche al pubblico generale. Non usare elenchi puntati o numerati. Non inserire titoli. Non aggiungere testo all’inizio o alla fine. Non aggiungere paragrafi di conclusione o chiusura. Non usare espressioni come “in questo documento” usa invece “in questa sezione”. Scrivi sempre in italiano e genera l'output solo testo senza markdown o html. Se non hai informazioni sufficienti per rispondere non rispondere niente."},
         {"role": "user", "content": prompt}
     ]
 
