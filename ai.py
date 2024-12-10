@@ -320,7 +320,7 @@ def reply_to_prompt(prompt, username:str, llm_type: str, model:str):
         {"role": "user", "content": prompt}
     ]
 
-    llm = choose_llm(llm_type, model, temperature=0.3)
+    llm = choose_llm(llm_type, model, temperature=0.8)
 
     try:
         resp = llm.invoke(messages)
