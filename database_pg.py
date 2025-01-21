@@ -3,7 +3,8 @@ import sys
 from cryptography.fernet import Fernet, InvalidToken
 import os
 import base64
-import datetime
+from datetime import datetime
+import pandas as pd 
 
 # Generate a key for encryption and decryption
 # Store the key in an environment variable or a secure file
@@ -84,7 +85,13 @@ def init_db():
     finally:
         cursor.close()
 
-def add_user(username, api_key, date_valid_until="2024-12-31"):
+def extend_expiration_date():
+    current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S'")
+    new_date = pd.to_datetime(current_date)+pd.DateOffset(years= 1) 
+    string_date = str(new_date)
+    return string_date
+
+def add_user(username, api_key, date_valid_until=extend_expiration_date()):
     conn = connect()
     cursor = conn.cursor()
     encrypted_api_key = cipher_suite.encrypt(api_key.encode())
@@ -118,10 +125,11 @@ def remove_user(username):
         return None
 
 def edit_tokens(username, tokens_quantity):
+    date_valid_until=extend_expiration_date()
     conn = connect()
     cursor = conn.cursor()
     try:
-        query = f"UPDATE users SET tokens = tokens + {tokens_quantity} WHERE username = '{username}'"
+        query = f"UPDATE users SET tokens = tokens + {tokens_quantity}, date_valid_until = '{date_valid_until}' WHERE username = '{username}'"
         cursor.execute(query)
         conn.commit()
     except psycopg.IntegrityError:
@@ -192,7 +200,6 @@ def validate_api_key(api_key, user_email):
     matchesLength = len(encrypted_keys)
     if not matchesLength:
         return False, "No matching API key found"
-    from datetime import datetime
 
     current_date = datetime.now().strftime("%Y-%m-%d")
     for encrypted_key, date_valid_until in encrypted_keys:
@@ -230,9 +237,9 @@ def print_stored_keys():
 def log_token_usage(user_id, token_input, token_output, model, provider):
     conn = connect()
     cursor = conn.cursor()
-    date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     # Fetch the cost from the costs table
-    current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+    current_date = datetime.now().strftime("%Y-%m-%d")
     cursor.execute(
         """
             SELECT token_input_cost, token_output_cost 
@@ -275,9 +282,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         if sys.argv[1] == "init_db":
             init_db()
-        elif sys.argv[1] == "add_user" and len(sys.argv) == 5:
-            username, api_key, date_valid_until = sys.argv[2], sys.argv[3], sys.argv[4]
-            add_user(username, api_key, date_valid_until)
+        elif sys.argv[1] == "add_user" and len(sys.argv) == 4:
+            username, api_key = sys.argv[2], sys.argv[3]
+            add_user(username, api_key)
         elif sys.argv[1] == "remove_user" and len(sys.argv) == 3:
             username = sys.argv[2]
             remove_user(username)
