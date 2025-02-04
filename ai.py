@@ -25,7 +25,7 @@ from langchain_postgres import PGVector
 from langchain_postgres.vectorstores import PGVector
 
 from database_pg import get_user_by_username, log_token_usage
-# from database_sqlite import get_user_by_username, log_token_usage
+# from database_pg import get_user_by_username, log_token_usage
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -292,6 +292,55 @@ def find_similar_vectors(text: str, top_k: int, min_similarity: float, namespace
         logging.error(f"Error in find_similar_vectors: {str(e)}")
         return [], str(e)
 
+def audioFormPromptBuild(formSchema, formSchemaExampleData, formSchemaName:str, formSchemaChoices, transcribedAudio:str):
+    if not formSchema or not formSchemaExampleData or not formSchemaName or not transcribedAudio:
+        return
+    system = f"""
+    Rispondi solo in formato JSON.
+    Quando ti verrà chiesto di fare riferimento al formSchema farai riferimento a questo: {formSchema}.
+    Quando ti verrà chiesto di fare riferimento al formSchemaExampleData farai riferimento a questo: {formSchemaExampleData}.
+    Quando ti verrà chiesto di fare riferimento al formSchemaName farai riferimento a questo: {formSchemaName}.
+    Quando ti verrà chiesto di fare riferimento alle formSchemaChoices farai riferimento a queste: {formSchemaChoices}.
+    Quando ti verrà chiesto di fare riferimento al transcribedAudio farai riferimento a questo: {transcribedAudio}.
+    """
+
+    user = f"""
+    Questa è la struttura di un form JSON: {formSchemaName} Il nome del form è {formSchema}.
+    Questo è un esempio di form compilato, coi nomi dei campi come chiavi e le loro label come valori: {formSchemaExampleData}
+    Dentro il formSchema troverai degli array di "nodes".
+    Ogni node è un oggetto contraddistinto da name, label, fieldType, nodeType, hint e choicesOriginRef.
+    Per ogni node con nodeType = 0:
+        ( 
+        se il suo fieldType è diverso da 4 o 5 controllerai il suo "name" e se corrisponde ad una chiave nel formSchemaExampleData sovrascriverai il valore di quella chiave nel formSchemaExampleData ricavando il suo valore dal testo transcribedAudio,
+        se il suo fieldType è 4 o 5 controllerai il suo "name" e se corrisponde ad una chiave nel formSchemaExampleData sovrascriverai il valore di quella chiave nel formSchemaExampleData ricavando il suo valore dalle formSchemaChoices con "name" uguale al "choicesOriginRef" del node, scegliendo il "value" di una delle "choices" in base al testo transcribedAudio.
+        )
+    Poi ritornerai il nuovo formSchemaExampleData come risposta.
+    """
+
+    return {'systemprompt': system, 'userprompt': user}
+
+def audioFormCompilation(userprompt: str, systemprompt: str, username:str, llm_type: str, model:str):
+    if not userprompt or not systemprompt or not llm_type or not model or not username:
+        return
+    messages = [
+        {"role": "system", "content": systemprompt},
+        {"role": "user", "content": userprompt}
+    ]
+
+    llm = choose_llm(llm_type, model, temperature=0.8)
+
+    try:
+        resp = llm.invoke(messages)
+        token_usage = resp.response_metadata.get('token_usage',{})
+        token_in = token_usage.get('prompt_tokens',0)
+        token_out = token_usage.get('completion_tokens',0)
+        user = get_user_by_username(username)
+        # log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
+        return resp.content
+    except Exception as e:
+        logging.error(f"Error in audio form compilation: {str(e)}")
+        return CompletionResponse(error=f"Error in Audio Form Compilation: {str(e)}")
+
 def reply_to_prompt(prompt, username:str, llm_type: str, model:str):
     messages = [
         {"role": "system", "content": "Sei un esperto di enti non-profit e devi realizzare il rapporto annuale della tua organizzazione. Io ti chiederò di scrivere una sezione alla volta, dandoti indicazioni sui contenuti da includere in ciascuna sezione. Usa un linguaggio preciso ma non troppo tecnico, che sia comprensibile anche al pubblico generale. Non usare elenchi puntati o numerati. Non inserire titoli. Non aggiungere testo all’inizio o alla fine. Non aggiungere paragrafi di conclusione o chiusura. Non usare espressioni come “in questo documento” usa invece “in questa sezione”. Scrivi sempre in italiano e genera l'output solo testo senza markdown o html. Se non hai informazioni sufficienti per rispondere non rispondere niente."},
@@ -306,7 +355,7 @@ def reply_to_prompt(prompt, username:str, llm_type: str, model:str):
         token_in = token_usage.get('prompt_tokens',0)
         token_out = token_usage.get('completion_tokens',0)
         user = get_user_by_username(username)
-        log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
+        # log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
         return CompletionResponse(answer=resp.content)
     except Exception as e:
         logging.error(f"Error in chat completion: {str(e)}")

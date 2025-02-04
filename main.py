@@ -6,6 +6,7 @@ from flask import Flask, request, jsonify, abort
 from flask_cors import CORS
 import pandas as pd
 from pandasai import Agent
+import requests
 from agent_manager import getAgent, createAgent, deleteAgent
 from file_manager import isImageFilePath, fileToBase64
 import matplotlib
@@ -24,11 +25,11 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 # Import function from ai and database
 import database_pg
 from database_pg import edit_tokens, validate_api_key
-# import database_sqlite as database_pg
-# from database_sqlite import edit_tokens, validate_api_key
+# import database_pg as database_pg
+# from database_pg import edit_tokens, validate_api_key
 from dino import dino_authenticate
 import ai
-from ai import complete_chat, CompletionResponse
+from ai import audioFormCompilation, audioFormPromptBuild, complete_chat, CompletionResponse
 from ai import reply_to_prompt, choose_llm
 
 from dotenv import load_dotenv
@@ -58,6 +59,8 @@ COMPLETION_EMBEDDING_MODEL = os.environ.get("COMPLETION_EMBEDDING_MODEL")
 COMPLETION_EMBEDDING_MODEL_PROVIDER = os.environ.get(
     "COMPLETION_EMBEDDING_MODEL_PROVIDER"
 )
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL")
+DEEPINFRA_API_KEY = os.environ.get("DEEPINFRA_API_KEY")
 STRIPE_KEY = os.environ.get("STRIPE_SK_KEY")
 DATACHAT_TOKEN_COST = os.environ.get("DATACHAT_TOKEN_COST")
 COMPLETION_TOKEN_COST = os.environ.get("COMPLETION_TOKEN_COST")
@@ -551,6 +554,90 @@ def prompt_handler():
     except Exception as e:
         return str(e), 500, {"Content-Type": "text/plain"}
 
+# Define a route for the '/transcribe' endpoint
+@app.route("/transcribe", methods=["POST"])
+def whisper_parse():
+    api_key = request.headers.get("X-API-KEY")
+    user_name_header = request.headers.get("X-USER-NAME")
+    user_email = request.headers.get("X-USER-EMAIL")
+    user_name = user_name_header.replace(" ", "_").strip()
+    validate_api_key(api_key, user_email)
+
+    # Extract necessary parameters from the request FORMDATA
+    request_file = request.files.get("file")
+    request_lang = request.form.get("lang")
+    lang = request_lang if request_lang else "ENG"
+
+    if (
+        not user_name
+        or not user_email
+        or not request_file
+    ):
+        return jsonify({"error": "Missing parameters"}), 400
+
+    # Prepare the request
+    url = f'https://api.deepinfra.com/v1/inference/{WHISPER_MODEL}'
+    headers = {
+        "Authorization": f"bearer {DEEPINFRA_API_KEY}"
+    }
+    files = {
+        'audio': request_file,
+        'response_format': (None, 'text')
+    }
+    print(files)
+
+    # Send the request
+    response = requests.post(url, headers=headers, files=files)
+    
+    if response.status_code == 200:
+        result = response.json()
+        return result
+    else:
+        print(f"Error: {response.status_code}")
+        print(response.text)
+        return None
+
+# Define a route for the '/audioformcompilation' endpoint
+@app.route("/audioformcompilation", methods=["POST"])
+def audio_form_compile():
+    api_key = request.headers.get("X-API-KEY")
+    user_email = request.headers.get("X-USER-EMAIL")
+    validate_api_key(api_key, user_email)
+
+    model_name = PROMPT_MODEL
+    llm_type = PROMPT_PROVIDER
+
+    # Extract necessary parameters from the request FORMDATA
+    formSchema = request.json.get("schema")
+    formSchemaName = request.json.get("name")
+    formSchemaExampleData = request.json.get("exampledata")
+    formSchemaChoices = request.json.get("choices")
+    transcribedAudio = request.json.get("transcribedAudio")
+
+    # Check if the formSchema parameter is present
+    if not formSchema:
+        return jsonify({"error": "Missing Schema"}), 400
+    
+    # Check if the formSchemaExampleData parameter is present
+    if not formSchemaExampleData:
+        return jsonify({"error": "Missing Schema example empty data"}), 400
+    
+    # Check if the formSchemaName parameter is present
+    if not formSchemaName:
+        return jsonify({"error": "Missing Schema Name"}), 400
+
+    # Check if the transcribedAudio parameter is present
+    if not transcribedAudio:
+        return jsonify({"error": "Missing Transcribed Audio"}), 400
+
+    # Check if user email is present
+    if not user_email:
+        return jsonify({"error": "Missing User email"}), 400
+    
+    prompts = audioFormPromptBuild(formSchema, formSchemaExampleData, formSchemaName, formSchemaChoices, transcribedAudio)
+    invocation = audioFormCompilation(prompts["userprompt"], prompts["systemprompt"], user_email, llm_type, model_name)
+    print(invocation)
+    return jsonify(invocation) 
 
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
 @app.route("/summarize", methods=["GET"])
