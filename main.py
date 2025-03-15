@@ -29,7 +29,7 @@ from database_pg import edit_tokens, validate_api_key
 # from database_pg import edit_tokens, validate_api_key
 from dino import dino_authenticate
 import ai
-from ai import audioFormCompilation, audioFormPromptBuild, complete_chat, CompletionResponse
+from ai import audioFormCompilation, audioFormPromptBuild, complete_chat, CompletionResponse, sentiment_analysis, summarize_text
 from ai import reply_to_prompt, choose_llm
 
 from dotenv import load_dotenv
@@ -61,11 +61,12 @@ COMPLETION_EMBEDDING_MODEL_PROVIDER = os.environ.get(
 )
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL")
 DEEPINFRA_API_KEY = os.environ.get("DEEPINFRA_API_KEY")
+SA_PROVIDER = os.environ.get("SA_PROVIDER")
+SA_MODEL = os.environ.get("SA_MODEL")
 STRIPE_KEY = os.environ.get("STRIPE_SK_KEY")
 DATACHAT_TOKEN_COST = os.environ.get("DATACHAT_TOKEN_COST")
 COMPLETION_TOKEN_COST = os.environ.get("COMPLETION_TOKEN_COST")
 PROMPT_TOKEN_COST = os.environ.get("PROMPT_TOKEN_COST")
-
 
 # Define a route for the '/' endpoint that returns a welcome message
 @app.route("/")
@@ -639,10 +640,65 @@ def audio_form_compile():
     print(invocation)
     return jsonify(invocation) 
 
+# Define a route for the '/sentiment-analysis' endpoint
+@app.route("/sentiment-analysis", methods=["POST"])
+def sa():
+    request_lang = request.form.get("lang")
+    api_key = request.headers.get("X-API-KEY")
+    user_email = request.headers.get("X-USER-EMAIL")
+    validate_api_key(api_key, user_email)
+    lang = request_lang if request_lang else "ENG"
+    model = SA_MODEL
+    llm_type = SA_PROVIDER
+    comments = request.json.get("comments")
+
+    sa_templates = {
+            "ITA": f"""Classifica il testo fornito come positivo, negativo o neutro. Rispondi indicando unicamente la categoria che hai trovato""",
+            "ENG": f"""Classify the text provided as positive, negative or neutral. Please reply with just the category you found""",
+            "FRA": f"""Classez le texte fourni comme positif, négatif ou neutre. Veuillez répondre en indiquant uniquement la catégorie que vous avez trouvée""",
+            "ESP": f"""Clasifique el texto proporcionado como positivo, negativo o neutro. Responda sólo con la categoría que haya encontrado""",
+            # Add more languages as needed
+        }
+    sa_prompt = (
+        sa_templates.get(lang, sa_templates[lang])
+        if lang in sa_templates
+        else sa_templates.get("ENG", sa_templates["ENG"])
+    )
+    resp = sentiment_analysis(sa_prompt, llm_type, model,comments)
+    return jsonify(resp)
+
+    
+
+
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
-@app.route("/summarize", methods=["GET"])
-def summarize():
-    return "The /summarize endpoint is not yet implemented.", 501
+@app.route("/summarize", methods=["POST"])
+def summ():
+    request_lang = request.form.get("lang")
+    api_key = request.headers.get("X-API-KEY")
+    user_email = request.headers.get("X-USER-EMAIL")
+    validate_api_key(api_key, user_email)
+    lang = request_lang if request_lang else "ENG"
+
+    full_text = request.json.get("full_text")
+
+    model_name = PROMPT_MODEL
+    llm_type = PROMPT_PROVIDER
+
+    summ_templates = {
+            "ITA": f"""Sei un esperto scrittore specializzato nel generare sintesi chiare, concise e fedeli al contenuto originale. Il tuo compito è elaborare testi di qualunque tipologia (articoli, saggi, report, ecc.) e produrre riassunti strutturati che ne preservino il significato intrinseco.""",
+            "ENG": f"""Classify the text provided as positive, negative or neutral. Please reply with just the category you found""",
+            "FRA": f"""Classez le texte fourni comme positif, négatif ou neutre. Veuillez répondre en indiquant uniquement la catégorie que vous avez trouvée""",
+            "ESP": f"""Clasifique el texto proporcionado como positivo, negativo o neutro. Responda sólo con la categoría que haya encontrado""",
+            # Add more languages as needed
+        }
+    summ_prompt = (
+        summ_templates.get(lang, summ_templates[lang])
+        if lang in summ_templates
+        else summ_templates.get("ENG", summ_templates["ENG"])
+    )
+    resp = summarize_text(summ_prompt, llm_type, model_name, full_text)
+    print(resp)
+    return jsonify(resp)
 
 
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message

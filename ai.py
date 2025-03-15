@@ -86,19 +86,8 @@ def choose_llm(llm_type, model, temperature=0, seed=26, base_url=None, api_key=N
         raise ValueError(f"Unsupported llm_type: {llm_type}")
 
 def complete_chat(req: CompletionRequest, llm_type:str, model:str, emb_llm_type:str, emb_model:str):
-    #emb_llm_type = "OpenAI"
-    #emb_llm_type = "Ollama"
-    #llm_type = "Groq" 
-    #model = "llama-3.1-8b-instant"
-    #emb_model ="mistral-embed"
-    #emb_model ="text-embedding-ada-002"
-    #emb_model = "jeffh/intfloat-multilingual-e5-large:f16"
-    #emb_model = "bge-m3:latest"
 
     logging.info(f"Starting chat completion with llm_type: {llm_type}, model: {model}")
-    #if len(req.chat) % 2 == 0:
-    #    logging.error("Chat completion error: chat must be a list of user,assistant messages ending with a user message")
-    #    return CompletionResponse(error="Chat completion error: chat must be a list of user,assistant messages ending with a user message")
     question = req.chat[-1]
     logging.info(f"Processing question: {question}")
     logging.info(f"Namespace: {req.namespace}")
@@ -386,3 +375,39 @@ def choose_emb_model(emb_llm_type, model):
     else:
         logging.error(f"Unsupported emb_llm_type: {emb_llm_type}")
         raise ValueError(f"Unsupported emb_llm_type: {emb_llm_type}")
+
+
+def sentiment_analysis(sa_prompt:str, llm_type: str, model:str, comments:str):
+    messages = [
+        {"role": "system", "content": sa_prompt},
+        {"role": "user", "content": comments}
+    ]
+
+    llm = choose_llm(llm_type, model, temperature=0.7)
+
+    try:
+        resp = llm.invoke(messages)
+        return CompletionResponse(answer=resp.content)
+        #return resp.content
+    except Exception as e:
+        logging.error(f"Error in chat completion: {str(e)}")
+        return CompletionResponse(error=f"Error in chat completion: {str(e)}")
+        #return "erroraccio"
+
+def summarize_text(summ_prompt:str, llm_type:str, model_name:str, full_text:str):
+    messages = [
+        {"role": "system", "content": summ_prompt},
+        {"role": "user", "content": full_text}
+    ]
+    
+    llm = choose_llm(llm_type, model_name, temperature=0.7)
+
+    try:
+        resp = llm.invoke(messages)
+        return CompletionResponse(answer=resp.content)
+        #return resp.content
+
+    except Exception as e:
+        logging.error(f"Error in chat completion: {str(e)}")
+        return CompletionResponse(error=f"Error in chat completion: {str(e)}")
+        #return "erroraccio"
