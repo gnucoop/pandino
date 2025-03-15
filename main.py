@@ -686,9 +686,9 @@ def summ():
 
     summ_templates = {
             "ITA": f"""Sei un esperto scrittore specializzato nel generare sintesi chiare, concise e fedeli al contenuto originale. Il tuo compito è elaborare testi di qualunque tipologia (articoli, saggi, report, ecc.) e produrre riassunti strutturati che ne preservino il significato intrinseco.""",
-            "ENG": f"""Classify the text provided as positive, negative or neutral. Please reply with just the category you found""",
-            "FRA": f"""Classez le texte fourni comme positif, négatif ou neutre. Veuillez répondre en indiquant uniquement la catégorie que vous avez trouvée""",
-            "ESP": f"""Clasifique el texto proporcionado como positivo, negativo o neutro. Responda sólo con la categoría que haya encontrado""",
+            "ENG": f"""You are an experienced writer who specializes in generating summaries that are clear, concise and true to the original content. Your job is to draft texts of any type (articles, essays, reports, etc.) and produce structured summaries that preserve their intrinsic meaning.""",
+            "FRA": f"""Vous êtes un rédacteur expérimenté, spécialisé dans la production de résumés clairs et concis, fidèles au contenu original. Votre tâche consiste à rédiger des textes de tous types (articles, essais, rapports, etc.) et à produire des résumés structurés qui préservent leur sens intrinsèque.""",
+            "ESP": f"""Usted es un redactor con experiencia especializado en la elaboración de resúmenes claros, concisos y fieles al contenido original. Su tarea consiste en redactar textos de todo tipo (artículos, ensayos, informes, etc.) y elaborar resúmenes estructurados que conserven su significado intrínseco.""",
             # Add more languages as needed
         }
     summ_prompt = (
