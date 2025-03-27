@@ -65,7 +65,7 @@ STRIPE_KEY = os.environ.get("STRIPE_SK_KEY")
 DATACHAT_TOKEN_COST = os.environ.get("DATACHAT_TOKEN_COST")
 COMPLETION_TOKEN_COST = os.environ.get("COMPLETION_TOKEN_COST")
 PROMPT_TOKEN_COST = os.environ.get("PROMPT_TOKEN_COST")
-
+AUDIO_FORM_TOKEN_COST = os.environ.get("AUDIO_FORM_TOKEN_COST")
 
 # Define a route for the '/' endpoint that returns a welcome message
 @app.route("/")
@@ -634,8 +634,21 @@ def audio_form_compile():
     if not user_email:
         return jsonify({"error": "Missing User email"}), 400
     
+    # Checks if the User's tokens are enough for this operation
+    user_tokens = database_pg.get_user_tokens(r["username"])
+    if int(AUDIO_FORM_TOKEN_COST) > user_tokens:
+        return (
+            jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
+            500,
+        )
+    
     prompts = audioFormPromptBuild(formSchema, formSchemaExampleData, formSchemaName, formSchemaChoices, transcribedAudio)
     invocation = audioFormCompilation(prompts["userprompt"], prompts["systemprompt"], user_email, llm_type, model_name)
+
+    if invocation:
+        # Spends User's tokens
+        edit_tokens(user_email, -int(AUDIO_FORM_TOKEN_COST)) 
+
     print(invocation)
     return jsonify(invocation) 
 
