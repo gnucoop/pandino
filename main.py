@@ -635,7 +635,7 @@ def audio_form_compile():
         return jsonify({"error": "Missing User email"}), 400
     
     # Checks if the User's tokens are enough for this operation
-    user_tokens = database_pg.get_user_tokens(r["username"])
+    user_tokens = database_pg.get_user_tokens(user_email)
     if int(AUDIO_FORM_TOKEN_COST) > user_tokens:
         return (
             jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
