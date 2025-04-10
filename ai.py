@@ -25,16 +25,13 @@ from langchain_postgres import PGVector
 from langchain_postgres.vectorstores import PGVector
 
 from database_pg import get_user_by_username, log_token_usage
-# from database_pg import get_user_by_username, log_token_usage
 
 load_dotenv()  # Load environment variables from .env file
 
 from typing import List
 
 class CompletionRequest:
-    def __init__(self, dino_graphql: str, auth_token: str, namespace: str, username:str, info: List[str], chat: List[str]):
-        self.dino_graphql = dino_graphql
-        self.auth_token = auth_token
+    def __init__(self, namespace: str, username:str, info: List[str], chat: List[str]):
         self.namespace = namespace
         self.username = username
         self.info = info

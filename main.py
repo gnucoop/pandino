@@ -25,8 +25,6 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 # Import function from ai and database
 import database_pg
 from database_pg import edit_tokens, validate_api_key
-# import database_pg as database_pg
-# from database_pg import edit_tokens, validate_api_key
 from dino import dino_authenticate
 import ai
 from ai import audioFormCompilation, audioFormPromptBuild, complete_chat, CompletionResponse
@@ -84,14 +82,6 @@ def validate_api_key(api_key, user_email):
         else:
             abort(403, description="Invalid API key")
 
-
-# Tries to authenticate a Dino user against their Dino instance's backend
-def authenticate_dino(graphql_url, auth_token):
-    if not graphql_url or not auth_token:
-        abort(403)
-    result = dino_authenticate(graphql_url, auth_token)
-    if result:
-        abort(403, description=result)
 
 # Recursively replace NaN with None in dictionaries or lists.
 def replace_nan(data):
@@ -179,10 +169,9 @@ def addNewUser():
     if not user_email:
         return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
 
-    try:
-        authenticate_dino(graphql_url, auth_token)
-    except Exception as e:
-        return str(e), 500, {"Content-Type": "text/plain"}
+    err = dino_authenticate(graphql_url, auth_token)
+    if err:
+        return str(err), 500, {"Content-Type": "text/plain"}
 
     existingUser = database_pg.get_user_by_username(user_email)
     if not existingUser:
@@ -448,7 +437,7 @@ def completion_handler():
         if not r:
             return jsonify({"error": "No JSON data provided"}), 400
 
-        required_keys = ["dinoGraphql", "authToken", "chat", "username"]
+        required_keys = ["chat", "username"]
         missing_keys = [key for key in required_keys if key not in r]
 
         if missing_keys:
@@ -468,14 +457,8 @@ def completion_handler():
                 500,
             )
 
-        err = dino_authenticate(r["dinoGraphql"], r["authToken"])
-        if err:
-            return jsonify({"error": f"Authentication error: {str(err)}"}), 401
-
         # Prepare the request for complete_chat
         chat_request = ai.CompletionRequest(
-            dino_graphql=r["dinoGraphql"],
-            auth_token=r["authToken"],
             namespace=r.get("namespace", ""),
             username=r["username"],
             info=r.get("info", []),
@@ -514,17 +497,12 @@ def completion_handler():
 
 @app.route("/prompt.txt", methods=["POST"])
 def prompt_handler():
-    graphql_url = request.form.get("graphqlUrl")
-    auth_token = request.form.get("authToken")
     prompt = request.form.get("prompt")
     username = request.form.get("username")
     model_name = PROMPT_MODEL
     llm_type = PROMPT_PROVIDER
 
     api_key = request.headers.get("X-API-KEY")
-
-    if not graphql_url or not auth_token:
-        return "Auth parameters not provided", 400, {"Content-Type": "text/plain"}
 
     if not username:
         return "Username not provided", 400, {"Content-Type": "text/plain"}
@@ -535,12 +513,6 @@ def prompt_handler():
     user_tokens = database_pg.get_user_tokens(username)
     if int(PROMPT_TOKEN_COST) > user_tokens:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
-
-    try:
-        # Assuming DinoAuthenticate is replaced with a similar function in Python
-        dino_authenticate(graphql_url, auth_token)
-    except Exception as e:
-        return str(e), 500, {"Content-Type": "text/plain"}
 
     if not prompt:
         return "No prompt provided", 400, {"Content-Type": "text/plain"}
