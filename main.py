@@ -28,7 +28,7 @@ from database_pg import edit_tokens, validate_api_key
 from dino import dino_authenticate
 import ai
 from ai import audioFormCompilation, audioFormPromptBuild, complete_chat, CompletionResponse
-from ai import reply_to_prompt, choose_llm
+from ai import reply_to_prompt, choose_llm, connect_to_pinecone, split_text, store_paragraphs
 
 from dotenv import load_dotenv
 
@@ -171,7 +171,7 @@ def addNewUser():
 
     err = dino_authenticate(graphql_url, auth_token)
     if err:
-        return str(err), 500, {"Content-Type": "text/plain"}
+        return str(err), 403, {"Content-Type": "text/plain"}
 
     existingUser = database_pg.get_user_by_username(user_email)
     if not existingUser:
@@ -494,6 +494,7 @@ def completion_handler():
         app.logger.error(f"Unexpected error in completion_handler: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
 
+textContentType = {"Content-Type": "text/plain"}
 
 @app.route("/prompt.txt", methods=["POST"])
 def prompt_handler():
@@ -505,7 +506,7 @@ def prompt_handler():
     api_key = request.headers.get("X-API-KEY")
 
     if not username:
-        return "Username not provided", 400, {"Content-Type": "text/plain"}
+        return "Username not provided", 400, textContentType
 
     validate_api_key(api_key, username)
 
@@ -515,16 +516,43 @@ def prompt_handler():
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
     if not prompt:
-        return "No prompt provided", 400, {"Content-Type": "text/plain"}
+        return "No prompt provided", 400, textContentType
 
     try:
         resp = reply_to_prompt(prompt, username, llm_type, model_name)
         if isinstance(resp, CompletionResponse):
-            return resp.answer, 200, {"Content-Type": "text/plain"}
+            return resp.answer, 200, textContentType
         else:
-            return "Unexpected response format", 500, {"Content-Type": "text/plain"}
+            return "Unexpected response format", 500, textContentType
     except Exception as e:
-        return str(e), 500, {"Content-Type": "text/plain"}
+        return str(e), 500, textContentType
+
+@app.route("/storeragfile", methods=["POST"])
+def store_rag_file():
+    err = dino_authenticate(request.form.get("graphqlUrl"), request.form.get("authToken"))
+    if err:
+        return str(err), 403, textContentType
+    
+    text = request.form.get("text") or ""
+    url = request.form.get("url") or ""
+    namespace = request.form.get("namespace") or ""
+
+    mimetype = "text"
+    if not url.endswith(".txt"):
+        return "Unsupported file type", 400, textContentType
+    
+    if not text:
+        return "Nothing to store", 200, textContentType
+    paragraphs = split_text(text)
+
+    filename = os.path.basename(url)
+    metadata = {"url": url, "mimetype": mimetype, "source": filename}
+    try:
+        index = connect_to_pinecone("index")
+        store_paragraphs(index, paragraphs, namespace, metadata, COMPLETION_EMBEDDING_MODEL_PROVIDER, COMPLETION_EMBEDDING_MODEL)
+        return "Success", 200, textContentType
+    except Exception as e:
+        return str(e), 500, textContentType
 
 # Define a route for the '/transcribe' endpoint
 @app.route("/transcribe", methods=["POST"])

@@ -1,5 +1,8 @@
+import base64
+import hashlib
 import logging
 import os
+import re
 from dotenv import load_dotenv
 import pandas as pd
 from pandasai.llm import BambooLLM
@@ -19,7 +22,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_ollama import OllamaEmbeddings
 
 #Import specific vector store database from their specific libraries
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import Pinecone, Index
 from langchain_pinecone import PineconeVectorStore
 from langchain_postgres import PGVector
 from langchain_postgres.vectorstores import PGVector
@@ -194,21 +197,13 @@ IMPORTANT INSTRUCTIONS:
         logging.error(f"Error in chat completion: {str(e)}")
         return CompletionResponse(error=f"Error in chat completion: {str(e)}")
 
-def embed(emb_llm_type, model, text):
-    logging.info(f"Attempting to embed text with {emb_llm_type} model: {model}")
-    logging.debug(f"Text to embed (first 50 chars): {text[:50]}...")
-
-    embeddings = choose_emb_model(emb_llm_type, model)
-
+def embed(paragraphs: list[str], emb_llm_type: str, emb_model: str):
+    embeddings = choose_emb_model(emb_llm_type, emb_model)
     try:
-        logging.info("Attempting to embed query")
-        single_vector = embeddings.embed_query(text)
-        logging.info(f"Successfully embedded text with {emb_llm_type}")
-        logging.debug(f"Embedded vector (first 5 elements): {single_vector[:5]}")
-        return single_vector
+        vectors = embeddings.embed_documents(paragraphs)
+        return vectors
     except Exception as e:
         logging.error(f"Error embedding text with {emb_llm_type}: {str(e)}")
-        logging.error(f"Error type: {type(e).__name__}")
         if hasattr(e, 'response'):
             logging.error(f"Response content: {e.response.content}")
         if hasattr(e, '__dict__'):
@@ -236,7 +231,7 @@ def connect_to_vector_db (db_name: str, index_name: str, emb_llm_type: str, emb_
         vector_store = PGVector(embeddings=embeddings,collection_name=index_name,connection=connection,use_jsonb=True)
         return vector_store
 
-def find_similar_vectors(text: str, top_k: int, min_similarity: float, namespace: str, emb_llm_type: str, model: str) -> tuple:
+def find_similar_vectors(text: str, top_k: int, min_similarity: float, namespace: str, emb_llm_type: str, emb_model: str) -> tuple:
     logging.info(f"Finding similar paragraphs for text: {text[:50]}...")
     
     try:
@@ -261,7 +256,7 @@ def find_similar_vectors(text: str, top_k: int, min_similarity: float, namespace
             return [], [], str(e)
             """
         
-        vec = embed(emb_llm_type, model, text)
+        vec = embed([text], emb_llm_type, emb_model)[0]
         logging.info("Text embedded successfully")
         #index = connect_to_pinecone("langchain-test-index")
         index = connect_to_pinecone("index")
@@ -288,6 +283,68 @@ def find_similar_vectors(text: str, top_k: int, min_similarity: float, namespace
     except Exception as e:
         logging.error(f"Error in find_similar_vectors: {str(e)}")
         return [], str(e)
+
+def split_text(document: str, paragraph_len: int = 900) -> list[str]:
+    if len(document) <= paragraph_len*2:
+        return [document]
+    sentences = re.split(r'\.\s+|\n\s*', document)
+    paragraphs = []
+    par = ""
+    for i, s in enumerate(sentences):
+        if par == "":
+            par = s
+        else:
+            par += ". " + s
+        if len(par) >= paragraph_len or i == len(sentences)-1:
+            paragraphs.append(par)
+            if len(s) <= paragraph_len // 3:
+                # Next paragraph starts with s, overlapping
+                par = s
+            else:
+                par = ""
+    return paragraphs
+
+# Hash a string using SHA256 and encode it in base64
+def hash_text(t: str) -> str:
+    hash_bytes = hashlib.sha256(t.encode('utf-8')).digest()
+    return base64.b64encode(hash_bytes).decode('utf-8')
+
+def paragraph_id(paragraph: str, namespace: str) -> str:
+    return f"{namespace}:{hash_text(paragraph)}"
+
+def store_paragraphs(index: Index, paragraphs: List[str], namespace: str, metadata: dict, emb_llm_type: str, emb_model: str) -> None:
+    batch_size = 100
+    for start in range(0, len(paragraphs), batch_size):
+        end = min(start + batch_size, len(paragraphs))
+        batch = paragraphs[start:end]
+
+        ids = [paragraph_id(par, namespace) for par in batch]
+
+        # Check if batch is already in index, to avoid recomputing embeddings
+        try:
+            fetch_response = index.fetch(ids=ids, namespace=namespace)
+            if fetch_response and len(fetch_response.vectors) == len(ids):
+                logging.info("Batch already present")
+                continue
+        except Exception:
+            pass
+
+        vectors = embed(batch, emb_llm_type, emb_model)
+        logging.info(f"Successfully created {len(vectors)} embeddings")
+
+        pc_vectors = [
+            {
+                "id": ids[i],
+                "values": vectors[i],
+                "metadata": metadata | {"text": batch[i]},
+            }
+            for i in range(len(batch))
+        ]
+        try:
+            upsert_response = index.upsert(vectors=pc_vectors, namespace=namespace)
+            logging.info(f"Successfully upserted {upsert_response['upserted_count']} vectors")
+        except Exception as e:
+            raise RuntimeError(f"Error upserting vectors: {e}")
 
 def audioFormPromptBuild(formSchema, formSchemaExampleData, formSchemaName:str, formSchemaChoices, transcribedAudio:str):
     if not formSchema or not formSchemaExampleData or not formSchemaName or not transcribedAudio:
