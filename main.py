@@ -12,23 +12,18 @@ from file_manager import isImageFilePath, fileToBase64
 import matplotlib
 import secrets
 from datetime import datetime
+from vector_store import PineconeStore, split_text
 
 matplotlib.use("Agg")  # Use non-interactive backend
 import os
-
-# Import specific chat models from their respective libraries
-from langchain_groq.chat_models import ChatGroq
-from langchain_openai import ChatOpenAI
-from langchain_mistralai import ChatMistralAI
-from langchain_google_genai import ChatGoogleGenerativeAI
 
 # Import function from ai and database
 import database_pg
 from database_pg import edit_tokens, validate_api_key
 from dino import dino_authenticate
 import ai
-from ai import audioFormCompilation, audioFormPromptBuild, complete_chat, CompletionResponse
-from ai import reply_to_prompt, choose_llm, connect_to_pinecone, split_text, store_paragraphs
+from ai import audioFormCompilation, audioFormPromptBuild, CompletionResponse
+from ai import complete_chat, reply_to_prompt, choose_llm, choose_emb_model
 
 from dotenv import load_dotenv
 
@@ -459,18 +454,20 @@ def completion_handler():
 
         # Prepare the request for complete_chat
         chat_request = ai.CompletionRequest(
-            namespace=r.get("namespace", ""),
             username=r["username"],
             info=r.get("info", []),
             chat=r["chat"],
         )
+        namespace = r.get("namespace", "")
 
         llm_type = COMPLETION_MODEL_PROVIDER
         model = COMPLETION_MODEL
         emb_llm_type = COMPLETION_EMBEDDING_MODEL_PROVIDER
         emb_model = COMPLETION_EMBEDDING_MODEL
 
-        resp = complete_chat(chat_request, llm_type, model, emb_llm_type, emb_model)
+        embeddings = choose_emb_model(emb_llm_type, emb_model)
+        store = PineconeStore(embeddings, "index", namespace)
+        resp = complete_chat(chat_request, store, llm_type, model)
         for vec in resp.vectors:
             vec['similarity'] += 0.3
         if isinstance(resp, CompletionResponse):
@@ -495,6 +492,40 @@ def completion_handler():
         return jsonify({"error": "An unexpected error occurred"}), 500
 
 textContentType = {"Content-Type": "text/plain"}
+
+# Endpoint for quickly testing chat completion from terminal
+# Warning: it has no authentication
+"""
+@app.route("/completion.test", methods=["POST"])
+def completion_test():
+    try:
+        question = request.form.get("question")
+        namespace = request.form.get("namespace") or ""
+        if not question:
+            return "question not provided", 400, textContentType
+
+        llm_type = COMPLETION_MODEL_PROVIDER
+        model = COMPLETION_MODEL
+        emb_llm_type = COMPLETION_EMBEDDING_MODEL_PROVIDER
+        emb_model = COMPLETION_EMBEDDING_MODEL
+
+        chat_request = ai.CompletionRequest(
+            username="",
+            info=[],
+            chat=["Hello! How can I help you?", question]
+        )
+        embeddings = choose_emb_model(emb_llm_type, emb_model)
+        store = PineconeStore(embeddings, "index", namespace)
+        resp = complete_chat(chat_request, store, llm_type, model)
+        if not isinstance(resp, CompletionResponse):
+            return "response is not a CompletionResponse", 500, textContentType
+        if resp.error:
+            return resp.error, 500, textContentType
+        return resp.answer, 200, textContentType
+
+    except Exception as e:
+        return str(e), 500, textContentType
+"""
 
 @app.route("/prompt.txt", methods=["POST"])
 def prompt_handler():
@@ -548,8 +579,9 @@ def store_rag_file():
     filename = os.path.basename(url)
     metadata = {"url": url, "mimetype": mimetype, "source": filename}
     try:
-        index = connect_to_pinecone("index")
-        store_paragraphs(index, paragraphs, namespace, metadata, COMPLETION_EMBEDDING_MODEL_PROVIDER, COMPLETION_EMBEDDING_MODEL)
+        embeddings = choose_emb_model(COMPLETION_EMBEDDING_MODEL_PROVIDER, COMPLETION_EMBEDDING_MODEL)
+        store = PineconeStore(embeddings, "index", namespace)
+        store.store_paragraphs(paragraphs, metadata)
         return "Success", 200, textContentType
     except Exception as e:
         return str(e), 500, textContentType
