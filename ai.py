@@ -109,9 +109,6 @@ def complete_chat(req: CompletionRequest, store: VectorStore, llm_type:str, mode
     #emb_model = "bge-m3:latest"
 
     logging.info(f"Starting chat completion with llm_type: {llm_type}, model: {model}")
-    #if len(req.chat) % 2 == 0:
-    #    logging.error("Chat completion error: chat must be a list of user,assistant messages ending with a user message")
-    #    return CompletionResponse(error="Chat completion error: chat must be a list of user,assistant messages ending with a user message")
     question = req.chat[-1]
     logging.info(f"Processing question: {question}")
     vectors: List[dict] = [];
@@ -124,10 +121,6 @@ def complete_chat(req: CompletionRequest, store: VectorStore, llm_type:str, mode
         logging.info("No information available for the question")
         return CompletionResponse(answer="Non ho informazioni al riguardo")
     logging.info(f"Found {len(vectors)} relevant paragraphs")
-    # Start with a very explicit system message about using context
-    # Start with a greeting for the first message
-    if len(req.chat) == 1:
-        return CompletionResponse(answer="Hello! How can I help you?")
 
     messages = [{"role": "system", "content": """You are Dino, an assistant who helps users by answering questions concisely.
 You will receive information divided by
@@ -209,6 +202,30 @@ IMPORTANT INSTRUCTIONS:
         logging.error(f"Error in chat completion: {str(e)}")
         return CompletionResponse(error=f"Error in chat completion: {str(e)}")
 
+def reply_to_prompt(prompt: str, username: str, llm_type: str, model: str) -> str:
+    messages = [
+        {"role": "system", "content": """Sei un esperto di enti non-profit e devi realizzare il rapporto annuale della tua organizzazione.
+Io ti chiederò di scrivere una sezione alla volta, dandoti indicazioni sui contenuti da includere in ciascuna sezione.
+Usa un linguaggio preciso ma non troppo tecnico, che sia comprensibile anche al pubblico generale.
+Non usare elenchi puntati o numerati. Non inserire titoli. Non aggiungere testo all'inizio o alla fine.
+Non aggiungere paragrafi di conclusione o chiusura. Non usare espressioni come "in questo documento" usa invece "in questa sezione".
+Scrivi sempre in italiano e genera l'output solo testo senza markdown o html.
+Se non hai informazioni sufficienti per rispondere non rispondere niente."""},
+        {"role": "user", "content": prompt}
+    ]
+    llm = choose_llm(llm_type, model, temperature=0.8)
+    try:
+        resp = llm.invoke(messages)
+        # token_usage = resp.response_metadata.get('token_usage', {})
+        # token_in = token_usage.get('prompt_tokens', 0)
+        # token_out = token_usage.get('completion_tokens', 0)
+        # user = get_user_by_username(username)
+        # log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
+        return resp.content
+    except Exception as e:
+        logging.error(f"Error in prompt completion: {str(e)}")
+        raise e
+
 def audioFormPromptBuild(formSchema, formSchemaExampleData, formSchemaName:str, formSchemaChoices, transcribedAudio:str):
     if not formSchema or not formSchemaExampleData or not formSchemaName or not transcribedAudio:
         return
@@ -257,23 +274,3 @@ def audioFormCompilation(userprompt: str, systemprompt: str, username:str, llm_t
     except Exception as e:
         logging.error(f"Error in audio form compilation: {str(e)}")
         return CompletionResponse(error=f"Error in Audio Form Compilation: {str(e)}")
-
-def reply_to_prompt(prompt, username:str, llm_type: str, model:str):
-    messages = [
-        {"role": "system", "content": "Sei un esperto di enti non-profit e devi realizzare il rapporto annuale della tua organizzazione. Io ti chiederò di scrivere una sezione alla volta, dandoti indicazioni sui contenuti da includere in ciascuna sezione. Usa un linguaggio preciso ma non troppo tecnico, che sia comprensibile anche al pubblico generale. Non usare elenchi puntati o numerati. Non inserire titoli. Non aggiungere testo all’inizio o alla fine. Non aggiungere paragrafi di conclusione o chiusura. Non usare espressioni come “in questo documento” usa invece “in questa sezione”. Scrivi sempre in italiano e genera l'output solo testo senza markdown o html. Se non hai informazioni sufficienti per rispondere non rispondere niente."},
-        {"role": "user", "content": prompt}
-    ]
-
-    llm = choose_llm(llm_type, model, temperature=0.8)
-
-    try:
-        resp = llm.invoke(messages)
-        token_usage = resp.response_metadata.get('token_usage',{})
-        token_in = token_usage.get('prompt_tokens',0)
-        token_out = token_usage.get('completion_tokens',0)
-        user = get_user_by_username(username)
-        # log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
-        return CompletionResponse(answer=resp.content)
-    except Exception as e:
-        logging.error(f"Error in chat completion: {str(e)}")
-        return CompletionResponse(error=f"Error in chat completion: {str(e)}")

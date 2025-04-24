@@ -512,7 +512,7 @@ def completion_test():
         chat_request = ai.CompletionRequest(
             username="",
             info=[],
-            chat=["Hello! How can I help you?", question]
+            chat=[question]
         )
         embeddings = choose_emb_model(emb_llm_type, emb_model)
         store = PineconeStore(embeddings, "index", namespace)
@@ -521,7 +521,7 @@ def completion_test():
             return "response is not a CompletionResponse", 500, textContentType
         if resp.error:
             return resp.error, 500, textContentType
-        return resp.answer, 200, textContentType
+        return resp.answer + "\n", 200, textContentType
 
     except Exception as e:
         return str(e), 500, textContentType
@@ -536,6 +536,8 @@ def prompt_handler():
 
     api_key = request.headers.get("X-API-KEY")
 
+    if not prompt:
+        return "No prompt provided", 400, textContentType
     if not username:
         return "Username not provided", 400, textContentType
 
@@ -544,17 +546,11 @@ def prompt_handler():
     # Checks if the User's tokens are enough for this operation
     user_tokens = database_pg.get_user_tokens(username)
     if int(PROMPT_TOKEN_COST) > user_tokens:
-        return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
-
-    if not prompt:
-        return "No prompt provided", 400, textContentType
+        return f"Not enough tokens, user_tokens: {user_tokens}", 400, textContentType
 
     try:
         resp = reply_to_prompt(prompt, username, llm_type, model_name)
-        if isinstance(resp, CompletionResponse):
-            return resp.answer, 200, textContentType
-        else:
-            return "Unexpected response format", 500, textContentType
+        return resp, 200, textContentType
     except Exception as e:
         return str(e), 500, textContentType
 
