@@ -12,25 +12,18 @@ from file_manager import isImageFilePath, fileToBase64
 import matplotlib
 import secrets
 from datetime import datetime
+from vector_store import PineconeStore, split_text
 
 matplotlib.use("Agg")  # Use non-interactive backend
 import os
 
-# Import specific chat models from their respective libraries
-from langchain_groq.chat_models import ChatGroq
-from langchain_openai import ChatOpenAI
-from langchain_mistralai import ChatMistralAI
-from langchain_google_genai import ChatGoogleGenerativeAI
-
 # Import function from ai and database
 import database_pg
 from database_pg import edit_tokens, validate_api_key
-# import database_pg as database_pg
-# from database_pg import edit_tokens, validate_api_key
 from dino import dino_authenticate
 import ai
-from ai import audioFormCompilation, audioFormPromptBuild, complete_chat, CompletionResponse
-from ai import reply_to_prompt, choose_llm
+from ai import audioFormCompilation, audioFormPromptBuild, CompletionResponse
+from ai import complete_chat, reply_to_prompt, choose_llm, choose_emb_model
 
 from dotenv import load_dotenv
 
@@ -84,14 +77,6 @@ def validate_api_key(api_key, user_email):
         else:
             abort(403, description="Invalid API key")
 
-
-# Tries to authenticate a Dino user against their Dino instance's backend
-def authenticate_dino(graphql_url, auth_token):
-    if not graphql_url or not auth_token:
-        abort(403)
-    result = dino_authenticate(graphql_url, auth_token)
-    if result:
-        abort(403, description=result)
 
 # Recursively replace NaN with None in dictionaries or lists.
 def replace_nan(data):
@@ -179,10 +164,9 @@ def addNewUser():
     if not user_email:
         return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
 
-    try:
-        authenticate_dino(graphql_url, auth_token)
-    except Exception as e:
-        return str(e), 500, {"Content-Type": "text/plain"}
+    err = dino_authenticate(graphql_url, auth_token)
+    if err:
+        return str(err), 403, {"Content-Type": "text/plain"}
 
     existingUser = database_pg.get_user_by_username(user_email)
     if not existingUser:
@@ -448,7 +432,7 @@ def completion_handler():
         if not r:
             return jsonify({"error": "No JSON data provided"}), 400
 
-        required_keys = ["dinoGraphql", "authToken", "chat", "username"]
+        required_keys = ["chat", "username"]
         missing_keys = [key for key in required_keys if key not in r]
 
         if missing_keys:
@@ -468,26 +452,22 @@ def completion_handler():
                 500,
             )
 
-        err = dino_authenticate(r["dinoGraphql"], r["authToken"])
-        if err:
-            return jsonify({"error": f"Authentication error: {str(err)}"}), 401
-
         # Prepare the request for complete_chat
         chat_request = ai.CompletionRequest(
-            dino_graphql=r["dinoGraphql"],
-            auth_token=r["authToken"],
-            namespace=r.get("namespace", ""),
             username=r["username"],
             info=r.get("info", []),
             chat=r["chat"],
         )
+        namespace = r.get("namespace", "")
 
         llm_type = COMPLETION_MODEL_PROVIDER
         model = COMPLETION_MODEL
         emb_llm_type = COMPLETION_EMBEDDING_MODEL_PROVIDER
         emb_model = COMPLETION_EMBEDDING_MODEL
 
-        resp = complete_chat(chat_request, llm_type, model, emb_llm_type, emb_model)
+        embeddings = choose_emb_model(emb_llm_type, emb_model)
+        store = PineconeStore(embeddings, "index", namespace)
+        resp = complete_chat(chat_request, store, llm_type, model)
         for vec in resp.vectors:
             vec['similarity'] += 0.3
         if isinstance(resp, CompletionResponse):
@@ -511,11 +491,44 @@ def completion_handler():
         app.logger.error(f"Unexpected error in completion_handler: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
 
+textContentType = {"Content-Type": "text/plain"}
+
+# Endpoint for quickly testing chat completion from terminal
+# Warning: it has no authentication
+"""
+@app.route("/completion.test", methods=["POST"])
+def completion_test():
+    try:
+        question = request.form.get("question")
+        namespace = request.form.get("namespace") or ""
+        if not question:
+            return "question not provided", 400, textContentType
+
+        llm_type = COMPLETION_MODEL_PROVIDER
+        model = COMPLETION_MODEL
+        emb_llm_type = COMPLETION_EMBEDDING_MODEL_PROVIDER
+        emb_model = COMPLETION_EMBEDDING_MODEL
+
+        chat_request = ai.CompletionRequest(
+            username="",
+            info=[],
+            chat=[question]
+        )
+        embeddings = choose_emb_model(emb_llm_type, emb_model)
+        store = PineconeStore(embeddings, "index", namespace)
+        resp = complete_chat(chat_request, store, llm_type, model)
+        if not isinstance(resp, CompletionResponse):
+            return "response is not a CompletionResponse", 500, textContentType
+        if resp.error:
+            return resp.error, 500, textContentType
+        return resp.answer + "\n", 200, textContentType
+
+    except Exception as e:
+        return str(e), 500, textContentType
+"""
 
 @app.route("/prompt.txt", methods=["POST"])
 def prompt_handler():
-    graphql_url = request.form.get("graphqlUrl")
-    auth_token = request.form.get("authToken")
     prompt = request.form.get("prompt")
     username = request.form.get("username")
     model_name = PROMPT_MODEL
@@ -523,36 +536,51 @@ def prompt_handler():
 
     api_key = request.headers.get("X-API-KEY")
 
-    if not graphql_url or not auth_token:
-        return "Auth parameters not provided", 400, {"Content-Type": "text/plain"}
-
+    if not prompt:
+        return "No prompt provided", 400, textContentType
     if not username:
-        return "Username not provided", 400, {"Content-Type": "text/plain"}
+        return "Username not provided", 400, textContentType
 
     validate_api_key(api_key, username)
 
     # Checks if the User's tokens are enough for this operation
     user_tokens = database_pg.get_user_tokens(username)
     if int(PROMPT_TOKEN_COST) > user_tokens:
-        return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
-
-    try:
-        # Assuming DinoAuthenticate is replaced with a similar function in Python
-        dino_authenticate(graphql_url, auth_token)
-    except Exception as e:
-        return str(e), 500, {"Content-Type": "text/plain"}
-
-    if not prompt:
-        return "No prompt provided", 400, {"Content-Type": "text/plain"}
+        return f"Not enough tokens, user_tokens: {user_tokens}", 400, textContentType
 
     try:
         resp = reply_to_prompt(prompt, username, llm_type, model_name)
-        if isinstance(resp, CompletionResponse):
-            return resp.answer, 200, {"Content-Type": "text/plain"}
-        else:
-            return "Unexpected response format", 500, {"Content-Type": "text/plain"}
+        return resp, 200, textContentType
     except Exception as e:
-        return str(e), 500, {"Content-Type": "text/plain"}
+        return str(e), 500, textContentType
+
+@app.route("/storeragfile", methods=["POST"])
+def store_rag_file():
+    err = dino_authenticate(request.form.get("graphqlUrl"), request.form.get("authToken"))
+    if err:
+        return str(err), 403, textContentType
+    
+    text = request.form.get("text") or ""
+    url = request.form.get("url") or ""
+    namespace = request.form.get("namespace") or ""
+
+    mimetype = "text"
+    if not url.endswith(".txt"):
+        return "Unsupported file type", 400, textContentType
+    
+    if not text:
+        return "Nothing to store", 200, textContentType
+    paragraphs = split_text(text)
+
+    filename = os.path.basename(url)
+    metadata = {"url": url, "mimetype": mimetype, "source": filename}
+    try:
+        embeddings = choose_emb_model(COMPLETION_EMBEDDING_MODEL_PROVIDER, COMPLETION_EMBEDDING_MODEL)
+        store = PineconeStore(embeddings, "index", namespace)
+        store.store_paragraphs(paragraphs, metadata)
+        return "Success", 200, textContentType
+    except Exception as e:
+        return str(e), 500, textContentType
 
 # Define a route for the '/transcribe' endpoint
 @app.route("/transcribe", methods=["POST"])

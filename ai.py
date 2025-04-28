@@ -1,8 +1,9 @@
 import logging
 import os
 from dotenv import load_dotenv
-import pandas as pd
 from pandasai.llm import BambooLLM
+from database_pg import get_user_by_username, log_token_usage
+from vector_store import VectorStore
 
 # Import specific chat models from their respective libraries
 from langchain_groq.chat_models import ChatGroq
@@ -11,31 +12,17 @@ from langchain_mistralai import ChatMistralAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_anthropic import ChatAnthropic
 
-#from langchain_ollama import ChatOllama
-
 # Import specific embeddings models from their respective libraries
 from langchain_mistralai import MistralAIEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from langchain_ollama import OllamaEmbeddings
-
-#Import specific vector store database from their specific libraries
-from pinecone import Pinecone, ServerlessSpec
-from langchain_pinecone import PineconeVectorStore
-from langchain_postgres import PGVector
-from langchain_postgres.vectorstores import PGVector
-
-from database_pg import get_user_by_username, log_token_usage
-# from database_pg import get_user_by_username, log_token_usage
 
 load_dotenv()  # Load environment variables from .env file
 
 from typing import List
 
 class CompletionRequest:
-    def __init__(self, dino_graphql: str, auth_token: str, namespace: str, username:str, info: List[str], chat: List[str]):
-        self.dino_graphql = dino_graphql
-        self.auth_token = auth_token
-        self.namespace = namespace
+    def __init__(self, username:str, info: List[str], chat: List[str]):
         self.username = username
         self.info = info
         self.chat = chat
@@ -85,7 +72,33 @@ def choose_llm(llm_type, model, temperature=0, seed=26, base_url=None, api_key=N
     else:
         raise ValueError(f"Unsupported llm_type: {llm_type}")
 
-def complete_chat(req: CompletionRequest, llm_type:str, model:str, emb_llm_type:str, emb_model:str):
+def choose_emb_model(emb_llm_type, emb_model):
+    """
+    Choose and initialize the appropriate embeddings model based on the provided type and model.
+
+    :param emb_llm_type: Type of the embeddings model (e.g., 'Mistral', 'Ollama', 'OpenAI')
+    :param emb_model: Model name
+    :return: Initialized embeddings model instance
+    """
+    if emb_llm_type == 'Mistral':
+        mistralai_api_key = os.getenv("MISTRAL_API_KEY")
+        if not mistralai_api_key:
+            logging.error("MISTRAL_API_KEY environment variable is not set")
+            raise ValueError("MISTRAL_API_KEY environment variable is not set")
+        return MistralAIEmbeddings(model=emb_model, api_key=mistralai_api_key)
+    elif emb_llm_type == 'Ollama':
+        return OllamaEmbeddings(model=emb_model,base_url='http://192.168.1.8:11434')
+    elif emb_llm_type == 'OpenAI':
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        if not openai_api_key:
+            logging.error("OPENAI_API_KEY environment variable is not set")
+            raise ValueError("OPENAI_API_KEY environment variable is not set")
+        return OpenAIEmbeddings(model=emb_model, api_key=openai_api_key)
+    else:
+        logging.error(f"Unsupported emb_llm_type: {emb_llm_type}")
+        raise ValueError(f"Unsupported emb_llm_type: {emb_llm_type}")
+
+def complete_chat(req: CompletionRequest, store: VectorStore, llm_type:str, model:str):
     #emb_llm_type = "OpenAI"
     #emb_llm_type = "Ollama"
     #llm_type = "Groq" 
@@ -96,24 +109,18 @@ def complete_chat(req: CompletionRequest, llm_type:str, model:str, emb_llm_type:
     #emb_model = "bge-m3:latest"
 
     logging.info(f"Starting chat completion with llm_type: {llm_type}, model: {model}")
-    #if len(req.chat) % 2 == 0:
-    #    logging.error("Chat completion error: chat must be a list of user,assistant messages ending with a user message")
-    #    return CompletionResponse(error="Chat completion error: chat must be a list of user,assistant messages ending with a user message")
     question = req.chat[-1]
     logging.info(f"Processing question: {question}")
-    logging.info(f"Namespace: {req.namespace}")
-    vectors, err = find_similar_vectors(question, 3, 0.5, req.namespace, emb_llm_type=emb_llm_type, model=emb_model)
-    if err:
-        logging.error(f"Error finding similar paragraphs: {err}")
-        return CompletionResponse(error=f"Error finding similar paragraphs: {err}")
+    vectors: List[dict] = [];
+    try:
+        vectors = store.find_similar_vectors(question, 3, 0.5)
+    except Exception as e:
+        logging.error(str(e))
+        return CompletionResponse(error=str(e))
     if not req.info and not vectors:
         logging.info("No information available for the question")
         return CompletionResponse(answer="Non ho informazioni al riguardo")
     logging.info(f"Found {len(vectors)} relevant paragraphs")
-    # Start with a very explicit system message about using context
-    # Start with a greeting for the first message
-    if len(req.chat) == 1:
-        return CompletionResponse(answer="Hello! How can I help you?")
 
     messages = [{"role": "system", "content": """You are Dino, an assistant who helps users by answering questions concisely.
 You will receive information divided by
@@ -173,10 +180,8 @@ IMPORTANT INSTRUCTIONS:
         token_in = token_usage.get('prompt_tokens',0)
         token_out = token_usage.get('completion_tokens',0)
         user = get_user_by_username(req.username)
-        if user is None:
-            logging.error(f"Chat completion error: could not find any user with this username: {req.username}")
-            return CompletionResponse(error=f"Chat completion error: could not find any user with this username: {req.username}")
-        log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
+        if user:
+            log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
         
         # Check if response indicates no information before returning
         answer = resp.content
@@ -197,100 +202,29 @@ IMPORTANT INSTRUCTIONS:
         logging.error(f"Error in chat completion: {str(e)}")
         return CompletionResponse(error=f"Error in chat completion: {str(e)}")
 
-def embed(emb_llm_type, model, text):
-    logging.info(f"Attempting to embed text with {emb_llm_type} model: {model}")
-    logging.debug(f"Text to embed (first 50 chars): {text[:50]}...")
-
-    embeddings = choose_emb_model(emb_llm_type, model)
-
+def reply_to_prompt(prompt: str, username: str, llm_type: str, model: str) -> str:
+    messages = [
+        {"role": "system", "content": """Sei un esperto di enti non-profit e devi realizzare il rapporto annuale della tua organizzazione.
+Io ti chiederò di scrivere una sezione alla volta, dandoti indicazioni sui contenuti da includere in ciascuna sezione.
+Usa un linguaggio preciso ma non troppo tecnico, che sia comprensibile anche al pubblico generale.
+Non usare elenchi puntati o numerati. Non inserire titoli. Non aggiungere testo all'inizio o alla fine.
+Non aggiungere paragrafi di conclusione o chiusura. Non usare espressioni come "in questo documento" usa invece "in questa sezione".
+Scrivi sempre in italiano e genera l'output solo testo senza markdown o html.
+Se non hai informazioni sufficienti per rispondere non rispondere niente."""},
+        {"role": "user", "content": prompt}
+    ]
+    llm = choose_llm(llm_type, model, temperature=0.8)
     try:
-        logging.info("Attempting to embed query")
-        single_vector = embeddings.embed_query(text)
-        logging.info(f"Successfully embedded text with {emb_llm_type}")
-        logging.debug(f"Embedded vector (first 5 elements): {single_vector[:5]}")
-        return single_vector
+        resp = llm.invoke(messages)
+        # token_usage = resp.response_metadata.get('token_usage', {})
+        # token_in = token_usage.get('prompt_tokens', 0)
+        # token_out = token_usage.get('completion_tokens', 0)
+        # user = get_user_by_username(username)
+        # log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
+        return resp.content
     except Exception as e:
-        logging.error(f"Error embedding text with {emb_llm_type}: {str(e)}")
-        logging.error(f"Error type: {type(e).__name__}")
-        if hasattr(e, 'response'):
-            logging.error(f"Response content: {e.response.content}")
-        if hasattr(e, '__dict__'):
-            logging.error(f"Error attributes: {e.__dict__}")
-        raise ValueError(f"Error embedding text with {emb_llm_type}: {str(e)}")
-
-def connect_to_pinecone (index_name: str):
-    pinecone_api_key = os.environ.get("PINECONE_API_KEY")
-    pc = Pinecone(api_key=pinecone_api_key)
-    index = pc.Index(index_name)
-    return index
-
-def connect_to_vector_db (db_name: str, index_name: str, emb_llm_type: str, emb_model):
-    if db_name == 'pinecone':
-        pinecone_api_key = os.environ.get("PINECONE_API_KEY")
-        pc = Pinecone(api_key=pinecone_api_key)
-        index = pc.Index(index_name)
-        embeddings = choose_emb_model (emb_llm_type, emb_model)
-        vector_store = PineconeVectorStore(index=index, embedding=embeddings)
-        logging.info("VectorStore created")
-        return vector_store
-    elif db_name == 'pgvector':
-        embeddings = choose_emb_model (emb_llm_type, emb_model)
-        connection = "postgresql+psycopg://langchain:langchain@localhost:6024/langchain"
-        vector_store = PGVector(embeddings=embeddings,collection_name=index_name,connection=connection,use_jsonb=True)
-        return vector_store
-
-def find_similar_vectors(text: str, top_k: int, min_similarity: float, namespace: str, emb_llm_type: str, model: str) -> tuple:
-    logging.info(f"Finding similar paragraphs for text: {text[:50]}...")
-    
-    try:
-        
-        """
-        db_name='pinecone'
-        index_name='index'
-        emb_llm_type ='OpenAI'
-        emb_model='text-embedding-ada-002'
-
-        vector_store = connect_to_vector_db(db_name=db_name,index_name=index_name,emb_llm_type=emb_llm_type,emb_model=emb_model)
-        print(vector_store)
-        logging.info("Connected to Vector Database")
-        
-        try:
-            resp = vector_store.similarity_search_with_relevance_scores (text, k=top_k,score_threshold=min_similarity)
-            print(resp)
-            for res, score in resp:
-                print(f"* [SIM={score:3f}] {res.page_content} [{res.metadata}]")
-        except Exception as e:
-            logging.error(f"Error querying the vector database: {str(e)}")
-            return [], [], str(e)
-            """
-        
-        vec = embed(emb_llm_type, model, text)
-        logging.info("Text embedded successfully")
-        #index = connect_to_pinecone("langchain-test-index")
-        index = connect_to_pinecone("index")
-        resp = index.query(
-            vector=vec, 
-            top_k=top_k, 
-            include_metadata=True, 
-            namespace=namespace,
-            min_similarity=min_similarity
-        )
-        if not hasattr(resp, 'matches'):
-            logging.warning("The response from the vector database does not contain 'matches' attribute.")
-            return [], None
-        
-        logging.info(f"Vector Database query completed, found {len(resp.matches)} matches")
-        
-        vectors = []
-        for vec in resp.matches:
-            vectors.append({
-                "similarity": vec.score,
-                "metadata": vec.metadata,
-            })
-        return vectors, None
-    except Exception as e:
-        logging.error(f"Error in find_similar_vectors: {str(e)}")
-        return [], str(e)
+        logging.error(f"Error in prompt completion: {str(e)}")
+        raise e
 
 def audioFormPromptBuild(formSchema, formSchemaExampleData, formSchemaName:str, formSchemaChoices, transcribedAudio:str):
     if not formSchema or not formSchemaExampleData or not formSchemaName or not transcribedAudio:
@@ -340,49 +274,3 @@ def audioFormCompilation(userprompt: str, systemprompt: str, username:str, llm_t
     except Exception as e:
         logging.error(f"Error in audio form compilation: {str(e)}")
         return CompletionResponse(error=f"Error in Audio Form Compilation: {str(e)}")
-
-def reply_to_prompt(prompt, username:str, llm_type: str, model:str):
-    messages = [
-        {"role": "system", "content": "Sei un esperto di enti non-profit e devi realizzare il rapporto annuale della tua organizzazione. Io ti chiederò di scrivere una sezione alla volta, dandoti indicazioni sui contenuti da includere in ciascuna sezione. Usa un linguaggio preciso ma non troppo tecnico, che sia comprensibile anche al pubblico generale. Non usare elenchi puntati o numerati. Non inserire titoli. Non aggiungere testo all’inizio o alla fine. Non aggiungere paragrafi di conclusione o chiusura. Non usare espressioni come “in questo documento” usa invece “in questa sezione”. Scrivi sempre in italiano e genera l'output solo testo senza markdown o html. Se non hai informazioni sufficienti per rispondere non rispondere niente."},
-        {"role": "user", "content": prompt}
-    ]
-
-    llm = choose_llm(llm_type, model, temperature=0.8)
-
-    try:
-        resp = llm.invoke(messages)
-        token_usage = resp.response_metadata.get('token_usage',{})
-        token_in = token_usage.get('prompt_tokens',0)
-        token_out = token_usage.get('completion_tokens',0)
-        user = get_user_by_username(username)
-        # log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
-        return CompletionResponse(answer=resp.content)
-    except Exception as e:
-        logging.error(f"Error in chat completion: {str(e)}")
-        return CompletionResponse(error=f"Error in chat completion: {str(e)}")
-
-def choose_emb_model(emb_llm_type, model):
-    """
-    Choose and initialize the appropriate embeddings model based on the provided type and model.
-
-    :param emb_llm_type: Type of the embeddings model (e.g., 'Mistral', 'Ollama', 'OpenAI')
-    :param model: Model name
-    :return: Initialized embeddings model instance
-    """
-    if emb_llm_type == 'Mistral':
-        mistralai_api_key = os.getenv("MISTRAL_API_KEY")
-        if not mistralai_api_key:
-            logging.error("MISTRAL_API_KEY environment variable is not set")
-            raise ValueError("MISTRAL_API_KEY environment variable is not set")
-        return MistralAIEmbeddings(model=model, api_key=mistralai_api_key)
-    elif emb_llm_type == 'Ollama':
-        return OllamaEmbeddings(model=model,base_url='http://192.168.1.8:11434')
-    elif emb_llm_type == 'OpenAI':
-        openai_api_key = os.getenv("OPENAI_API_KEY")
-        if not openai_api_key:
-            logging.error("OPENAI_API_KEY environment variable is not set")
-            raise ValueError("OPENAI_API_KEY environment variable is not set")
-        return OpenAIEmbeddings(model=model, api_key=openai_api_key)
-    else:
-        logging.error(f"Unsupported emb_llm_type: {emb_llm_type}")
-        raise ValueError(f"Unsupported emb_llm_type: {emb_llm_type}")
