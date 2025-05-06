@@ -15,7 +15,6 @@ from datetime import datetime
 from vector_store import PineconeStore, split_text
 
 matplotlib.use("Agg")  # Use non-interactive backend
-import os
 
 # Import function from ai and database
 import database_pg
@@ -561,18 +560,18 @@ def store_rag_file():
         return str(err), 403, textContentType
     
     text = request.form.get("text") or ""
+    filename = request.form.get("filename") or ""
     url = request.form.get("url") or ""
     namespace = request.form.get("namespace") or ""
 
     mimetype = "text"
-    if not url.endswith(".txt"):
+    if not filename.endswith(".txt"):
         return "Unsupported file type", 400, textContentType
     
     if not text:
         return "Nothing to store", 200, textContentType
     paragraphs = split_text(text)
 
-    filename = os.path.basename(url)
     metadata = {"url": url, "mimetype": mimetype, "source": filename}
     try:
         embeddings = choose_emb_model(COMPLETION_EMBEDDING_MODEL_PROVIDER, COMPLETION_EMBEDDING_MODEL)
