@@ -559,27 +559,46 @@ def store_rag_file():
     if err:
         return str(err), 403, textContentType
     
-    text = request.form.get("text") or ""
-    filename = request.form.get("filename") or ""
+    file = request.files.get("file")
+    if not file:
+        return "File not provided", 400, textContentType
     url = request.form.get("url") or ""
     namespace = request.form.get("namespace") or ""
 
-    mimetype = "text"
-    if not filename.endswith(".txt"):
+    text = ""
+    if file.mimetype.startswith("text"):
+        text = file.stream.read().decode()
+    elif file.mimetype.startswith("audio"):
+        resp = whisper_response(file)
+        if resp.status_code != 200:
+            print(resp.text)
+            return "Error whispering audio", 500, textContentType
+        text = resp.json()["text"]
+    else:
         return "Unsupported file type", 400, textContentType
-    
-    if not text:
-        return "Nothing to store", 200, textContentType
-    paragraphs = split_text(text)
+    if text == "":
+        return "", 200, textContentType
 
-    metadata = {"url": url, "mimetype": mimetype, "source": filename}
+    paragraphs = split_text(text)
+    metadata = {"url": url, "mimetype": file.mimetype, "source": file.filename}
     try:
         embeddings = choose_emb_model(COMPLETION_EMBEDDING_MODEL_PROVIDER, COMPLETION_EMBEDDING_MODEL)
         store = PineconeStore(embeddings, "index", namespace)
         store.store_paragraphs(paragraphs, metadata)
-        return "Success", 200, textContentType
+        return text, 200, textContentType
     except Exception as e:
         return str(e), 500, textContentType
+
+def whisper_response(file):
+    url = f"https://api.deepinfra.com/v1/inference/{WHISPER_MODEL}"
+    headers = {
+        "Authorization": f"bearer {DEEPINFRA_API_KEY}"
+    }
+    files = {
+        'audio': file,
+        'response_format': (None, 'text')
+    }
+    return requests.post(url, headers=headers, files=files)
 
 # Define a route for the '/transcribe' endpoint
 @app.route("/transcribe", methods=["POST"])
@@ -602,19 +621,7 @@ def whisper_parse():
     ):
         return jsonify({"error": "Missing parameters"}), 400
 
-    # Prepare the request
-    url = f'https://api.deepinfra.com/v1/inference/{WHISPER_MODEL}'
-    headers = {
-        "Authorization": f"bearer {DEEPINFRA_API_KEY}"
-    }
-    files = {
-        'audio': request_file,
-        'response_format': (None, 'text')
-    }
-    print(files)
-
-    # Send the request
-    response = requests.post(url, headers=headers, files=files)
+    response = whisper_response(request_file)
     
     if response.status_code == 200:
         result = response.json()
