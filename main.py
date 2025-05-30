@@ -21,7 +21,7 @@ import database_pg
 from database_pg import edit_tokens, validate_api_key
 from dino import dino_authenticate
 import ai
-from ai import audioFormCompilation, audioFormPromptBuild, CompletionResponse
+from ai import audioFormCompilation, audioFormPromptBuild, CompletionResponse, describe_image
 from ai import complete_chat, reply_to_prompt, choose_llm, choose_emb_model
 
 from dotenv import load_dotenv
@@ -52,6 +52,8 @@ COMPLETION_EMBEDDING_MODEL_PROVIDER = os.environ.get(
     "COMPLETION_EMBEDDING_MODEL_PROVIDER"
 )
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL")
+VISION_PROVIDER = os.environ.get("VISION_PROVIDER")
+VISION_MODEL = os.environ.get("VISION_MODEL")
 DEEPINFRA_API_KEY = os.environ.get("DEEPINFRA_API_KEY")
 STRIPE_KEY = os.environ.get("STRIPE_SK_KEY")
 DATACHAT_TOKEN_COST = os.environ.get("DATACHAT_TOKEN_COST")
@@ -562,7 +564,9 @@ def store_rag_file():
     file = request.files.get("file")
     if not file:
         return "File not provided", 400, textContentType
-    url = request.form.get("url") or ""
+    url = request.form.get("url")
+    if not url:
+        return "Url not provided", 400, textContentType
     namespace = request.form.get("namespace") or ""
 
     text = ""
@@ -574,6 +578,8 @@ def store_rag_file():
             print(resp.text)
             return "Error whispering audio", 500, textContentType
         text = resp.json()["text"]
+    elif file.mimetype.startswith("image"):
+        text = describe_image(url, VISION_PROVIDER, VISION_MODEL)
     else:
         return "Unsupported file type", 400, textContentType
     if text == "":

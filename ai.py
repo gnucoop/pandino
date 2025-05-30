@@ -226,6 +226,18 @@ Se non hai informazioni sufficienti per rispondere non rispondere niente."""},
         logging.error(f"Error in prompt completion: {str(e)}")
         raise e
 
+def describe_image(url: str, provider: str, model: str) -> str:
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "descrivi brevemente il contenuto di questa immagine"},
+            {"type": "image_url", "image_url": {"url": url}},
+        ]
+    }]
+    llm = choose_llm(provider, model, temperature=0.8)
+    resp = llm.invoke(messages)
+    return resp.content
+
 def audioFormPromptBuild(formSchema, formSchemaExampleData, formSchemaName:str, formSchemaChoices, transcribedAudio:str):
     if not formSchema or not formSchemaExampleData or not formSchemaName or not transcribedAudio:
         return
