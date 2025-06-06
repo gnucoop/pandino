@@ -8,6 +8,7 @@
 node_modules/
 dist/
 env/
+venv/
 cache/
 exports/
 .env
