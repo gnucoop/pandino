@@ -12,6 +12,7 @@ langchain-google-genai
 langchain_pinecone
 langchain_postgres
 langchain_anthropic
+langchain_text_splitters
 cryptography
 numpy==1.26.4
 scikit-learn
@@ -20,3 +21,4 @@ pinecone
 psycopg
 psycopg_binary
 gunicorn
+pymupdf4llm

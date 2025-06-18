@@ -12,7 +12,10 @@ from file_manager import isImageFilePath, fileToBase64
 import matplotlib
 import secrets
 from datetime import datetime
-from vector_store import PineconeStore, split_text
+from vector_store import PineconeStore
+import tempfile
+import pymupdf4llm
+from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownTextSplitter
 
 matplotlib.use("Agg")  # Use non-interactive backend
 
@@ -569,25 +572,41 @@ def store_rag_file():
         return "Url not provided", 400, textContentType
     namespace = request.form.get("namespace") or ""
 
-    text = ""
-    if file.mimetype.startswith("text"):
-        text = file.stream.read().decode()
-    elif file.mimetype.startswith("audio"):
-        resp = whisper_response(file)
-        if resp.status_code != 200:
-            print(resp.text)
-            return "Error whispering audio", 500, textContentType
-        text = resp.json()["text"]
-    elif file.mimetype.startswith("image"):
-        text = describe_image(url, VISION_PROVIDER, VISION_MODEL)
-    else:
-        return "Unsupported file type", 400, textContentType
-    if text == "":
-        return "", 200, textContentType
-
-    paragraphs = split_text(text)
-    metadata = {"url": url, "mimetype": file.mimetype, "source": file.filename}
     try:
+        text = ""
+        is_markdown = False
+        if file.mimetype == "text/plain":
+            text = file.stream.read().decode()
+        elif file.mimetype == "text/markdown":
+            text = file.stream.read().decode()
+            is_markdown = True
+        elif file.mimetype == "application/pdf":
+            with tempfile.NamedTemporaryFile(suffix=".pdf") as temp:
+                file.save(temp.name)
+                text = pymupdf4llm.to_markdown(temp.name)
+            is_markdown = True
+        elif file.mimetype.startswith("audio"):
+            resp = whisper_response(file)
+            if resp.status_code != 200:
+                print(resp.text)
+                return "Error whispering audio", 500, textContentType
+            text = resp.json()["text"]
+        elif file.mimetype.startswith("image"):
+            text = describe_image(url, VISION_PROVIDER, VISION_MODEL)
+        else:
+            return "Unsupported file type", 400, textContentType
+        if text == "":
+            return "", 200, textContentType
+
+        paragraphs = [""]
+        if is_markdown:
+            splitter = MarkdownTextSplitter(chunk_size=900, chunk_overlap=100)
+            paragraphs = splitter.split_text(text)
+        else:
+            splitter = RecursiveCharacterTextSplitter(chunk_size=900, chunk_overlap=100)
+            paragraphs = splitter.split_text(text)
+
+        metadata = {"url": url, "mimetype": file.mimetype, "source": file.filename}
         embeddings = choose_emb_model(COMPLETION_EMBEDDING_MODEL_PROVIDER, COMPLETION_EMBEDDING_MODEL)
         store = PineconeStore(embeddings, "index", namespace)
         store.store_paragraphs(paragraphs, metadata)
