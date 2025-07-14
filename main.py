@@ -71,7 +71,7 @@ VISION_PROVIDER = os.environ.get("VISION_PROVIDER")
 VISION_MODEL = os.environ.get("VISION_MODEL")
 DEEPINFRA_API_KEY = os.environ.get("DEEPINFRA_API_KEY")
 STRIPE_KEY = os.environ.get("STRIPE_SK_KEY")
-DATACHAT_TOKEN_COST = os.environ.get("DATACHAT_TOKEN_COST")
+DATACHAT_TOKEN_COST = int(os.environ.get("DATACHAT_TOKEN_COST", "1"))
 COMPLETION_TOKEN_COST = os.environ.get("COMPLETION_TOKEN_COST")
 PROMPT_TOKEN_COST = os.environ.get("PROMPT_TOKEN_COST")
 AUDIO_FORM_TOKEN_COST = os.environ.get("AUDIO_FORM_TOKEN_COST")
@@ -265,6 +265,12 @@ def endChat():
         user_name_header.replace(" ", "_").strip() if user_name_header != None else None
     )
 
+    if not api_key:
+        return jsonify({"error": "Missing X-API-KEY header"}), 400
+
+    if not user_email:
+        return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
+
     assert_valid_api_key(api_key, user_email)
 
     # Check if all required parameters are present
@@ -292,6 +298,12 @@ def startChat():
         else None
     )
 
+    if not api_key:
+        return jsonify({"error": "Missing X-API-KEY header"}), 400
+
+    if not user_email:
+        return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
+
     assert_valid_api_key(api_key, user_email)
 
     # Extract necessary parameters from the request FORMDATA
@@ -314,16 +326,24 @@ def startChat():
 
     # Checks if the User's tokens are enough for this operation
     user_tokens = database_pg.get_user_tokens(user_email)
+
+    if user_tokens is None:
+        return jsonify({"error": "Could not retrieve user tokens"}), 500
+
     if int(DATACHAT_TOKEN_COST) > user_tokens:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
     # Read the data from the provided CSV file
-    data = pd.read_csv(request_file, sep=",")
+    data = pd.read_csv(request_file.stream, sep=",")
     # Initialize the language model based on the provided type
     llm = choose_llm(llm_type, model_name)
     # Initialize the agent with the data and configuration
     try:
         agent = createAgent(api_key, data, llm, user_name)
+
+        if agent is None:
+            return jsonify({"error": "Agent creation failed"}), 500
+
         agentResponse = {"Agent active": agent.conversation_id}
 
         question_templates = {
