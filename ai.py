@@ -7,6 +7,7 @@ from database_pg import get_user_by_username, log_token_usage
 from vector_store import VectorStore
 
 # Import specific chat models from their respective libraries
+from langchain_core.language_models import BaseChatModel
 from langchain_groq.chat_models import ChatGroq
 from langchain_openai import ChatOpenAI
 from langchain_mistralai import ChatMistralAI
@@ -40,7 +41,9 @@ class CompletionResponse:
         self.vectors = vectors
 
 
-def choose_llm(llm_type, model, temperature=0, seed=26, base_url=None, api_key=None):
+def choose_llm(
+    llm_type, model, temperature=0, seed=26, base_url=None, api_key=None
+) -> BaseChatModel:
     """
     Choose and initialize the appropriate LLM based on the provided type and model.
 
