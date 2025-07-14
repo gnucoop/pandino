@@ -1,19 +1,18 @@
-# Import necessary libraries for the Flask application
-import math
+# === Built-in ===
 import os
-import warnings
+import math
+import secrets
+import tempfile
+from datetime import datetime
+from dotenv import load_dotenv
+
+# === Third-party ===
 from flask import Flask, request, jsonify, abort
 from flask_cors import CORS
 import pandas as pd
 from pandasai import Agent
-import requests
-from agent_manager import getAgent, createAgent, deleteAgent
-from file_manager import isImageFilePath, fileToBase64
 import matplotlib
-import secrets
-from datetime import datetime
-from vector_store import PGVectorStore, merge_segments
-import tempfile
+import requests
 import pymupdf4llm
 from typing import List
 from langchain_core.documents import Document
@@ -22,9 +21,10 @@ from langchain_text_splitters import (
     MarkdownTextSplitter,
 )
 
-matplotlib.use("Agg")  # Use non-interactive backend
-
-# Import function from ai and database
+# === Local modules ===
+from agent_manager import getAgent, createAgent, deleteAgent
+from file_manager import isImageFilePath, fileToBase64
+from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
 from database_pg import edit_tokens, validate_api_key
 from dino import dino_authenticate
@@ -84,10 +84,10 @@ def welcome():
 
 
 # Validates an API Key associated to an user email
-def validate_api_key(api_key, user_email):
+def assert_valid_api_key(api_key: str, user_email: str) -> None:
     if not api_key:
-        abort(403)
-    result, message = database_pg.validate_api_key(api_key, user_email)
+        abort(403, description="Missing API key")
+    result, message = validate_api_key(api_key, user_email)
     if not result:
         if "expired" in message:
             abort(403, description="API key expired")
@@ -154,6 +154,8 @@ def editTokens():
         app.logger.error(f"Unexpected error in edit tokens: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
 
+    return jsonify({"error": "Unhandled case in editTokens"}), 500
+
 
 # Define a route for the '/edittokens' endpoint that accepts POST requests
 @app.route("/getusertokens", methods=["POST"])
@@ -164,7 +166,7 @@ def getUserTokens():
         return jsonify({"error": "Missing X-API-KEY header"}), 400
     if not user_email:
         return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
-    validate_api_key(api_key, user_email)
+    assert_valid_api_key(api_key, user_email)
     tokens = database_pg.get_user_tokens(user_email)
     return jsonify({"response": {"tokens": tokens}}), 200
 
@@ -191,7 +193,9 @@ def addNewUser():
         generatedKey = secrets.token_urlsafe(8)
         currentDate = datetime.now()
         expirationDate = currentDate.replace(year=currentDate.year + 2)
-        addUserResult = database_pg.add_user(user_email, generatedKey, expirationDate)
+        addUserResult = database_pg.add_user(
+            user_email, generatedKey, expirationDate.isoformat()
+        )
         if addUserResult is None:
             return (
                 jsonify(
@@ -240,7 +244,7 @@ def validate():
         return jsonify({"error": "Missing X-API-KEY header"}), 400
     if not user_email:
         return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
-    result, message = database_pg.validate_api_key(api_key, user_email)
+    result, message = validate_api_key(api_key, user_email)
 
     if not result:
         if "expired" in message:
@@ -260,7 +264,8 @@ def endChat():
     user_name = (
         user_name_header.replace(" ", "_").strip() if user_name_header != None else None
     )
-    validate_api_key(api_key, user_email)
+
+    assert_valid_api_key(api_key, user_email)
 
     # Check if all required parameters are present
     if not user_name:
@@ -281,8 +286,13 @@ def startChat():
     api_key = request.headers.get("X-API-KEY")
     user_name_header = request.headers.get("X-USER-NAME")
     user_email = request.headers.get("X-USER-EMAIL")
-    user_name = user_name_header.replace(" ", "_").strip()
-    validate_api_key(api_key, user_email)
+    user_name = (
+        user_name_header.replace(" ", "_").strip()
+        if user_name_header is not None
+        else None
+    )
+
+    assert_valid_api_key(api_key, user_email)
 
     # Extract necessary parameters from the request FORMDATA
     request_model_name = request.form.get("model_name")
@@ -348,7 +358,7 @@ def startChat():
 def dataChat():
     api_key = request.headers.get("X-API-KEY")
     user_email = request.headers.get("X-USER-EMAIL")
-    validate_api_key(api_key, user_email)
+    assert_valid_api_key(api_key, user_email)
     chat = request.json.get("chat")
     agent: Agent | None = getAgent(api_key)
 
@@ -419,7 +429,7 @@ def dataChat():
 def buyReport():
     api_key = request.headers.get("X-API-KEY")
     user_email = request.headers.get("X-USER-EMAIL")
-    validate_api_key(api_key, user_email)
+    assert_valid_api_key(api_key, user_email)
     prompts = request.json.get("prompts")
 
     # Check if the Chat parameter is present
@@ -458,7 +468,7 @@ def completion_handler():
             )
 
         api_key = request.headers.get("X-API-KEY")
-        validate_api_key(api_key, r["username"])
+        assert_valid_api_key(api_key, r["username"])
 
         # Checks if the User's tokens are enough for this operation
         user_tokens = database_pg.get_user_tokens(r["username"])
@@ -562,7 +572,7 @@ def prompt_handler():
     if not username:
         return "Username not provided", 400, textContentType
 
-    validate_api_key(api_key, username)
+    assert_valid_api_key(api_key, username)
 
     # Checks if the User's tokens are enough for this operation
     user_tokens = database_pg.get_user_tokens(username)
@@ -676,7 +686,7 @@ def whisper_parse():
     user_name_header = request.headers.get("X-USER-NAME")
     user_email = request.headers.get("X-USER-EMAIL")
     user_name = user_name_header.replace(" ", "_").strip()
-    validate_api_key(api_key, user_email)
+    assert_valid_api_key(api_key, user_email)
 
     # Extract necessary parameters from the request FORMDATA
     request_file = request.files.get("file")
@@ -702,7 +712,7 @@ def whisper_parse():
 def audio_form_compile():
     api_key = request.headers.get("X-API-KEY")
     user_email = request.headers.get("X-USER-EMAIL")
-    validate_api_key(api_key, user_email)
+    assert_valid_api_key(api_key, user_email)
 
     model_name = AUDIO_MODEL
     llm_type = AUDIO_PROVIDER
