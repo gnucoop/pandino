@@ -19,7 +19,7 @@ numpy==1.26.4
 scikit-learn
 seaborn
 pinecone
-psycopg
-psycopg_binary
+psycopg==3.2.6
+psycopg_binary==3.2.6
 gunicorn
 pymupdf4llm
