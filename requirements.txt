@@ -4,6 +4,7 @@ python-dotenv==1.0.0
 pandas
 pandasai
 tabulate
+langchain_core
 langchain_groq
 langchain_ollama
 langchain_openai
