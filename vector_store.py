@@ -8,6 +8,7 @@ import logging
 from pinecone import Pinecone
 from dotenv import load_dotenv
 
+from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_postgres.vectorstores import PGVector
 
@@ -20,7 +21,7 @@ class VectorStore(ABC):
     def find_similar_vectors(self, text: str, top_k: int, min_similarity: float) -> List[dict]:
         pass
     @abstractmethod
-    def store_paragraphs(self, paragraphs: List[str], metadata: dict) -> None:
+    def store_paragraphs(self, paragraphs: List[Document]) -> None:
         pass
 
 class PineconeStore(VectorStore):
@@ -54,7 +55,7 @@ class PineconeStore(VectorStore):
         except Exception as e:
             raise RuntimeError(f"Error in find_similar_vectors: {str(e)}")
 
-    def store_paragraphs(self, paragraphs: List[str], metadata: dict) -> None:
+    def store_paragraphs(self, paragraphs: List[Document]) -> None:
         batch_size = 100
         for start in range(0, len(paragraphs), batch_size):
             end = min(start + batch_size, len(paragraphs))
@@ -71,14 +72,14 @@ class PineconeStore(VectorStore):
             except Exception:
                 pass
 
-            vectors = self.embeddings.embed_documents(batch)
+            vectors = self.embeddings.embed_documents([par.page_content for par in batch])
             logging.info(f"Successfully created {len(vectors)} embeddings")
 
             pc_vectors = [
                 {
                     "id": ids[i],
                     "values": vectors[i],
-                    "metadata": metadata | {"text": batch[i]},
+                    "metadata": batch[i].metadata | {"text": batch[i].page_content},
                 }
                 for i in range(len(batch))
             ]
@@ -118,7 +119,7 @@ class PGVectorStore(VectorStore):
         except Exception as e:
             raise RuntimeError(f"Error in find_similar_vectors: {str(e)}")
 
-    def store_paragraphs(self, paragraphs: List[str], metadata: dict) -> None:
+    def store_paragraphs(self, paragraphs: List[Document]) -> None:
         batch_size = 100
         for start in range(0, len(paragraphs), batch_size):
             end = min(start + batch_size, len(paragraphs))
@@ -137,8 +138,8 @@ class PGVectorStore(VectorStore):
                         continue
                     new_docs.append({
                         "id": id,
-                        "page_content": par,
-                        "metadata": metadata | {"text": par},
+                        "page_content": par.page_content,
+                        "metadata": par.metadata | {"text": par.page_content},
                     })
                 if not new_docs:
                     logging.info("Batch already present")
@@ -174,5 +175,5 @@ def hash_text(t: str) -> str:
     hash_bytes = hashlib.sha256(t.encode('utf-8')).digest()
     return base64.b64encode(hash_bytes).decode('utf-8')
 
-def paragraph_id(paragraph: str, namespace: str) -> str:
-    return f"{namespace}:{hash_text(paragraph)}"
+def paragraph_id(paragraph: Document, namespace: str) -> str:
+    return f"{namespace}:{hash_text(paragraph.page_content)}"
