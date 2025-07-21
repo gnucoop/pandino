@@ -12,7 +12,7 @@ from file_manager import isImageFilePath, fileToBase64
 import matplotlib
 import secrets
 from datetime import datetime
-from vector_store import PineconeStore
+from vector_store import PineconeStore, merge_segments
 import tempfile
 import pymupdf4llm
 from typing import List
@@ -574,8 +574,10 @@ def store_rag_file():
         return "Url not provided", 400, textContentType
     namespace = request.form.get("namespace") or ""
 
-    tx_split = RecursiveCharacterTextSplitter(chunk_size=900, chunk_overlap=100)
-    md_split = MarkdownTextSplitter(chunk_size=900, chunk_overlap=100)
+    chunk_size = 900
+    chunk_overlap = 100
+    tx_split = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    md_split = MarkdownTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
     metadata = {"url": url, "mimetype": file.mimetype, "source": file.filename}
     text = ""
@@ -597,8 +599,13 @@ def store_rag_file():
             if resp.status_code != 200:
                 print(resp.text)
                 return "Error whispering audio", 500, textContentType
-            text = resp.json()["text"]
-            paragraphs = tx_split.split_documents([Document(page_content=text, metadata=metadata)])
+            json = resp.json()
+            text = json["text"]
+            segments = [
+                Document(page_content=s["text"], metadata=metadata | {"start_time": s["start"]})
+                for s in json["segments"]
+            ]
+            paragraphs = merge_segments(segments, chunk_size)
         elif file.mimetype.startswith("image"):
             text = describe_image(url, VISION_PROVIDER, VISION_MODEL)
             paragraphs = tx_split.split_documents([Document(page_content=text, metadata=metadata)])

@@ -170,6 +170,19 @@ def split_text(document: str, paragraph_len: int = 900) -> list[str]:
                 par = ""
     return paragraphs
 
+def merge_segments(segments: List[Document], paragraph_len: int = 900) -> list[Document]:
+    segments = segments.copy()
+    if len(segments) <= 1:
+        return segments
+    segments.reverse()
+    docs: List[Document] = []
+    while len(segments) > 0:
+        doc = segments.pop()
+        while len(doc.page_content) < paragraph_len and len(segments) > 0:
+            doc.page_content += segments.pop().page_content
+        docs.append(doc)
+    return docs
+
 # Hash a string using SHA256 and encode it in base64
 def hash_text(t: str) -> str:
     hash_bytes = hashlib.sha256(t.encode('utf-8')).digest()
