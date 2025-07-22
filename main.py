@@ -592,8 +592,14 @@ def store_rag_file():
         elif file.mimetype == "application/pdf":
             with tempfile.NamedTemporaryFile(suffix=".pdf") as temp:
                 file.save(temp.name)
-                text = pymupdf4llm.to_markdown(temp.name)
-            paragraphs = md_split.split_documents([Document(page_content=text, metadata=metadata)])
+                pages = pymupdf4llm.to_markdown(temp.name, page_chunks=True)
+                page_texts = [p["text"] for p in pages]
+                text = "".join(page_texts)
+                page_docs = [
+                    Document(page_content=p["text"], metadata=metadata|{"page": p["metadata"]["page"]})
+                    for p in pages
+                ]
+                paragraphs = md_split.split_documents(page_docs)
         elif file.mimetype.startswith("audio"):
             resp = whisper_response(file)
             if resp.status_code != 200:
