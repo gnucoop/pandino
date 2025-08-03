@@ -676,8 +676,8 @@ def audio_form_compile():
     user_email = request.headers.get("X-USER-EMAIL")
     validate_api_key(api_key, user_email)
 
-    model_name = PROMPT_MODEL
-    llm_type = PROMPT_PROVIDER
+    model_name = AUDIO_MODEL
+    llm_type = MODEL_PROVIDER
 
     # Extract necessary parameters from the request FORMDATA
     formSchema = request.json.get("schema")
