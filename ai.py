@@ -57,7 +57,7 @@ def choose_llm(llm_type, model, temperature=0, seed=26, base_url=None, api_key=N
     elif llm_type == 'Together':
         return ChatOpenAI(model_name=model, temperature=temperature, seed=seed, base_url='https://api.together.xyz/v1', api_key=os.environ['TOGETHER_API_KEY'])
     elif llm_type == 'Google':
-        return ChatGoogleGenerativeAI(model=model, temperature=temperature, seed=seed, google_api_key=os.environ['GOOGLE_API_KEY'])
+        return ChatGoogleGenerativeAI(model=model, temperature=temperature, google_api_key=os.environ['GOOGLE_API_KEY'])
     elif llm_type == 'Mistral':
         return ChatMistralAI(model_name=model, temperature=temperature, seed=seed, api_key=os.environ['MISTRAL_API_KEY'])
     elif llm_type == 'Anthropic':
@@ -273,7 +273,7 @@ def audioFormCompilation(userprompt: str, systemprompt: str, username:str, llm_t
         {"role": "user", "content": userprompt}
     ]
 
-    llm = choose_llm(llm_type, model, temperature=0.8)
+    llm = choose_llm(llm_type, model, temperature=0)
 
     try:
         resp = llm.invoke(messages)
