@@ -257,7 +257,8 @@ def audioFormPromptBuild(formSchema, formSchemaExampleData, formSchemaName:str, 
     Ogni node è un oggetto contraddistinto da name, label, fieldType, nodeType, hint e choicesOriginRef.
     Per ogni node con nodeType = 0:
         ( 
-        se il suo fieldType è diverso da 4 o 5 controllerai il suo "name" e se corrisponde ad una chiave nel formSchemaExampleData sovrascriverai il valore di quella chiave nel formSchemaExampleData ricavando il suo valore dal testo transcribedAudio,
+        se il suo fieldType è diverso da 3,4 o 5 controllerai il suo "name" e se corrisponde ad una chiave nel formSchemaExampleData sovrascriverai il valore di quella chiave nel formSchemaExampleData ricavando il suo valore dal testo transcribedAudio,
+        se il suo fieldType è 3 controllerai il suo "name" scegliendo il "value" tra true o false in base al testo transcribedAudio.
         se il suo fieldType è 4 o 5 controllerai il suo "name" e se corrisponde ad una chiave nel formSchemaExampleData sovrascriverai il valore di quella chiave nel formSchemaExampleData ricavando il suo valore dalle formSchemaChoices con "name" uguale al "choicesOriginRef" del node, scegliendo il "value" di una delle "choices" in base al testo transcribedAudio.
         )
     Poi ritornerai il nuovo formSchemaExampleData come risposta.

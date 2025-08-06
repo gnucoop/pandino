@@ -50,6 +50,8 @@ DATACHAT_MODEL = os.environ.get("DATACHAT_MODEL")
 DATACHAT_PROVIDER = os.environ.get("DATACHAT_PROVIDER")
 PROMPT_MODEL = os.environ.get("PROMPT_MODEL")
 PROMPT_PROVIDER = os.environ.get("PROMPT_PROVIDER")
+AUDIO_MODEL = os.environ.get("AUDIO_MODEL")
+AUDIO_PROVIDER = os.environ.get("AUDIO_PROVIDER")
 COMPLETION_MODEL = os.environ.get("COMPLETION_MODEL")
 COMPLETION_MODEL_PROVIDER = os.environ.get("COMPLETION_MODEL_PROVIDER")
 COMPLETION_EMBEDDING_MODEL = os.environ.get("COMPLETION_EMBEDDING_MODEL")
@@ -677,7 +679,7 @@ def audio_form_compile():
     validate_api_key(api_key, user_email)
 
     model_name = AUDIO_MODEL
-    llm_type = MODEL_PROVIDER
+    llm_type = AUDIO_PROVIDER
 
     # Extract necessary parameters from the request FORMDATA
     formSchema = request.json.get("schema")
