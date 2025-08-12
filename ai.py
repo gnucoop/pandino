@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from dotenv import load_dotenv
 from pandasai.llm import BambooLLM
 from database_pg import get_user_by_username, log_token_usage
@@ -11,6 +12,7 @@ from langchain_openai import ChatOpenAI
 from langchain_mistralai import ChatMistralAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_anthropic import ChatAnthropic
+
 
 # Import specific embeddings models from their respective libraries
 from langchain_mistralai import MistralAIEmbeddings
@@ -64,11 +66,11 @@ def choose_llm(llm_type, model, temperature=0, seed=26, base_url=None, api_key=N
         model_kwargs = {'seed': seed}
         return ChatAnthropic(model_name=model, temperature=temperature, api_key=os.environ['ANTHROPIC_API_KEY'])
     elif llm_type == 'OpenAI':
-        return ChatOpenAI(model_name=model, temperature=temperature, seed=seed, api_key=os.environ['OPENAI_API_KEY'])
+        return ChatOpenAI(model_name=model, temperature=1, seed=seed, api_key=os.environ['OPENAI_API_KEY'])
     elif llm_type == 'Ollama':
-        return ChatOpenAI(model_name=model, temperature=temperature, base_url='http://192.168.1.8:11434/v1', api_key='ollama')
+        return ChatOpenAI(model_name=model, temperature=temperature, base_url='http://192.168.1.9:11434/v1', api_key='ollama')
     elif llm_type == 'Llama.cpp':
-        return ChatOpenAI(model_name=model, temperature=temperature, base_url='http://192.168.1.8:8080/v1', api_key='ollama')
+        return ChatOpenAI(model_name=model, temperature=temperature, base_url='http://192.168.1.9:8080/v1', api_key='ollama')
     else:
         raise ValueError(f"Unsupported llm_type: {llm_type}")
 
@@ -87,7 +89,7 @@ def choose_emb_model(emb_llm_type, emb_model):
             raise ValueError("MISTRAL_API_KEY environment variable is not set")
         return MistralAIEmbeddings(model=emb_model, api_key=mistralai_api_key)
     elif emb_llm_type == 'Ollama':
-        return OllamaEmbeddings(model=emb_model,base_url='http://192.168.1.8:11434')
+        return OllamaEmbeddings(model=emb_model,base_url='http://192.168.1.9:11434')
     elif emb_llm_type == 'OpenAI':
         openai_api_key = os.getenv("OPENAI_API_KEY")
         if not openai_api_key:
@@ -239,31 +241,61 @@ def describe_image(url: str, provider: str, model: str) -> str:
     return resp.content
 
 def audioFormPromptBuild(formSchema, formSchemaExampleData, formSchemaName:str, formSchemaChoices, transcribedAudio:str):
+    
     if not formSchema or not formSchemaExampleData or not formSchemaName or not transcribedAudio:
         return
+
+    formSchemaExampleData = (
+        "{{'case_name': string, "
+        "'dob': date, "
+        "'eta': integer, "
+        "'migrante': boolean, "
+        "'problemi': multichoice, "
+        "'rate_visita': range, "
+        "'commenti': text, "
+        "'trascrizione_integrale': text}}"
+    )
+
+    formFieldsDescrition = (
+        "{{'case_name': E' il nome della persona di cui stiamo raccogliendo le informazioni "
+        "'dob': E' la data di nascita della persone di cui stiamo raccogliendo le informazioni "
+        "'eta': E' l'età della persona di cui stiamo raccogliendo le informazioni"
+        "'migrante': Indica se la persona è migrante o meno"
+        "'problemi': Seleziona tutti i problemi della persona di cui stiamo raccogliendo le informazioni"
+        "'rate_visita': Valuta il rating della visita analizzando il campo commenti"
+        "'commenti': Sono le informazioni contenute nella registrazione che non riguardano campi strutturati del form"
+        "'trascrizione_integrale': text}}"
+    )
+
     system = f"""
-    Rispondi solo in formato JSON.
-    Quando ti verrà chiesto di fare riferimento al formSchema farai riferimento a questo: {formSchema}.
-    Quando ti verrà chiesto di fare riferimento al formSchemaExampleData farai riferimento a questo: {formSchemaExampleData}.
-    Quando ti verrà chiesto di fare riferimento al formSchemaName farai riferimento a questo: {formSchemaName}.
-    Quando ti verrà chiesto di fare riferimento alle formSchemaChoices farai riferimento a queste: {formSchemaChoices}.
-    Quando ti verrà chiesto di fare riferimento al transcribedAudio farai riferimento a questo: {transcribedAudio}.
+    Sei un assistente specializzato nell'estrazione di dati da trascrizioni audio.
+    Rispondi ESCLUSIVAMENTE in formato JSON valido.
+    Non aggiungere commenti, spiegazioni o testo aggiuntivo.
     """
 
     user = f"""
-    Questa è la struttura di un form JSON: {formSchemaName} Il nome del form è {formSchema}.
-    Questo è un esempio di form compilato, coi nomi dei campi come chiavi e le loro label come valori: {formSchemaExampleData}
-    Dentro il formSchema troverai degli array di "nodes".
-    Ogni node è un oggetto contraddistinto da name, label, fieldType, nodeType, hint e choicesOriginRef.
-    Per ogni node con nodeType = 0:
-        ( 
-        se il suo fieldType è diverso da 3,4 o 5 controllerai il suo "name" e se corrisponde ad una chiave nel formSchemaExampleData sovrascriverai il valore di quella chiave nel formSchemaExampleData ricavando il suo valore dal testo transcribedAudio,
-        se il suo fieldType è 3 controllerai il suo "name" scegliendo il "value" tra true o false in base al testo transcribedAudio.
-        se il suo fieldType è 4 o 5 controllerai il suo "name" e se corrisponde ad una chiave nel formSchemaExampleData sovrascriverai il valore di quella chiave nel formSchemaExampleData ricavando il suo valore dalle formSchemaChoices con "name" uguale al "choicesOriginRef" del node, scegliendo il "value" di una delle "choices" in base al testo transcribedAudio.
-        )
-    Poi ritornerai il nuovo formSchemaExampleData come risposta.
-    """
+    DATI INPUT:
+    Schema form: {formSchemaName}
+    Opzioni disponibili: {formSchemaChoices}
+    Template di output: {formSchemaExampleData}
+    Descrizione dei campi: {formFieldsDescrition}
+    Trascrizione audio: {transcribedAudio}
+    
+    ISTRUZIONI:
+    Compila il template JSON utilizzando SOLO le informazioni dalla trascrizione.
 
+    REGOLE PER CAMPO:
+    - boolean: true/false basato sulla trascrizione
+    - multichoice: array di valori da "Opzioni disponibili". Se menzionata opzione non presente e se tra le Opzioni disponibili esiste "altro", includi "altro"
+    - singlechoice: array di valori da "Opzioni disponibili". Se menzionata opzione non presente e se tra le Opzioni disponibili esiste "altro", includi "altro"
+    - date: formato YYYY-MM-DD
+    - text/string: testo estratto dalla trascrizione
+    - range: valore numerico
+    - number: valore numerico estratto dalla trascrizione
+    - Se informazione è mancante tralascia il campo e non mettere null
+
+    OUTPUT: JSON compilato seguendo il template fornito.
+    """
     return {'systemprompt': system, 'userprompt': user}
 
 def audioFormCompilation(userprompt: str, systemprompt: str, username:str, llm_type: str, model:str):
@@ -273,16 +305,21 @@ def audioFormCompilation(userprompt: str, systemprompt: str, username:str, llm_t
         {"role": "system", "content": systemprompt},
         {"role": "user", "content": userprompt}
     ]
-
+    print(messages)
     llm = choose_llm(llm_type, model, temperature=0)
-
+    
     try:
         resp = llm.invoke(messages)
         token_usage = resp.response_metadata.get('token_usage',{})
         token_in = token_usage.get('prompt_tokens',0)
         token_out = token_usage.get('completion_tokens',0)
         user = get_user_by_username(username)
-        # log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
+        log_token_usage(user_id=user.get("id"), token_input=token_in, token_output=token_out, model=model, provider=llm_type)
+        #print(resp.content)
+        #clean = re.sub(r"<think>.*?</think>\n?", "", resp.content, flags=re.DOTALL).strip()
+        #answer = clean if clean else resp.content
+        #print(answer)
+        #return answer
         return resp.content
     except Exception as e:
         logging.error(f"Error in audio form compilation: {str(e)}")

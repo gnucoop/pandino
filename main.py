@@ -12,7 +12,7 @@ from file_manager import isImageFilePath, fileToBase64
 import matplotlib
 import secrets
 from datetime import datetime
-from vector_store import PineconeStore, merge_segments
+from vector_store import PGVectorStore, merge_segments
 import tempfile
 import pymupdf4llm
 from typing import List
@@ -474,10 +474,11 @@ def completion_handler():
         emb_model = COMPLETION_EMBEDDING_MODEL
 
         embeddings = choose_emb_model(emb_llm_type, emb_model)
-        store = PineconeStore(embeddings, "index", namespace)
+        store = PGVectorStore(embeddings, namespace)
         resp = complete_chat(chat_request, store, llm_type, model)
-        for vec in resp.vectors:
-            vec['similarity'] += 0.3
+        if resp and hasattr(resp, 'vectors') and resp.vectors:
+            for vec in resp.vectors:
+                vec['similarity'] += 0.3
         if isinstance(resp, CompletionResponse):
             if resp.error:
                 return jsonify({"error": f"Chat completion error: {resp.error}"}), 200
@@ -623,7 +624,7 @@ def store_rag_file():
             return "", 200, textContentType
 
         embeddings = choose_emb_model(COMPLETION_EMBEDDING_MODEL_PROVIDER, COMPLETION_EMBEDDING_MODEL)
-        store = PineconeStore(embeddings, "index", namespace)
+        store = PGVectorStore(embeddings, "index", namespace)
         store.store_paragraphs(paragraphs)
         return text, 200, textContentType
     except Exception as e:
