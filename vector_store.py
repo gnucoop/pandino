@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from langchain_postgres.vectorstores import PGVector
+from langchain_postgres import PGVector
 
 load_dotenv()
 
@@ -91,7 +91,7 @@ class PineconeStore(VectorStore):
 
 class PGVectorStore(VectorStore):
     def __init__(self, embeddings: Embeddings, collection_name: str):
-        connection = "postgresql+psycopg://langchain:langchain@localhost:6024/langchain"
+        connection = "postgresql+psycopg://neondb_owner:x2ldVgqkZcX1@ep-holy-leaf-a2htjt5f.eu-central-1.aws.neon.tech/neondb"
         self.collection = PGVector(
             embeddings=embeddings,
             collection_name=collection_name,
@@ -118,7 +118,7 @@ class PGVectorStore(VectorStore):
             return vectors
         except Exception as e:
             raise RuntimeError(f"Error in find_similar_vectors: {str(e)}")
-
+        
     def store_paragraphs(self, paragraphs: List[Document]) -> None:
         batch_size = 100
         for start in range(0, len(paragraphs), batch_size):
@@ -126,29 +126,78 @@ class PGVectorStore(VectorStore):
 
             batch = paragraphs[start:end]
             ids = [paragraph_id(par, "") for par in batch]
+            
             try:
+                # Get existing documents
                 existing_docs = self.collection.get_by_ids(ids)
-                existing_ids = {doc.id for doc in existing_docs}
+                
+                # Extract existing IDs - the exact method depends on your PGVector implementation
+                # Option 1: If the returned docs have id in metadata
+                existing_ids = {doc.metadata.get('id') for doc in existing_docs if doc.metadata.get('id')}
+                
+                # Option 2: If get_by_ids returns a dict mapping ids to docs
+                # existing_ids = set(existing_docs.keys()) if isinstance(existing_docs, dict) else set()
+                
+                # Option 3: If you need to compare with the original ids list
+                # existing_ids = set(ids[:len(existing_docs)]) if existing_docs else set()
 
                 new_docs = []
                 for i, par in enumerate(batch):
-                    id = ids[i]
-                    if id in existing_ids:
-                        # Skipping already existing paragraph
+                    doc_id = ids[i]
+                    if doc_id in existing_ids:
+                        logging.info(f"Skipping existing document with ID: {doc_id}")
                         continue
-                    new_docs.append({
-                        "id": id,
-                        "page_content": par.page_content,
-                        "metadata": par.metadata | {"text": par.page_content},
-                    })
+                    
+                    # Create Document objects instead of dictionaries
+                    new_doc = Document(
+                        page_content=par.page_content,
+                        metadata=par.metadata | {"text": par.page_content, "id": doc_id}
+                    )
+                    new_docs.append(new_doc)
+                
                 if not new_docs:
                     logging.info("Batch already present")
                     continue
 
-                self.collection.add_documents(new_docs)
+                # Add documents with their IDs
+                self.collection.add_documents(new_docs, ids=ids[-len(new_docs):])
                 logging.info(f"Successfully added {len(new_docs)} new documents to PGVector")
+                
             except Exception as e:
+                logging.error(f"Error in batch starting at {start}: {str(e)}")
                 raise RuntimeError(f"Error storing paragraphs to PGVector: {e}")
+#    def store_paragraphs(self, paragraphs: List[Document]) -> None:
+#        batch_size = 100
+#        for start in range(0, len(paragraphs), batch_size):
+#            end = min(start + batch_size, len(paragraphs))#
+#
+#            batch = paragraphs[start:end]
+#            ids = [paragraph_id(par, "") for par in batch]
+#            try:
+#                existing_docs = self.collection.get_by_ids(ids)
+#                existing_ids = {doc.id for doc in existing_docs}#
+#
+#                new_docs = []
+#                for i, par in enumerate(batch):
+#                    id = ids[i]
+#                    if id in existing_ids:
+#                        # Skipping already existing paragraph
+#                        continue
+#                    new_docs.append({
+#                        "id": id,
+#                        "page_content": par.page_content,
+#                        "metadata": par.metadata | {"text": par.page_content},
+#                    })
+#                if not new_docs:
+#                    logging.info("Batch already present")
+#                    continue#
+#
+#                self.collection.add_documents(new_docs)
+#                logging.info(f"Successfully added {len(new_docs)} new documents to PGVector")
+#            except Exception as e:
+#                raise RuntimeError(f"Error storing paragraphs to PGVector: {e}")
+
+
 
 def split_text(document: str, paragraph_len: int = 900) -> list[str]:
     if len(document) <= paragraph_len*2:
