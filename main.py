@@ -624,7 +624,7 @@ def store_rag_file():
             return "", 200, textContentType
 
         embeddings = choose_emb_model(COMPLETION_EMBEDDING_MODEL_PROVIDER, COMPLETION_EMBEDDING_MODEL)
-        store = PGVectorStore(embeddings, "index", namespace)
+        store = PGVectorStore(embeddings, namespace)
         store.store_paragraphs(paragraphs)
         return text, 200, textContentType
     except Exception as e:
