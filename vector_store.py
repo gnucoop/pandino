@@ -14,6 +14,11 @@ from langchain_postgres import PGVector
 
 load_dotenv()
 
+PGUSER = os.environ["PGUSER"]
+PGPWD = os.environ["PGPWD"]
+PGHOST = os.environ["PGHOST"]
+PGDB = os.environ["PGDB"]
+
 class VectorStore(ABC):
     def __init__(self, embeddings: Embeddings):
         self.embeddings = embeddings
@@ -91,7 +96,8 @@ class PineconeStore(VectorStore):
 
 class PGVectorStore(VectorStore):
     def __init__(self, embeddings: Embeddings, collection_name: str):
-        connection = "postgresql+psycopg://neondb_owner:x2ldVgqkZcX1@ep-holy-leaf-a2htjt5f.eu-central-1.aws.neon.tech/neondb"
+    
+        connection = f"postgresql+psycopg://{PGUSER}:{PGPWD}@{PGHOST}/{PGDB}"
         self.collection = PGVector(
             embeddings=embeddings,
             collection_name=collection_name,
