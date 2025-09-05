@@ -4,6 +4,8 @@ from cryptography.fernet import Fernet, InvalidToken
 import os
 import base64
 from datetime import datetime
+from typing import Optional, Tuple
+import logging
 import pandas as pd 
 
 # Generate a key for encryption and decryption
@@ -91,54 +93,106 @@ def extend_expiration_date():
     string_date = str(new_date)
     return string_date
 
-def add_user(username, api_key, date_valid_until=extend_expiration_date()):
+def add_user(
+    username: str,
+    api_key: str,
+    date_valid_until: Optional[str] = None
+) -> Optional[str]:
+    """
+    Adds a new user to the 'users' table with an encrypted API key and optional expiration date.
+
+    :param username: Unique username of the user.
+    :param api_key: API key to be stored (will be encrypted before insertion).
+    :param date_valid_until: Optional expiration date (ISO format). If not provided, 1 year is added.
+    :return: None if success, or an error message string if an exception occurs.
+    """
+    if date_valid_until is None:
+        date_valid_until = extend_expiration_date()
+
+    logging.info(f"Adding user: {username} with expiration: {date_valid_until}")
+
     conn = connect()
     cursor = conn.cursor()
     encrypted_api_key = cipher_suite.encrypt(api_key.encode())
+
     try:
         cursor.execute(
             "INSERT INTO users (username, api_key, date_valid_until) VALUES (%s, %s, %s)",
             (username, encrypted_api_key.decode(), date_valid_until),
         )
         conn.commit()
+        return None
     except psycopg.IntegrityError as e:
+        logging.warning(f"IntegrityError while adding user {username}: {str(e)}")
         return f"Error adding new user: {e}"
     except Exception as e:
+        logging.exception("Unexpected error in add_user")
         return f"Error adding new user: {e}"
     finally:
         conn.close()
-        return None
-    
-def remove_user(username):
-    conn = connect()
-    cursor = conn.cursor()
-    try:
-        query = f"DELETE FROM users WHERE username = '{username}'"
-        cursor.execute(query)
-        conn.commit()
-    except psycopg.IntegrityError as e:
-        return f"Error deleting user: {e}"
-    except Exception as e:
-        return f"Error deleting user: {e}"
-    finally:
-        conn.close()
-        return None
 
-def edit_tokens(username, tokens_quantity):
-    date_valid_until=extend_expiration_date()
+    
+def remove_user(username: str) -> Optional[str]:
+    """
+    Removes a user from the 'users' table by their username.
+
+    :param username: The username of the user to be removed.
+    :return: None if success, or an error message string if an exception occurs.
+    """
+    logging.info(f"Attempting to remove user: {username}")
+
     conn = connect()
     cursor = conn.cursor()
+
+    query = "DELETE FROM users WHERE username = %s"
+
     try:
-        query = f"UPDATE users SET tokens = tokens + {tokens_quantity}, date_valid_until = '{date_valid_until}' WHERE username = '{username}'"
-        cursor.execute(query)
+        cursor.execute(query, (username,))
         conn.commit()
-    except psycopg.IntegrityError:
-        return False, "Error while editing Tokens"
-    except Exception:
-        return False, "Error while editing Tokens"
+        return None
+    except psycopg.IntegrityError as e:
+        logging.warning(f"IntegrityError while deleting user {username}: {str(e)}")
+        return f"Error deleting user: {e}"
+    except Exception as e:
+        logging.exception("Unexpected error in remove_user")
+        return f"Error deleting user: {e}"
     finally:
         conn.close()
+
+
+def edit_tokens(username: str, tokens_quantity: int) -> tuple[bool, str]:
+    """
+    Updates the token balance for a user and extends their API key expiration date by one year.
+
+    :param username: The username of the user to update.
+    :param tokens_quantity: The number of tokens to add (can be negative).
+    :return: Tuple (True, message) on success, or (False, error message) on failure.
+    """
+    date_valid_until = extend_expiration_date()
+    logging.info(f"Editing tokens for user={username}, amount={tokens_quantity}")
+
+    conn = connect()
+    cursor = conn.cursor()
+
+    query = """
+        UPDATE users 
+        SET tokens = tokens + %s, date_valid_until = %s 
+        WHERE username = %s
+    """
+
+    try:
+        cursor.execute(query, (tokens_quantity, date_valid_until, username))
+        conn.commit()
         return True, "Tokens edited successfully"
+    except psycopg.IntegrityError as e:
+        logging.warning(f"IntegrityError while editing tokens for {username}: {str(e)}")
+        return False, "Error while editing tokens"
+    except Exception as e:
+        logging.exception("Unexpected error in edit_tokens")
+        return False, "Error while editing tokens"
+    finally:
+        conn.close()
+
 
 def list_users():
     conn = connect()
@@ -162,60 +216,125 @@ def list_users():
         print("No users found in the database.")
 
 
-def get_user_by_username(user_name: str) -> dict | None:
+def get_user_by_username(user_name: str) -> Optional[dict[str, str | int]]:
+    """
+    Retrieves a user from the database by username and decrypts their API key.
+
+    :param user_name: The username or email of the user to retrieve.
+    :return: A dictionary containing user fields if found, or None if not found.
+    """
+    logging.info(f"Looking up user by username: {user_name}")
+
     conn = connect()
     cursor = conn.cursor()
-    query = f"SELECT id, username, api_key, date_valid_until, tokens FROM users WHERE username='{user_name}'"
-    cursor.execute(query)
-    user = cursor.fetchone()
-    conn.close()
+
+    query = """
+        SELECT id, username, api_key, date_valid_until, tokens 
+        FROM users 
+        WHERE username = %s
+    """
+
+    try:
+        cursor.execute(query, (user_name,))
+        user = cursor.fetchone()
+    finally:
+        conn.close()
+
     if user:
-        userFound = {
+        try:
+            decrypted_key = cipher_suite.decrypt(user[2]).decode("utf-8")
+        except Exception as e:
+            logging.error(f"Failed to decrypt API key for user {user_name}: {str(e)}")
+            decrypted_key = "DECRYPTION_FAILED"
+
+        user_data = {
             "id": user[0],
-            "user": user[1],
-            "api_key": cipher_suite.decrypt(user[2]).decode("utf-8"),
+            "username": user[1],
+            "api_key": decrypted_key,
             "date_valid_until": user[3],
             "tokens": user[4],
         }
-        print(userFound)
-        return userFound
+        logging.info(f"User found: {user_data}")
+        return user_data
 
-    else:
-        print("No users with this username found in the database.")
-        return None
+    logging.warning(f"No user found for username: {user_name}")
+    return None
 
-def get_user_tokens(user_name:str) -> int | None:
+
+def get_user_tokens(user_name: str) -> Optional[int]:
+    """
+    Retrieves the token count for a user by their username.
+
+    :param user_name: The username of the user.
+    :return: Number of tokens if user exists and the value is an int, otherwise None.
+    """
+    logging.info(f"Retrieving token count for user: {user_name}")
+
     user = get_user_by_username(user_name)
     if user is None:
+        logging.warning(f"User not found: {user_name}")
         return None
-    return user.get('tokens')
 
-def validate_api_key(api_key, user_email):
+    token_value = user["tokens"]
+    return token_value if isinstance(token_value, int) else None
+
+
+
+def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
+    """
+    Validates whether the provided API key matches the user's stored (encrypted) key 
+    and is still within the valid date range.
+
+    :param api_key: The plain API key provided by the user.
+    :param user_email: The username/email associated with the key.
+    :return: Tuple (True, "match") if valid, otherwise (False, reason).
+    """
+    logging.info(f"Validating API key for user: {user_email}")
+
     conn = connect()
     cursor = conn.cursor()
-    cursor.execute(f"SELECT api_key, date_valid_until FROM users WHERE username='{user_email}'")
+
+    query = """
+        SELECT api_key, date_valid_until 
+        FROM users 
+        WHERE username = %s
+    """
+
+    cursor.execute(query, (user_email,))
     encrypted_keys = cursor.fetchall()
     conn.close()
 
-    matchesLength = len(encrypted_keys)
-    if not matchesLength:
+    if not encrypted_keys:
         return False, "No matching API key found"
 
-    current_date = datetime.now().strftime("%Y-%m-%d")
+    current_date = datetime.now().date()
+    found_expired = False
+
     for encrypted_key, date_valid_until in encrypted_keys:
-        if date_valid_until < current_date:
+        try:
+            expiration = datetime.strptime(date_valid_until, "%Y-%m-%d").date()
+        except Exception as e:
+            logging.error(f"Invalid date format in DB for user {user_email}: {date_valid_until}")
             continue
+
+        if expiration < current_date:
+            found_expired = True
+            continue
+
         try:
             decrypted_key = cipher_suite.decrypt(encrypted_key).decode().strip()
             if decrypted_key == api_key.strip():
                 return True, "API key match found"
         except InvalidToken:
-            pass
+            continue
         except Exception:
-            pass
-    if date_valid_until < current_date:
+            continue
+
+    if found_expired:
         return False, "API key expired"
+
     return False, "No matching API key found"
+
 
 
 def print_stored_keys():
@@ -292,7 +411,7 @@ if __name__ == "__main__":
             user_name = sys.argv[2]
             get_user_by_username(user_name)
         elif sys.argv[1] == "edit_tokens" and len(sys.argv) == 4:
-            username, tokens_quantity = sys.argv[2], sys.argv[3]
+            username, tokens_quantity = sys.argv[2], int(sys.argv[3])
             edit_tokens(username, tokens_quantity)
         elif sys.argv[1] == "list_users":
             list_users()

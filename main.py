@@ -5,9 +5,11 @@ import secrets
 import tempfile
 from datetime import datetime
 from dotenv import load_dotenv
+from typing import Any
+from typing import Union
 
 # === Third-party ===
-from flask import Flask, request, jsonify, abort
+from flask import Flask, request, Response, jsonify, abort
 from flask_cors import CORS
 import pandas as pd
 from pandasai import Agent
@@ -79,7 +81,7 @@ AUDIO_FORM_TOKEN_COST = os.environ.get("AUDIO_FORM_TOKEN_COST")
 
 # Define a route for the '/' endpoint that returns a welcome message
 @app.route("/")
-def welcome():
+def welcome() -> str:
     return "Welcome to Pandino! This is the root endpoint."
 
 
@@ -96,7 +98,7 @@ def assert_valid_api_key(api_key: str, user_email: str) -> None:
 
 
 # Recursively replace NaN with None in dictionaries or lists.
-def replace_nan(data):
+def replace_nan(data: Any) -> Any:
     if isinstance(data, dict):
         return {k: replace_nan(v) for k, v in data.items()}
     elif isinstance(data, list):
@@ -109,7 +111,7 @@ def replace_nan(data):
 
 # Define a route for the '/edittokens' endpoint that accepts POST requests
 @app.route("/edittokens", methods=["POST"])
-def editTokens():
+def editTokens() -> tuple[Response, int]:
     try:
         stripe_key = request.headers.get("X-STRIPE-KEY")
 
@@ -159,7 +161,7 @@ def editTokens():
 
 # Define a route for the '/edittokens' endpoint that accepts POST requests
 @app.route("/getusertokens", methods=["POST"])
-def getUserTokens():
+def getUserTokens() -> tuple[Response, int]:
     api_key = request.headers.get("X-API-KEY")
     user_email = request.headers.get("X-USER-EMAIL")
     if not api_key:
@@ -173,7 +175,7 @@ def getUserTokens():
 
 # Define a route for the '/adduser' endpoint that accepts POST requests
 @app.route("/checkpandinouser", methods=["POST"])
-def addNewUser():
+def addNewUser() -> Union[tuple[Response, int], tuple[str, int, dict[str, str]]]:
     graphql_url = request.headers.get("X-GRAPHQL-URL")
     auth_token = request.headers.get("X-AUTH-TOKEN")
     user_email = request.headers.get("X-USER-EMAIL")
@@ -236,7 +238,7 @@ def addNewUser():
 
 # Define a route for the '/validateapikey' endpoint that accepts POST requests
 @app.route("/validateapikey", methods=["POST"])
-def validate():
+def validate() -> tuple[Response, int]:
     api_key = request.headers.get("X-API-KEY")
     user_email = request.headers.get("X-USER-EMAIL")
     # Check if all required parameters are present
@@ -257,7 +259,8 @@ def validate():
 
 # Define a route for the '/endchat' endpoint that accepts POST requests
 @app.route("/enddatachat", methods=["POST"])
-def endChat():
+def endChat() -> Response | tuple[Response, int]:
+
     api_key = request.headers.get("X-API-KEY")
     user_email = request.headers.get("X-USER-EMAIL")
     user_name_header = request.headers.get("X-USER-NAME")
@@ -288,7 +291,7 @@ def endChat():
 
 # Define a route for the '/startchat' endpoint that accepts POST requests
 @app.route("/startdatachat", methods=["POST"])
-def startChat():
+def startChat() -> Response | tuple[Response, int]:
     api_key = request.headers.get("X-API-KEY")
     user_name_header = request.headers.get("X-USER-NAME")
     user_email = request.headers.get("X-USER-EMAIL")
@@ -344,7 +347,7 @@ def startChat():
         if agent is None:
             return jsonify({"error": "Agent creation failed"}), 500
 
-        agentResponse = {"Agent active": agent.conversation_id}
+        agentResponse: dict[str, Any] = {"Agent active": str(agent.conversation_id)}
 
         question_templates = {
             "ITA": f"""Dato questo dataframe pandas {data}. Prova a capire la natura dei dati e suggeriscimi che tipo di analisi dovrei chiedere. Spiega in dettaglio le tue risposte e fai qualsiasi suggerimento di possibile domanda che potrei fare. Non suggerire alcun codice Python. Per favore, rispondi in un formato html leggibile, senza asterischi e aggiungendo un'interruzione di riga dopo ogni paragrafo.""",
@@ -375,10 +378,21 @@ def startChat():
 
 # Define a route for the /datachat endpoint
 @app.route("/datachat", methods=["POST"])
-def dataChat():
+def dataChat() -> Response | tuple[Response, int]:
+
     api_key = request.headers.get("X-API-KEY")
     user_email = request.headers.get("X-USER-EMAIL")
+
+    if not api_key:
+        return jsonify({"error": "Missing X-API-KEY header"}), 400
+    if not user_email:
+        return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
+
     assert_valid_api_key(api_key, user_email)
+
+    if not request.json:
+        return jsonify({"error": "Missing JSON body"}), 400
+
     chat = request.json.get("chat")
     agent: Agent | None = getAgent(api_key)
 
@@ -395,7 +409,12 @@ def dataChat():
         return jsonify({"error": "Agent not active for this Api Key"}), 400
 
     # Checks if the User's tokens are enough for this operation
+
     user_tokens = database_pg.get_user_tokens(user_email)
+
+    if user_tokens is None:
+        return jsonify({"error": "Could not retrieve user tokens"}), 500
+
     if int(DATACHAT_TOKEN_COST) > user_tokens:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
@@ -446,33 +465,36 @@ def dataChat():
 
 # Define a route for the /datachat endpoint
 @app.route("/buyreport", methods=["POST"])
-def buyReport():
+def buyReport() -> tuple[Response, int]:
+
     api_key = request.headers.get("X-API-KEY")
     user_email = request.headers.get("X-USER-EMAIL")
-    assert_valid_api_key(api_key, user_email)
-    prompts = request.json.get("prompts")
+    if not api_key:
+        return jsonify({"error": "Missing X-API-KEY header"}), 400
+    if not user_email:
+        return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
 
-    # Check if the Chat parameter is present
-    if not prompts or not isinstance(prompts, int):
+    assert_valid_api_key(api_key, user_email)
+
+    if not request.json:
+        return jsonify({"error": "Missing JSON body"}), 400
+    prompts = request.json.get("prompts")
+    if not isinstance(prompts, int):
         return jsonify({"error": "Missing Prompts numeric parameter"}), 400
 
-    # Check if user email is present
-    if not user_email:
-        return jsonify({"error": "Missing User email"}), 400
-
-    # Checks if the User's tokens are enough for this operation
     user_tokens = database_pg.get_user_tokens(user_email)
-    if int(prompts) > user_tokens:
+    if user_tokens is None:
+        return jsonify({"error": "Could not retrieve user tokens"}), 500
+    if prompts > user_tokens:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
-    # Spends User's tokens
-    result, message = edit_tokens(user_email, -int(prompts))
+    result, message = edit_tokens(user_email, -prompts)
 
     return jsonify({"response": result, "message": f"{message}"}), 200
 
 
 @app.route("/completion.json", methods=["POST"])
-def completion_handler():
+def completion_handler() -> Union[Response, tuple[Response, int]]:
     try:
         r = request.get_json()
         if not r:
@@ -480,7 +502,6 @@ def completion_handler():
 
         required_keys = ["chat", "username"]
         missing_keys = [key for key in required_keys if key not in r]
-
         if missing_keys:
             return (
                 jsonify({"error": f"Missing required keys: {', '.join(missing_keys)}"}),
@@ -488,17 +509,24 @@ def completion_handler():
             )
 
         api_key = request.headers.get("X-API-KEY")
+        if not api_key:
+            return jsonify({"error": "Missing X-API-KEY header"}), 400
+
         assert_valid_api_key(api_key, r["username"])
 
-        # Checks if the User's tokens are enough for this operation
+        # Token check
         user_tokens = database_pg.get_user_tokens(r["username"])
-        if int(COMPLETION_TOKEN_COST) > user_tokens:
+        if user_tokens is None:
+            return jsonify({"error": "Could not retrieve user tokens"}), 500
+
+        token_cost = int(COMPLETION_TOKEN_COST or "1")
+        if token_cost > user_tokens:
             return (
                 jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
                 500,
             )
 
-        # Prepare the request for complete_chat
+        # Request assembly
         chat_request = ai.CompletionRequest(
             username=r["username"],
             info=r.get("info", []),
@@ -506,31 +534,38 @@ def completion_handler():
         )
         namespace = r.get("namespace", "")
 
-        llm_type = COMPLETION_MODEL_PROVIDER
-        model = COMPLETION_MODEL
-        emb_llm_type = COMPLETION_EMBEDDING_MODEL_PROVIDER
-        emb_model = COMPLETION_EMBEDDING_MODEL
+        # Scelta modelli
+        llm_type = COMPLETION_MODEL_PROVIDER or "google"
+        model = COMPLETION_MODEL or "gemini-2.5-flash"
+        emb_llm_type = COMPLETION_EMBEDDING_MODEL_PROVIDER or "openai"
+        emb_model = COMPLETION_EMBEDDING_MODEL or "text-embedding-3-small"
 
         embeddings = choose_emb_model(emb_llm_type, emb_model)
+
         store = PGVectorStore(embeddings, namespace)
         resp = complete_chat(chat_request, store, llm_type, model)
         if resp and hasattr(resp, "vectors") and resp.vectors:
             for vec in resp.vectors:
                 vec["similarity"] += 0.3
+
         if isinstance(resp, CompletionResponse):
             if resp.error:
                 return jsonify({"error": f"Chat completion error: {resp.error}"}), 200
 
-            # Spends User's tokens
+            # Token deduction
             if resp.answer or resp.vectors:
-                edit_tokens(r["username"], -int(COMPLETION_TOKEN_COST))
+                edit_tokens(r["username"], -token_cost)
 
-            return jsonify(
-                {
-                    "answer": resp.answer,
-                    "vectors": resp.vectors,
-                }
+            return (
+                jsonify(
+                    {
+                        "answer": resp.answer,
+                        "vectors": resp.vectors,
+                    }
+                ),
+                200,
             )
+
         elif resp is None:
             return jsonify({"error": "No response from chat completion"}), 500
         else:
@@ -543,50 +578,15 @@ def completion_handler():
 
 textContentType = {"Content-Type": "text/plain"}
 
-# Endpoint for quickly testing chat completion from terminal
-# Warning: it has no authentication
-"""
-@app.route("/completion.test", methods=["POST"])
-def completion_test():
-    try:
-        question = request.form.get("question")
-        namespace = request.form.get("namespace") or ""
-        if not question:
-            return "question not provided", 400, textContentType
-
-        llm_type = COMPLETION_MODEL_PROVIDER
-        model = COMPLETION_MODEL
-        emb_llm_type = COMPLETION_EMBEDDING_MODEL_PROVIDER
-        emb_model = COMPLETION_EMBEDDING_MODEL
-
-        chat_request = ai.CompletionRequest(
-            username="",
-            info=[],
-            chat=[question]
-        )
-        embeddings = choose_emb_model(emb_llm_type, emb_model)
-        store = PineconeStore(embeddings, "index", namespace)
-        resp = complete_chat(chat_request, store, llm_type, model)
-        if not isinstance(resp, CompletionResponse):
-            return "response is not a CompletionResponse", 500, textContentType
-        if resp.error:
-            return resp.error, 500, textContentType
-        return resp.answer + "\n", 200, textContentType
-
-    except Exception as e:
-        return str(e), 500, textContentType
-"""
-
 
 @app.route("/prompt.txt", methods=["POST"])
-def prompt_handler():
+def prompt_handler() -> Union[str, tuple[str, int, dict[str, str]]]:
     prompt = request.form.get("prompt")
     username = request.form.get("username")
-    model_name = PROMPT_MODEL
-    llm_type = PROMPT_PROVIDER
-
     api_key = request.headers.get("X-API-KEY")
 
+    if not api_key:
+        return "Missing API key", 400, textContentType
     if not prompt:
         return "No prompt provided", 400, textContentType
     if not username:
@@ -594,10 +594,16 @@ def prompt_handler():
 
     assert_valid_api_key(api_key, username)
 
-    # Checks if the User's tokens are enough for this operation
     user_tokens = database_pg.get_user_tokens(username)
-    if int(PROMPT_TOKEN_COST) > user_tokens:
+    if user_tokens is None:
+        return "Could not retrieve user tokens", 500, textContentType
+
+    token_cost = int(PROMPT_TOKEN_COST or "1")
+    if token_cost > user_tokens:
         return f"Not enough tokens, user_tokens: {user_tokens}", 400, textContentType
+
+    model_name = PROMPT_MODEL or "gpt-3.5-turbo"
+    llm_type = PROMPT_PROVIDER or "openai"
 
     try:
         resp = reply_to_prompt(prompt, username, llm_type, model_name)
@@ -607,20 +613,21 @@ def prompt_handler():
 
 
 @app.route("/storeragfile", methods=["POST"])
-def store_rag_file():
-    err = dino_authenticate(
-        request.form.get("graphqlUrl"), request.form.get("authToken")
-    )
+def store_rag_file() -> tuple[str, int, dict[str, str]]:
+    graphql_url = request.form.get("graphqlUrl")
+    auth_token = request.form.get("authToken")
+    err = dino_authenticate(graphql_url, auth_token)
     if err:
         return str(err), 403, textContentType
 
     file = request.files.get("file")
+    url = request.form.get("url")
+    namespace = request.form.get("namespace") or ""
+
     if not file:
         return "File not provided", 400, textContentType
-    url = request.form.get("url")
     if not url:
         return "Url not provided", 400, textContentType
-    namespace = request.form.get("namespace") or ""
 
     chunk_size = 900
     chunk_overlap = 100
@@ -633,6 +640,9 @@ def store_rag_file():
     text = ""
     paragraphs: List[Document] = []
     try:
+        text = ""
+        is_markdown = False
+
         if file.mimetype == "text/plain":
             text = file.stream.read().decode()
             paragraphs = tx_split.split_documents(
@@ -647,11 +657,14 @@ def store_rag_file():
             with tempfile.NamedTemporaryFile(suffix=".pdf") as temp:
                 file.save(temp.name)
                 pages = pymupdf4llm.to_markdown(temp.name, page_chunks=True)
+                # TODO chiedere a Roberto
                 page_texts = [p["text"] for p in pages]
                 text = "".join(page_texts)
                 page_docs = [
                     Document(
+                        # TODO chiedere a Roberto
                         page_content=p["text"],
+                        # TODO chiedere a Roberto
                         metadata=metadata | {"page": p["metadata"]["page"]},
                     )
                     for p in pages
@@ -660,7 +673,6 @@ def store_rag_file():
         elif file.mimetype.startswith("audio"):
             resp = whisper_response(file)
             if resp.status_code != 200:
-                print(resp.text)
                 return "Error whispering audio", 500, textContentType
             json = resp.json()
             text = json["text"]
@@ -673,21 +685,20 @@ def store_rag_file():
             ]
             paragraphs = merge_segments(segments, chunk_size)
         elif file.mimetype.startswith("image"):
-            text = describe_image(url, VISION_PROVIDER, VISION_MODEL)
-            paragraphs = tx_split.split_documents(
-                [Document(page_content=text, metadata=metadata)]
-            )
+            text = describe_image(url, VISION_PROVIDER or "", VISION_MODEL or "")
         else:
             return "Unsupported file type", 400, textContentType
+
         if text == "":
             return "", 200, textContentType
 
         embeddings = choose_emb_model(
-            COMPLETION_EMBEDDING_MODEL_PROVIDER, COMPLETION_EMBEDDING_MODEL
+            COMPLETION_EMBEDDING_MODEL_PROVIDER or "", COMPLETION_EMBEDDING_MODEL or ""
         )
         store = PGVectorStore(embeddings, namespace)
         store.store_paragraphs(paragraphs)
         return text, 200, textContentType
+
     except Exception as e:
         return str(e), 500, textContentType
 
@@ -701,84 +712,101 @@ def whisper_response(file):
 
 # Define a route for the '/transcribe' endpoint
 @app.route("/transcribe", methods=["POST"])
-def whisper_parse():
+def whisper_parse() -> Union[Response, tuple[Response, int]]:
     api_key = request.headers.get("X-API-KEY")
-    user_name_header = request.headers.get("X-USER-NAME")
     user_email = request.headers.get("X-USER-EMAIL")
+    user_name_header = request.headers.get("X-USER-NAME")
+
+    if not api_key:
+        return jsonify({"error": "Missing X-API-KEY header"}), 400
+    if not user_email:
+        return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
+    if not user_name_header:
+        return jsonify({"error": "Missing X-USER-NAME header"}), 400
+
     user_name = user_name_header.replace(" ", "_").strip()
     assert_valid_api_key(api_key, user_email)
 
-    # Extract necessary parameters from the request FORMDATA
     request_file = request.files.get("file")
-    request_lang = request.form.get("lang")
-    lang = request_lang if request_lang else "ENG"
+    if not request_file:
+        return jsonify({"error": "Missing file"}), 400
 
-    if not user_name or not user_email or not request_file:
-        return jsonify({"error": "Missing parameters"}), 400
+    lang = request.form.get("lang") or "ENG"
 
     response = whisper_response(request_file)
 
     if response.status_code == 200:
-        result = response.json()
-        return result
+        try:
+            return jsonify(response.json()), 200
+        except Exception as e:
+            return jsonify({"error": f"Invalid JSON from whisper: {str(e)}"}), 500
     else:
-        print(f"Error: {response.status_code}")
-        print(response.text)
-        return None
+        app.logger.error(f"Whisper failed: {response.status_code} - {response.text}")
+        return jsonify({"error": "Whisper transcription failed"}), 500
 
 
 # Define a route for the '/audioformcompilation' endpoint
 @app.route("/audioformcompilation", methods=["POST"])
-def audio_form_compile():
+def audio_form_compile() -> Union[Response, tuple[Response, int]]:
     api_key = request.headers.get("X-API-KEY")
     user_email = request.headers.get("X-USER-EMAIL")
+
+    if not api_key:
+        return jsonify({"error": "Missing X-API-KEY header"}), 400
+    if not user_email:
+        return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
+
     assert_valid_api_key(api_key, user_email)
 
-    model_name = AUDIO_MODEL
-    llm_type = AUDIO_PROVIDER
+    if not request.json:
+        return jsonify({"error": "Missing JSON body"}), 400
 
-    # Extract necessary parameters from the request FORMDATA
     formSchemaName = request.json.get("name")
     formSchemaExampleData = request.json.get("exampledata")
     formSchemaChoices = request.json.get("choices")
     transcribedAudio = request.json.get("transcribedAudio")
 
-    # Check if the formSchemaExampleData parameter is present
     if not formSchemaExampleData:
         return jsonify({"error": "Missing Schema example empty data"}), 400
-
-    # Check if the formSchemaName parameter is present
     if not formSchemaName:
         return jsonify({"error": "Missing Schema Name"}), 400
-
-    # Check if the transcribedAudio parameter is present
     if not transcribedAudio:
         return jsonify({"error": "Missing Transcribed Audio"}), 400
 
-    # Check if user email is present
-    if not user_email:
-        return jsonify({"error": "Missing User email"}), 400
-
-    # Checks if the User's tokens are enough for this operation
     user_tokens = database_pg.get_user_tokens(user_email)
-    if int(AUDIO_FORM_TOKEN_COST) > user_tokens:
-        return (
-            jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
-            500,
-        )
+    if user_tokens is None:
+        return jsonify({"error": "Could not retrieve user tokens"}), 500
+
+    token_cost = int(AUDIO_FORM_TOKEN_COST or "1")
+    if token_cost > user_tokens:
+        return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
+
+    model_name = PROMPT_MODEL or "gpt-3.5-turbo"
+    llm_type = PROMPT_PROVIDER or "openai"
 
     prompts = audioFormPromptBuild(
-        formSchemaExampleData, formSchemaName, formSchemaChoices, transcribedAudio
+        formSchemaExampleData,
+        formSchemaName,
+        formSchemaChoices,
+        transcribedAudio,
     )
+
+    if not prompts:
+        return jsonify({"error": "Failed to build prompts"}), 500
+
     invocation = audioFormCompilation(
-        prompts["userprompt"], prompts["systemprompt"], user_email, llm_type, model_name
+        prompts["userprompt"],
+        prompts["systemprompt"],
+        user_email,
+        llm_type,
+        model_name,
     )
 
     if invocation:
-        # Spends User's tokens
-        edit_tokens(user_email, -int(AUDIO_FORM_TOKEN_COST))
+        edit_tokens(user_email, -token_cost)
 
-    return jsonify(invocation)
+    app.logger.debug(f"Audio form compilation result: {invocation}")
+    return jsonify(invocation), 200
 
 
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
