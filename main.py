@@ -17,7 +17,10 @@ import tempfile
 import pymupdf4llm
 from typing import List
 from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownTextSplitter
+from langchain_text_splitters import (
+    RecursiveCharacterTextSplitter,
+    MarkdownTextSplitter,
+)
 
 matplotlib.use("Agg")  # Use non-interactive backend
 
@@ -26,7 +29,12 @@ import database_pg
 from database_pg import edit_tokens, validate_api_key
 from dino import dino_authenticate
 import ai
-from ai import audioFormCompilation, audioFormPromptBuild, CompletionResponse, describe_image
+from ai import (
+    audioFormCompilation,
+    audioFormPromptBuild,
+    CompletionResponse,
+    describe_image,
+)
 from ai import complete_chat, reply_to_prompt, choose_llm, choose_emb_model
 
 from dotenv import load_dotenv
@@ -68,6 +76,7 @@ COMPLETION_TOKEN_COST = os.environ.get("COMPLETION_TOKEN_COST")
 PROMPT_TOKEN_COST = os.environ.get("PROMPT_TOKEN_COST")
 AUDIO_FORM_TOKEN_COST = os.environ.get("AUDIO_FORM_TOKEN_COST")
 
+
 # Define a route for the '/' endpoint that returns a welcome message
 @app.route("/")
 def welcome():
@@ -96,6 +105,7 @@ def replace_nan(data):
         return None
     else:
         return data
+
 
 # Define a route for the '/edittokens' endpoint that accepts POST requests
 @app.route("/edittokens", methods=["POST"])
@@ -181,9 +191,7 @@ def addNewUser():
         generatedKey = secrets.token_urlsafe(8)
         currentDate = datetime.now()
         expirationDate = currentDate.replace(year=currentDate.year + 2)
-        addUserResult = database_pg.add_user(
-            user_email, generatedKey, expirationDate
-        )
+        addUserResult = database_pg.add_user(user_email, generatedKey, expirationDate)
         if addUserResult is None:
             return (
                 jsonify(
@@ -476,9 +484,9 @@ def completion_handler():
         embeddings = choose_emb_model(emb_llm_type, emb_model)
         store = PGVectorStore(embeddings, namespace)
         resp = complete_chat(chat_request, store, llm_type, model)
-        if resp and hasattr(resp, 'vectors') and resp.vectors:
+        if resp and hasattr(resp, "vectors") and resp.vectors:
             for vec in resp.vectors:
-                vec['similarity'] += 0.3
+                vec["similarity"] += 0.3
         if isinstance(resp, CompletionResponse):
             if resp.error:
                 return jsonify({"error": f"Chat completion error: {resp.error}"}), 200
@@ -487,10 +495,12 @@ def completion_handler():
             if resp.answer or resp.vectors:
                 edit_tokens(r["username"], -int(COMPLETION_TOKEN_COST))
 
-            return jsonify({
-                "answer": resp.answer,
-                "vectors": resp.vectors,
-            })
+            return jsonify(
+                {
+                    "answer": resp.answer,
+                    "vectors": resp.vectors,
+                }
+            )
         elif resp is None:
             return jsonify({"error": "No response from chat completion"}), 500
         else:
@@ -499,6 +509,7 @@ def completion_handler():
     except Exception as e:
         app.logger.error(f"Unexpected error in completion_handler: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
+
 
 textContentType = {"Content-Type": "text/plain"}
 
@@ -536,6 +547,7 @@ def completion_test():
         return str(e), 500, textContentType
 """
 
+
 @app.route("/prompt.txt", methods=["POST"])
 def prompt_handler():
     prompt = request.form.get("prompt")
@@ -563,12 +575,15 @@ def prompt_handler():
     except Exception as e:
         return str(e), 500, textContentType
 
+
 @app.route("/storeragfile", methods=["POST"])
 def store_rag_file():
-    err = dino_authenticate(request.form.get("graphqlUrl"), request.form.get("authToken"))
+    err = dino_authenticate(
+        request.form.get("graphqlUrl"), request.form.get("authToken")
+    )
     if err:
         return str(err), 403, textContentType
-    
+
     file = request.files.get("file")
     if not file:
         return "File not provided", 400, textContentType
@@ -579,7 +594,9 @@ def store_rag_file():
 
     chunk_size = 900
     chunk_overlap = 100
-    tx_split = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    tx_split = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size, chunk_overlap=chunk_overlap
+    )
     md_split = MarkdownTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
 
     metadata = {"url": url, "mimetype": file.mimetype, "source": file.filename}
@@ -588,10 +605,14 @@ def store_rag_file():
     try:
         if file.mimetype == "text/plain":
             text = file.stream.read().decode()
-            paragraphs = tx_split.split_documents([Document(page_content=text, metadata=metadata)])
+            paragraphs = tx_split.split_documents(
+                [Document(page_content=text, metadata=metadata)]
+            )
         elif file.mimetype == "text/markdown":
             text = file.stream.read().decode()
-            paragraphs = md_split.split_documents([Document(page_content=text, metadata=metadata)])
+            paragraphs = md_split.split_documents(
+                [Document(page_content=text, metadata=metadata)]
+            )
         elif file.mimetype == "application/pdf":
             with tempfile.NamedTemporaryFile(suffix=".pdf") as temp:
                 file.save(temp.name)
@@ -599,7 +620,10 @@ def store_rag_file():
                 page_texts = [p["text"] for p in pages]
                 text = "".join(page_texts)
                 page_docs = [
-                    Document(page_content=p["text"], metadata=metadata|{"page": p["metadata"]["page"]})
+                    Document(
+                        page_content=p["text"],
+                        metadata=metadata | {"page": p["metadata"]["page"]},
+                    )
                     for p in pages
                 ]
                 paragraphs = md_split.split_documents(page_docs)
@@ -611,35 +635,39 @@ def store_rag_file():
             json = resp.json()
             text = json["text"]
             segments = [
-                Document(page_content=s["text"], metadata=metadata | {"start_time": s["start"]})
+                Document(
+                    page_content=s["text"],
+                    metadata=metadata | {"start_time": s["start"]},
+                )
                 for s in json["segments"]
             ]
             paragraphs = merge_segments(segments, chunk_size)
         elif file.mimetype.startswith("image"):
             text = describe_image(url, VISION_PROVIDER, VISION_MODEL)
-            paragraphs = tx_split.split_documents([Document(page_content=text, metadata=metadata)])
+            paragraphs = tx_split.split_documents(
+                [Document(page_content=text, metadata=metadata)]
+            )
         else:
             return "Unsupported file type", 400, textContentType
         if text == "":
             return "", 200, textContentType
 
-        embeddings = choose_emb_model(COMPLETION_EMBEDDING_MODEL_PROVIDER, COMPLETION_EMBEDDING_MODEL)
+        embeddings = choose_emb_model(
+            COMPLETION_EMBEDDING_MODEL_PROVIDER, COMPLETION_EMBEDDING_MODEL
+        )
         store = PGVectorStore(embeddings, namespace)
         store.store_paragraphs(paragraphs)
         return text, 200, textContentType
     except Exception as e:
         return str(e), 500, textContentType
 
+
 def whisper_response(file):
     url = f"https://api.deepinfra.com/v1/inference/{WHISPER_MODEL}"
-    headers = {
-        "Authorization": f"bearer {DEEPINFRA_API_KEY}"
-    }
-    files = {
-        'audio': file,
-        'response_format': (None, 'text')
-    }
+    headers = {"Authorization": f"bearer {DEEPINFRA_API_KEY}"}
+    files = {"audio": file, "response_format": (None, "text")}
     return requests.post(url, headers=headers, files=files)
+
 
 # Define a route for the '/transcribe' endpoint
 @app.route("/transcribe", methods=["POST"])
@@ -655,15 +683,11 @@ def whisper_parse():
     request_lang = request.form.get("lang")
     lang = request_lang if request_lang else "ENG"
 
-    if (
-        not user_name
-        or not user_email
-        or not request_file
-    ):
+    if not user_name or not user_email or not request_file:
         return jsonify({"error": "Missing parameters"}), 400
 
     response = whisper_response(request_file)
-    
+
     if response.status_code == 200:
         result = response.json()
         return result
@@ -671,6 +695,7 @@ def whisper_parse():
         print(f"Error: {response.status_code}")
         print(response.text)
         return None
+
 
 # Define a route for the '/audioformcompilation' endpoint
 @app.route("/audioformcompilation", methods=["POST"])
@@ -683,20 +708,15 @@ def audio_form_compile():
     llm_type = AUDIO_PROVIDER
 
     # Extract necessary parameters from the request FORMDATA
-    formSchema = request.json.get("schema")
     formSchemaName = request.json.get("name")
     formSchemaExampleData = request.json.get("exampledata")
     formSchemaChoices = request.json.get("choices")
     transcribedAudio = request.json.get("transcribedAudio")
 
-    # Check if the formSchema parameter is present
-    if not formSchema:
-        return jsonify({"error": "Missing Schema"}), 400
-    
     # Check if the formSchemaExampleData parameter is present
     if not formSchemaExampleData:
         return jsonify({"error": "Missing Schema example empty data"}), 400
-    
+
     # Check if the formSchemaName parameter is present
     if not formSchemaName:
         return jsonify({"error": "Missing Schema Name"}), 400
@@ -708,7 +728,7 @@ def audio_form_compile():
     # Check if user email is present
     if not user_email:
         return jsonify({"error": "Missing User email"}), 400
-    
+
     # Checks if the User's tokens are enough for this operation
     user_tokens = database_pg.get_user_tokens(user_email)
     if int(AUDIO_FORM_TOKEN_COST) > user_tokens:
@@ -716,16 +736,20 @@ def audio_form_compile():
             jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
             500,
         )
-    
-    prompts = audioFormPromptBuild(formSchema, formSchemaExampleData, formSchemaName, formSchemaChoices, transcribedAudio)
-    invocation = audioFormCompilation(prompts["userprompt"], prompts["systemprompt"], user_email, llm_type, model_name)
+
+    prompts = audioFormPromptBuild(
+        formSchemaExampleData, formSchemaName, formSchemaChoices, transcribedAudio
+    )
+    invocation = audioFormCompilation(
+        prompts["userprompt"], prompts["systemprompt"], user_email, llm_type, model_name
+    )
 
     if invocation:
         # Spends User's tokens
-        edit_tokens(user_email, -int(AUDIO_FORM_TOKEN_COST)) 
+        edit_tokens(user_email, -int(AUDIO_FORM_TOKEN_COST))
 
-    print(invocation)
-    return jsonify(invocation) 
+    return jsonify(invocation)
+
 
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
 @app.route("/summarize", methods=["GET"])
