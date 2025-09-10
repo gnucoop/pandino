@@ -346,44 +346,42 @@ def describe_image(url: str, provider: str, model: str) -> str:
 
 
 def audioFormPromptBuild(
-    formSchema,
     formSchemaExampleData,
     formSchemaName: str,
     formSchemaChoices,
     transcribedAudio: str,
 ):
 
-    if (
-        not formSchema
-        or not formSchemaExampleData
-        or not formSchemaName
-        or not transcribedAudio
-    ):
+    if not formSchemaExampleData or not formSchemaName or not transcribedAudio:
         return
+
+    fieldTypes = formSchemaExampleData["fieldTypes"]
+    fieldDescriptions = formSchemaExampleData["fieldDescriptions"]
 
     system = f"""
     Sei un assistente specializzato nell'estrazione di dati da trascrizioni audio.
     Rispondi ESCLUSIVAMENTE in formato JSON valido.
     Non aggiungere commenti, spiegazioni o testo aggiuntivo.
-    Quando ti verrà chiesto di fare riferimento al formSchema farai riferimento a questo: {formSchema}.
-    Quando ti verrà chiesto di fare riferimento al formSchemaExampleData farai riferimento a questo: {formSchemaExampleData}.
-    Quando ti verrà chiesto di fare riferimento al formSchemaName farai riferimento a questo: {formSchemaName}.
-    Quando ti verrà chiesto di fare riferimento alle formSchemaChoices farai riferimento a queste: {formSchemaChoices}.
-    Quando ti verrà chiesto di fare riferimento al transcribedAudio farai riferimento a questo: {transcribedAudio}.
     """
 
     user = f"""
-    Questa è la struttura di un form JSON: {formSchemaName} Il nome del form è {formSchema}.
-    Questo è un esempio di form compilato, coi nomi dei campi come chiavi e le loro label come valori: {formSchemaExampleData}
-    Dentro il formSchema troverai degli array di "nodes".
-    Ogni node è un oggetto contraddistinto da name, label, fieldType, nodeType, hint e choicesOriginRef.
-    Per ogni node con nodeType = 0:
-        ( 
-        se il suo fieldType è diverso da 3,4 o 5 controllerai il suo "name" e se corrisponde ad una chiave nel formSchemaExampleData sovrascriverai il valore di quella chiave nel formSchemaExampleData ricavando il suo valore dal testo transcribedAudio,
-        se il suo fieldType è 3 controllerai il suo "name" scegliendo il "value" tra true o false in base al testo transcribedAudio.
-        se il suo fieldType è 4 o 5 controllerai il suo "name" e se corrisponde ad una chiave nel formSchemaExampleData sovrascriverai il valore di quella chiave nel formSchemaExampleData ricavando il suo valore dalle formSchemaChoices con "name" uguale al "choicesOriginRef" del node, scegliendo il "value" di una delle "choices" in base al testo transcribedAudio.
-        )
-    Poi ritornerai il nuovo formSchemaExampleData come risposta.
+    DATI INPUT:
+    Nome dello schema del form: {formSchemaName}
+    Opzioni disponibili: {formSchemaChoices}
+    Template di output e tipi dei campi: {fieldTypes}
+    Descrizione dei campi: {fieldDescriptions}
+    Trascrizione audio: {transcribedAudio}
+    
+    ISTRUZIONI:
+    Compila il template JSON utilizzando SOLO le informazioni dalla trascrizione.
+    REGOLE PER CAMPO:
+    - boolean: true/false basato sulla trascrizione
+    - multiplechoice: array di valori da "Opzioni disponibili". Se menzionata opzione non presente e se tra le Opzioni disponibili esiste "altro", includi "altro"
+    - singlechoice: array di valori da "Opzioni disponibili". Se menzionata opzione non presente e se tra le Opzioni disponibili esiste "altro", includi "altro"
+    - date: formato YYYY-MM-DD
+    - text/string: testo estratto dalla trascrizione
+    - range/number: valore numerico
+    OUTPUT: JSON compilato seguendo il template fornito.
     """
     return {"systemprompt": system, "userprompt": user}
 
