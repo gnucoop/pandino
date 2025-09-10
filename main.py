@@ -5,8 +5,7 @@ import secrets
 import tempfile
 from datetime import datetime
 from dotenv import load_dotenv
-from typing import Any
-from typing import Union
+from typing import Any, List, Union
 
 # === Third-party ===
 from flask import Flask, request, Response, jsonify, abort
@@ -16,7 +15,6 @@ from pandasai import Agent
 import matplotlib
 import requests
 import pymupdf4llm
-from typing import List
 from langchain_core.documents import Document
 from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
@@ -577,6 +575,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
 
 
 textContentType = {"Content-Type": "text/plain"}
+
 
 
 @app.route("/prompt.txt", methods=["POST"])
