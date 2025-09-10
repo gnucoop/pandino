@@ -9,7 +9,7 @@ langchain_groq
 langchain_ollama
 langchain_openai
 langchain_mistralai
-langchain-google-genai
+langchain-google-genai==2.1.7
 langchain_pinecone
 langchain_postgres
 langchain_anthropic
