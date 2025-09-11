@@ -88,7 +88,7 @@ def init_db():
         cursor.close()
 
 def extend_expiration_date():
-    current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S'")
+    current_date = datetime.now().strftime("%Y-%m-%d")
     new_date = pd.to_datetime(current_date)+pd.DateOffset(years= 1) 
     string_date = str(new_date)
     return string_date
@@ -313,6 +313,10 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
     for encrypted_key, date_valid_until in encrypted_keys:
         try:
             expiration = datetime.strptime(date_valid_until, "%Y-%m-%d").date()
+        except Exception as e:
+            pass
+        try:
+            expiration = datetime.strptime(date_valid_until, "%Y-%m-%d %H:%M:%S").date()
         except Exception as e:
             logging.error(f"Invalid date format in DB for user {user_email}: {date_valid_until}")
             continue

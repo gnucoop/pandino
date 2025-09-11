@@ -70,7 +70,7 @@ def init_db():
     print("Database initialized successfully.")
 
 def extend_expiration_date():
-    current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S'")
+    current_date = datetime.now().strftime("%Y-%m-%d")
     new_date = pd.to_datetime(current_date)+pd.DateOffset(years= 1) 
     string_date = str(new_date)
     return string_date
