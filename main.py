@@ -577,7 +577,6 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
 textContentType = {"Content-Type": "text/plain"}
 
 
-
 @app.route("/prompt.txt", methods=["POST"])
 def prompt_handler() -> Union[str, tuple[str, int, dict[str, str]]]:
     prompt = request.form.get("prompt")
@@ -655,15 +654,13 @@ def store_rag_file() -> tuple[str, int, dict[str, str]]:
         elif file.mimetype == "application/pdf":
             with tempfile.NamedTemporaryFile(suffix=".pdf") as temp:
                 file.save(temp.name)
-                pages = pymupdf4llm.to_markdown(temp.name, page_chunks=True)
-                # TODO chiedere a Roberto
+                # Method 'to_markdown' of library 'pymupdf4llm' incorrectly hints always returning a string (return a List[dict] in this case)
+                pages: List[dict] = pymupdf4llm.to_markdown(temp.name, page_chunks=True)  # type: ignore
                 page_texts = [p["text"] for p in pages]
                 text = "".join(page_texts)
                 page_docs = [
                     Document(
-                        # TODO chiedere a Roberto
                         page_content=p["text"],
-                        # TODO chiedere a Roberto
                         metadata=metadata | {"page": p["metadata"]["page"]},
                     )
                     for p in pages
