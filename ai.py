@@ -23,6 +23,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_mistralai import MistralAIEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from langchain_ollama import OllamaEmbeddings
+from langchain_community.embeddings import DeepInfraEmbeddings
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -180,6 +181,13 @@ def choose_emb_model(
     elif emb_llm_type == "Ollama":
         url = base_url or os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434"
         return OllamaEmbeddings(model=emb_model, base_url=url)
+
+    elif emb_llm_type == "Deepinfra":
+        key = api_key or os.getenv("DEEPINFRA_API_KEY")
+        if not key:
+            logging.error("DEEPINFRA_API_KEY environment variable is not set")
+            raise ValueError("DEEPINFRA_API_KEY environment variable is not set")
+        return DeepInfraEmbeddings(model_id=emb_model, deepinfra_api_token=key)
 
     else:
         logging.error(f"Unsupported emb_llm_type: {emb_llm_type}")
