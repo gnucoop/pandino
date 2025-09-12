@@ -777,8 +777,8 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
     if token_cost > user_tokens:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
-    model_name = PROMPT_MODEL or "gpt-3.5-turbo"
-    llm_type = PROMPT_PROVIDER or "openai"
+    model_name = AUDIO_MODEL or "gpt-3.5-turbo"
+    llm_type = AUDIO_PROVIDER or "openai"
 
     prompts = audioFormPromptBuild(
         formSchemaExampleData,
