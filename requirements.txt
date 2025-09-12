@@ -4,6 +4,7 @@ python-dotenv==1.0.0
 pandas
 pandasai
 tabulate
+langchain_community
 langchain_core
 langchain_groq
 langchain_ollama
