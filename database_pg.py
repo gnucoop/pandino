@@ -8,6 +8,18 @@ from typing import Optional, Tuple
 import logging
 import pandas as pd 
 
+from database_methods import (
+    build_get_user_by_username_query,
+    build_add_user_query,
+    build_remove_user_query,
+    build_edit_tokens_query,
+    build_list_users_query,
+    build_print_stored_keys_query,
+    build_validate_api_key_query,
+    build_get_token_cost_query,
+    build_insert_token_log_query
+)
+
 # Generate a key for encryption and decryption
 # Store the key in an environment variable or a secure file
 from dotenv import load_dotenv
@@ -39,6 +51,7 @@ cipher_suite = Fernet(KEY)
 
 def connect():
     return psycopg.connect(host=PGHOST, dbname=PGDB, user=PGUSER, password=PGPWD)
+
 
 def init_db():
     conn = connect()
@@ -87,11 +100,13 @@ def init_db():
     finally:
         cursor.close()
 
+
 def extend_expiration_date():
     current_date = datetime.now().strftime("%Y-%m-%d")
     new_date = pd.to_datetime(current_date)+pd.DateOffset(years= 1) 
     string_date = str(new_date)
     return string_date
+
 
 def add_user(
     username: str,
@@ -113,13 +128,11 @@ def add_user(
 
     conn = connect()
     cursor = conn.cursor()
-    encrypted_api_key = cipher_suite.encrypt(api_key.encode())
+    encrypted_api_key = cipher_suite.encrypt(api_key.encode()).decode()
 
     try:
-        cursor.execute(
-            "INSERT INTO users (username, api_key, date_valid_until) VALUES (%s, %s, %s)",
-            (username, encrypted_api_key.decode(), date_valid_until),
-        )
+        query, params = build_add_user_query(username, encrypted_api_key, date_valid_until)
+        cursor.execute(query, params)
         conn.commit()
         return None
     except psycopg.IntegrityError as e:
@@ -131,7 +144,7 @@ def add_user(
     finally:
         conn.close()
 
-    
+
 def remove_user(username: str) -> Optional[str]:
     """
     Removes a user from the 'users' table by their username.
@@ -144,10 +157,9 @@ def remove_user(username: str) -> Optional[str]:
     conn = connect()
     cursor = conn.cursor()
 
-    query = "DELETE FROM users WHERE username = %s"
-
     try:
-        cursor.execute(query, (username,))
+        query, params = build_remove_user_query(username)
+        cursor.execute(query, params)
         conn.commit()
         return None
     except psycopg.IntegrityError as e:
@@ -174,14 +186,9 @@ def edit_tokens(username: str, tokens_quantity: int) -> tuple[bool, str]:
     conn = connect()
     cursor = conn.cursor()
 
-    query = """
-        UPDATE users 
-        SET tokens = tokens + %s, date_valid_until = %s 
-        WHERE username = %s
-    """
-
     try:
-        cursor.execute(query, (tokens_quantity, date_valid_until, username))
+        query, params = build_edit_tokens_query(tokens_quantity, date_valid_until, username)
+        cursor.execute(query, params)
         conn.commit()
         return True, "Tokens edited successfully"
     except psycopg.IntegrityError as e:
@@ -195,11 +202,22 @@ def edit_tokens(username: str, tokens_quantity: int) -> tuple[bool, str]:
 
 
 def list_users():
+    """
+    Retrieves and displays a list of users from the database, 
+    including decrypted API keys, expiration dates, and token balances.
+
+    :return: None. Prints user information to the console.
+    """
     conn = connect()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, api_key, date_valid_until, tokens FROM users")
-    users = cursor.fetchall()
-    conn.close()
+
+    try:
+        query, params = build_list_users_query()
+        cursor.execute(query, params)
+        users = cursor.fetchall()
+    finally:
+        conn.close()
+
     if users:
         print("Existing users:")
         for id, user, api_key, date_valid_until, tokens in users:
@@ -228,14 +246,10 @@ def get_user_by_username(user_name: str) -> Optional[dict[str, str | int]]:
     conn = connect()
     cursor = conn.cursor()
 
-    query = """
-        SELECT id, username, api_key, date_valid_until, tokens 
-        FROM users 
-        WHERE username = %s
-    """
+    query, params = build_get_user_by_username_query(user_name)
 
     try:
-        cursor.execute(query, (user_name,))
+        cursor.execute(query, params)
         user = cursor.fetchone()
     finally:
         conn.close()
@@ -279,7 +293,6 @@ def get_user_tokens(user_name: str) -> Optional[int]:
     return token_value if isinstance(token_value, int) else None
 
 
-
 def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
     """
     Validates whether the provided API key matches the user's stored (encrypted) key 
@@ -294,15 +307,12 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
     conn = connect()
     cursor = conn.cursor()
 
-    query = """
-        SELECT api_key, date_valid_until 
-        FROM users 
-        WHERE username = %s
-    """
-
-    cursor.execute(query, (user_email,))
-    encrypted_keys = cursor.fetchall()
-    conn.close()
+    try:
+        query, params = build_validate_api_key_query(user_email)
+        cursor.execute(query, params)
+        encrypted_keys = cursor.fetchall()
+    finally:
+        conn.close()
 
     if not encrypted_keys:
         return False, "No matching API key found"
@@ -313,7 +323,7 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
     for encrypted_key, date_valid_until in encrypted_keys:
         try:
             expiration = datetime.strptime(date_valid_until, "%Y-%m-%d").date()
-        except Exception as e:
+        except Exception:
             pass
         try:
             expiration = datetime.strptime(date_valid_until, "%Y-%m-%d %H:%M:%S").date()
@@ -340,13 +350,25 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
     return False, "No matching API key found"
 
 
+def print_stored_keys() -> None:
+    """
+    Prints all stored API keys from the database, including decrypted values if possible.
 
-def print_stored_keys():
+    Connects to the database, retrieves usernames and encrypted API keys, and attempts to decrypt each key.
+    Handles decryption errors gracefully and displays relevant information for each user.
+
+    :return: None
+    """
     conn = connect()
     cursor = conn.cursor()
-    cursor.execute("SELECT username, api_key FROM users")
-    users = cursor.fetchall()
-    conn.close()
+
+    try:
+        query, params = build_print_stored_keys_query()
+        cursor.execute(query, params)
+        users = cursor.fetchall()
+    finally:
+        conn.close()
+
     print("Stored API keys:")
     for username, encrypted_key in users:
         print(f"Username: {username}, Encrypted key: {encrypted_key}")
@@ -357,20 +379,27 @@ def print_stored_keys():
             print(f"  Error decrypting key: {str(e)}")
 
 
-def log_token_usage(user_id, token_input, token_output, model, provider):
+def log_token_usage(user_id, token_input, token_output, model, provider) -> None:
+    """
+    Logs token usage for a user by calculating the cost based on input and output tokens,
+    and inserts a record into the token usage log in the database.
+
+    :param user_id: The ID of the user whose token usage is being logged.
+    :param token_input: Number of input tokens used.
+    :param token_output: Number of output tokens generated.
+    :param model: The model used for token processing.
+    :param provider: The provider of the model.
+    :return: None
+    """
     conn = connect()
     cursor = conn.cursor()
-    date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    # Fetch the cost from the costs table
-    current_date = datetime.now().strftime("%Y-%m-%d")
-    cursor.execute(
-        """
-            SELECT token_input_cost, token_output_cost 
-            FROM costs 
-            WHERE provider = %s AND model = %s AND start_date_valid <= %s AND end_date_valid >= %s
-        """,
-        (provider, model, current_date, current_date),
-    )
+    now = datetime.now()
+    date_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    current_date = now.strftime("%Y-%m-%d")
+
+    # SELECT cost
+    cost_query, cost_params = build_get_token_cost_query(provider, model, current_date)
+    cursor.execute(cost_query, cost_params)
     cost_row = cursor.fetchone()
     if not cost_row:
         raise ValueError(f"Cost not found for provider: {provider} and model: {model}")
@@ -378,13 +407,11 @@ def log_token_usage(user_id, token_input, token_output, model, provider):
     token_input_cost, token_output_cost = cost_row
     cost = (token_input * token_input_cost) + (token_output * token_output_cost)
 
-    cursor.execute(
-        """                                                                                                                                                                                                                   
-            INSERT INTO logs (date, user_id, token_input, token_output, cost, model, provider)                                                                                                                                           
-            VALUES (%s, %s, %s, %s, %s, %s, %s)                                                                                                                                                                                                     
-        """,
-        (date, user_id, token_input, token_output, cost, model, provider),
+    # INSERT log
+    insert_query, insert_params = build_insert_token_log_query(
+        date_str, user_id, token_input, token_output, cost, model, provider
     )
+    cursor.execute(insert_query, insert_params)
     conn.commit()
     conn.close()
 
