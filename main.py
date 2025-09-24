@@ -194,7 +194,7 @@ def addNewUser() -> Union[tuple[Response, int], tuple[str, int, dict[str, str]]]
         currentDate = datetime.now()
         expirationDate = currentDate.replace(year=currentDate.year + 2)
         addUserResult = database_pg.add_user(
-            user_email, generatedKey, expirationDate.isoformat()
+            user_email, generatedKey, expirationDate.strftime("%Y-%m-%d %H:%M:%S")
         )
         if addUserResult is None:
             return (
