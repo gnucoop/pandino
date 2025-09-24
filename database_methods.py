@@ -1,4 +1,3 @@
-
 """
 This module contains functions for safely building SQL queries.
 Each function returns a composable SQL object (psycopg.sql) and its parameters.
@@ -15,18 +14,14 @@ def build_get_user_by_username_query(username: str) -> Tuple[sql.Composed, Tuple
     :param username: The username to search for in the 'users' table.
     :return: A tuple containing the SQL query object and a tuple of parameters for query execution.
     """
-    query = sql.SQL(
-        "SELECT * FROM {table} WHERE {col_username} = %s"
-    ).format(
-        table=sql.Identifier("users"),
-        col_username=sql.Identifier("username")
+    query = sql.SQL("SELECT * FROM {table} WHERE {col_username} = %s").format(
+        table=sql.Identifier("users"), col_username=sql.Identifier("username")
     )
     return query, (username,)
 
+
 def build_add_user_query(
-    username: str,
-    encrypted_api_key: str,
-    date_valid_until: str
+    username: str, encrypted_api_key: str, date_valid_until: str
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to insert a new user into the 'users' table.
@@ -43,10 +38,11 @@ def build_add_user_query(
         table=sql.Identifier("users"),
         col_username=sql.Identifier("username"),
         col_api_key=sql.Identifier("api_key"),
-        col_date=sql.Identifier("date_valid_until")
+        col_date=sql.Identifier("date_valid_until"),
     )
     params = (username, encrypted_api_key, date_valid_until)
     return query, params
+
 
 def build_remove_user_query(username: str) -> Tuple[sql.Composed, Tuple[str]]:
     """
@@ -55,18 +51,14 @@ def build_remove_user_query(username: str) -> Tuple[sql.Composed, Tuple[str]]:
     :param username: The username of the user to remove.
     :return: A tuple with the SQL query and parameters.
     """
-    query = sql.SQL(
-        "DELETE FROM {table} WHERE {col_username} = %s"
-    ).format(
-        table=sql.Identifier("users"),
-        col_username=sql.Identifier("username")
+    query = sql.SQL("DELETE FROM {table} WHERE {col_username} = %s").format(
+        table=sql.Identifier("users"), col_username=sql.Identifier("username")
     )
     return query, (username,)
 
+
 def build_edit_tokens_query(
-    tokens_quantity: int,
-    date_valid_until: str,
-    username: str
+    tokens_quantity: int, date_valid_until: str, username: str
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to update a user's token balance and expiration date.
@@ -84,10 +76,11 @@ def build_edit_tokens_query(
         table=sql.Identifier("users"),
         col_tokens=sql.Identifier("tokens"),
         col_date=sql.Identifier("date_valid_until"),
-        col_username=sql.Identifier("username")
+        col_username=sql.Identifier("username"),
     )
     params = (tokens_quantity, date_valid_until, username)
     return query, params
+
 
 def build_list_users_query() -> Tuple[sql.Composed, Tuple[()]]:
     """
@@ -103,9 +96,10 @@ def build_list_users_query() -> Tuple[sql.Composed, Tuple[()]]:
         api_key=sql.Identifier("api_key"),
         date_valid_until=sql.Identifier("date_valid_until"),
         tokens=sql.Identifier("tokens"),
-        table=sql.Identifier("users")
+        table=sql.Identifier("users"),
     )
     return query, ()
+
 
 def build_print_stored_keys_query() -> Tuple[sql.Composed, Tuple[()]]:
     """
@@ -113,14 +107,13 @@ def build_print_stored_keys_query() -> Tuple[sql.Composed, Tuple[()]]:
 
     :return: Tuple with SQL query and empty parameter tuple.
     """
-    query = sql.SQL(
-        "SELECT {col_user}, {col_key} FROM {table}"
-    ).format(
+    query = sql.SQL("SELECT {col_user}, {col_key} FROM {table}").format(
         col_user=sql.Identifier("username"),
         col_key=sql.Identifier("api_key"),
-        table=sql.Identifier("users")
+        table=sql.Identifier("users"),
     )
     return query, ()
+
 
 def build_validate_api_key_query(username: str) -> Tuple[sql.Composed, Tuple[str]]:
     """
@@ -135,11 +128,14 @@ def build_validate_api_key_query(username: str) -> Tuple[sql.Composed, Tuple[str
         col_key=sql.Identifier("api_key"),
         col_date=sql.Identifier("date_valid_until"),
         table=sql.Identifier("users"),
-        col_user=sql.Identifier("username")
+        col_user=sql.Identifier("username"),
     )
     return query, (username,)
 
-def build_get_token_cost_query(provider: str, model: str, current_date: str) -> Tuple[sql.Composed, Tuple[str, str, str, str]]:
+
+def build_get_token_cost_query(
+    provider: str, model: str, current_date: str
+) -> Tuple[sql.Composed, Tuple[str, str, str, str]]:
     """
     Builds a query to fetch token input/output cost for a specific provider and model, valid on current_date.
 
@@ -160,6 +156,7 @@ def build_get_token_cost_query(provider: str, model: str, current_date: str) -> 
     )
     return query, (provider, model, current_date, current_date)
 
+
 def build_insert_token_log_query(
     date: str,
     user_id: int,
@@ -167,7 +164,7 @@ def build_insert_token_log_query(
     token_output: int,
     cost: float,
     model: str,
-    provider: str
+    provider: str,
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to insert a new usage log into the 'logs' table.
@@ -185,9 +182,7 @@ def build_insert_token_log_query(
         col_out=sql.Identifier("token_output"),
         col_cost=sql.Identifier("cost"),
         col_model=sql.Identifier("model"),
-        col_provider=sql.Identifier("provider")
+        col_provider=sql.Identifier("provider"),
     )
     params = (date, user_id, token_input, token_output, cost, model, provider)
     return query, params
-
-
