@@ -6,7 +6,7 @@ import base64
 from datetime import datetime
 from typing import Optional, Tuple
 import logging
-import pandas as pd 
+import pandas as pd
 
 from database_methods import (
     build_get_user_by_username_query,
@@ -17,7 +17,7 @@ from database_methods import (
     build_print_stored_keys_query,
     build_validate_api_key_query,
     build_get_token_cost_query,
-    build_insert_token_log_query
+    build_insert_token_log_query,
 )
 
 # Generate a key for encryption and decryption
@@ -56,7 +56,7 @@ def connect():
 def init_db():
     conn = connect()
     cursor = conn.cursor()
-    sql_init =  """
+    sql_init = """
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
             username TEXT NOT NULL UNIQUE,
@@ -88,7 +88,7 @@ def init_db():
     # Execute the SQL script
     try:
         # Split the script into individual statements
-        statements = sql_init.split(';')
+        statements = sql_init.split(";")
         for statement in statements:
             if statement.strip():  # Skip empty statements
                 cursor.execute(statement)
@@ -103,15 +103,13 @@ def init_db():
 
 def extend_expiration_date():
     current_date = datetime.now().strftime("%Y-%m-%d")
-    new_date = pd.to_datetime(current_date)+pd.DateOffset(years= 1) 
+    new_date = pd.to_datetime(current_date) + pd.DateOffset(years=1)
     string_date = str(new_date)
     return string_date
 
 
 def add_user(
-    username: str,
-    api_key: str,
-    date_valid_until: Optional[str] = None
+    username: str, api_key: str, date_valid_until: Optional[str] = None
 ) -> Optional[str]:
     """
     Adds a new user to the 'users' table with an encrypted API key and optional expiration date.
@@ -131,7 +129,9 @@ def add_user(
     encrypted_api_key = cipher_suite.encrypt(api_key.encode()).decode()
 
     try:
-        query, params = build_add_user_query(username, encrypted_api_key, date_valid_until)
+        query, params = build_add_user_query(
+            username, encrypted_api_key, date_valid_until
+        )
         cursor.execute(query, params)
         conn.commit()
         return None
@@ -187,7 +187,9 @@ def edit_tokens(username: str, tokens_quantity: int) -> tuple[bool, str]:
     cursor = conn.cursor()
 
     try:
-        query, params = build_edit_tokens_query(tokens_quantity, date_valid_until, username)
+        query, params = build_edit_tokens_query(
+            tokens_quantity, date_valid_until, username
+        )
         cursor.execute(query, params)
         conn.commit()
         return True, "Tokens edited successfully"
@@ -203,7 +205,7 @@ def edit_tokens(username: str, tokens_quantity: int) -> tuple[bool, str]:
 
 def list_users():
     """
-    Retrieves and displays a list of users from the database, 
+    Retrieves and displays a list of users from the database,
     including decrypted API keys, expiration dates, and token balances.
 
     :return: None. Prints user information to the console.
@@ -295,7 +297,7 @@ def get_user_tokens(user_name: str) -> Optional[int]:
 
 def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
     """
-    Validates whether the provided API key matches the user's stored (encrypted) key 
+    Validates whether the provided API key matches the user's stored (encrypted) key
     and is still within the valid date range.
 
     :param api_key: The plain API key provided by the user.
@@ -328,7 +330,9 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
         try:
             expiration = datetime.strptime(date_valid_until, "%Y-%m-%d %H:%M:%S").date()
         except Exception as e:
-            logging.error(f"Invalid date format in DB for user {user_email}: {date_valid_until}")
+            logging.error(
+                f"Invalid date format in DB for user {user_email}: {date_valid_until}"
+            )
             continue
 
         if expiration < current_date:
@@ -423,7 +427,9 @@ def print_help():
     print("  add_user <username> <api_key> <date_valid_until>  Add a new user")
     print("  remove_user <username> Removes an existing user")
     print("  get_user_by_username <user_name> Retrieve a user by its username/mail")
-    print("  edit_tokens <user_name> <quantity> Adds or removes a user's tokens by the user's username/mail")
+    print(
+        "  edit_tokens <user_name> <quantity> Adds or removes a user's tokens by the user's username/mail"
+    )
     print("  list_users                  List all users")
     print("  print_keys                  Print all stored API keys")
 
