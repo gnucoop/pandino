@@ -535,8 +535,8 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
         # Scelta modelli
         llm_type = COMPLETION_MODEL_PROVIDER or "google"
         model = COMPLETION_MODEL or "gemini-2.5-flash"
-        emb_llm_type = COMPLETION_EMBEDDING_MODEL_PROVIDER or "openai"
-        emb_model = COMPLETION_EMBEDDING_MODEL or "text-embedding-3-small"
+        emb_llm_type = COMPLETION_EMBEDDING_MODEL_PROVIDER or "Deepinfra"
+        emb_model = COMPLETION_EMBEDDING_MODEL or "intfloat/multilingual-e5-large-instruct"
 
         embeddings = choose_emb_model(emb_llm_type, emb_model)
 
