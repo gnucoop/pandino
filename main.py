@@ -6,6 +6,8 @@ import tempfile
 from datetime import datetime
 from dotenv import load_dotenv
 from typing import Any, List, Union
+import textwrap
+import logging
 
 # === Third-party ===
 from flask import Flask, request, Response, jsonify, abort
@@ -85,6 +87,14 @@ def welcome() -> str:
 
 # Validates an API Key associated to an user email
 def assert_valid_api_key(api_key: str, user_email: str) -> None:
+    """
+    Validate the provided API key for the given user email and abort the request if invalid.
+
+    :param api_key: API key string to be validated.
+    :param user_email: Email address of the user associated with the API key.
+    :return: None
+    :raises werkzeug.exceptions.HTTPException: Aborts with 403 if the API key is missing, expired, or invalid.
+    """
     if not api_key:
         abort(403, description="Missing API key")
     result, message = validate_api_key(api_key, user_email)
@@ -347,19 +357,25 @@ def startChat() -> Response | tuple[Response, int]:
 
         agentResponse: dict[str, Any] = {"Agent active": str(agent.conversation_id)}
 
-        question_templates = {
-            "ITA": os.getenv('PROMPT_STARTCHAT_ITA', f"""Dato questo dataframe pandas {data}. Prova a capire la natura dei dati e suggeriscimi che tipo di analisi dovrei chiedere. Spiega in dettaglio le tue risposte e fai qualsiasi suggerimento di possibile domanda che potrei fare. Non suggerire alcun codice Python. Per favore, rispondi in un formato html leggibile, senza asterischi e aggiungendo un'interruzione di riga dopo ogni paragrafo."""),
-            "ENG": os.getenv('PROMPT_STARTCHAT_ENG', f"""Given this pandas dataframe {data}. Try to understand the nature of the data and suggest me what kind of analysis should I ask for. Explain in details your answers and make any suggestions about possible questions that I could ask. DO not suggest any python code. Please reply in a readable html format, with no asterisks and adding a line break after each paragraph."""),
-            "FRA": os.getenv('PROMPT_STARTCHAT_FRA', f"""Étant donné ce dataframe pandas {data}. Essayez de comprendre la nature des données et suggérez-moi quel type d'analyse je devrais demander. Expliquez en détail vos réponses et faites toutes les suggestions de questions possibles que je pourrais poser. Ne suggérez aucun code Python. Veuillez répondre dans un format html lisible, sans astérisques et en ajoutant un saut de ligne après chaque paragraphe."""),
-            "ESP": os.getenv('PROMPT_STARTCHAT_ESP', f"""Dado este dataframe pandas {data}. Intenta entender la naturaleza de los datos y sugiereme qué tipo de análisis debería preguntar. Explica en detalle tus respuestas y haz cualquier sugerencia de pregunta posible que podría hacer. No sugieras ningún código Python. Por favor, responde en un formato html legible, sin asteriscos y agregando un salto de línea después de cada párrafo."""),
-            # Add more languages as needed
-        }
-        suggestionsQuestion = (
-            question_templates.get(lang, question_templates[lang])
-            if lang in question_templates
-            else question_templates.get("ENG", question_templates["ENG"])
+        # Language-aware prompt generation
+        language_instruction = (
+            f"Please answer using the official language of the country corresponding to the following ISO 3166-1 alpha-3 code: {lang}. "
+            f"If you can't match the language, please answer in English."
         )
-        suggestionsResponse = llm.invoke(suggestionsQuestion)
+        
+        base_prompt = os.getenv('PROMPT_STARTCHAT_ENG', textwrap.dedent(f"""\
+            This is a pandas dataframe: {data}
+            Try to understand the nature of the data and suggest me what kind of analysis should I ask for.
+            Explain in details your answers and make any suggestions about possible questions that I could ask.
+            Do not suggest any python code.
+            Please reply in a readable HTML format, with no asterisks and adding a line break after each paragraph.
+        """))
+        
+        question = f"{language_instruction}\n\n{base_prompt}"
+        
+        logging.info(f"Invoking startdatachat agent with language={lang}, user={user_email}")
+        
+        suggestionsResponse = llm.invoke(question)
         if suggestionsResponse and suggestionsResponse.content is not None:
             agentResponse.update({"suggested_questions": suggestionsResponse.content})
 
