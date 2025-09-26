@@ -230,10 +230,15 @@ def complete_chat(
         return CompletionResponse(error=error_msg)
 
     if not req.info and not vectors:
-        return CompletionResponse(answer="Non ho informazioni al riguardo")
+        return CompletionResponse(answer="No relevant information available.")
 
-    system_prompts = {
-        "ENG": os.getenv('PROMPT_COMPLETE_CHAT_SYSTEM_ENG', """
+    # Language instruction + fallback delegato all'LLM
+    language_instruction = (
+        f"Please answer using the official language of the country corresponding to the following ISO 3166-1 alpha-3 code: {language}. "
+        f"If you can't match the language, please answer in English."
+    )
+
+    base_prompt = os.getenv('PROMPT_COMPLETE_CHAT_SYSTEM', """
             You are Dino, an assistant who helps users by answering questions concisely.
             You will receive information divided by
             BACKGROUND INFORMATION:
@@ -252,73 +257,14 @@ def complete_chat(
             4. You MUST NEVER say 'I have no information about this' if there is ANY relevant information in the context
             5. If you find ANY relevant information in the context, use it to provide a partial answer
             6. Only say 'I have no information about this' if the context contains ABSOLUTELY NOTHING relevant to the question
-            """),
-        "ITA": os.getenv('PROMPT_COMPLETE_CHAT_SYSTEM_ITA', """
-            Sei Dino, un assistente che aiuta gli utenti rispondendo alle domande in modo conciso.
-            Riceverai informazioni divise per
-            INFORMAZIONI DI CONTESTO:
-            Qui troverai il contesto della risposta precedente
-            CONTENUTO RILEVANTE
-            Qui troverai il contesto per rispondere alla DOMANDA CORRENTE
-            CONTESTO DELLA CONVERSAZIONE PRECEDENTE
-            qui troverai la cronologia della chat
-            DOMANDA CORRENTE
-            la domanda a cui dovresti rispondere seguendo le importanti istruzioni sottostanti
+            """)
 
-            ISTRUZIONI IMPORTANTI:
-            1. DEVI SEMPRE controllare il contesto e le informazioni fornite per rispondere alle domande
-            2. DEVI USARE SOLO le informazioni dal contesto fornito per rispondere
-            3. NON DEVI inventare o dedurre informazioni non presenti nel contesto
-            4. NON DEVI MAI dire 'Non ho informazioni a riguardo' se ci sono informazioni pertinenti nel contesto
-            5. Se trovi QUALSIASI informazione pertinente nel contesto, usala per fornire una risposta parziale
-            6. Di' 'Non ho informazioni a riguardo' solo se il contesto non contiene ASSOLUTAMENTE NULLA di pertinente alla domanda
-            """),
-        "FRA": os.getenv('PROMPT_COMPLETE_CHAT_SYSTEM_FRA', """
-            Vous êtes Dino, un assistant qui aide les utilisateurs en répondant aux questions de manière concise.
-            Vous recevrez des informations divisées par
-            INFORMATIONS DE CONTEXTE:
-            Vous trouverez ici le contexte de la réponse précédente
-            CONTENU PERTINENT
-            Vous trouverez ici le contexte pour répondre à la QUESTION ACTUELLE
-            CONTEXTE DE LA CONVERSATION PRÉCÉDENTE
-            vous trouverez ici l'historique du chat
-            QUESTION ACTUELLE
-            la question à laquelle vous devez répondre en suivant les instructions importantes ci-dessous
-
-            INSTRUCTIONS IMPORTANTES:
-            1. Vous DEVEZ TOUJOURS vérifier le contexte et les informations fournis pour répondre aux questions
-            2. Vous DEVEZ UTILISER UNIQUEMENT les informations du contexte fourni pour répondre
-            3. Vous NE DEVEZ PAS inventer ou déduire des informations non présentes dans le contexte
-            4. Vous NE DEVEZ JAMAIS dire 'Je n'ai aucune information à ce sujet' s'il y a des informations pertinentes dans le contexte
-            5. Si vous trouvez TOUTE information pertinente dans le contexte, utilisez-la pour fournir une réponse partielle
-            6. Dites 'Je n'ai aucune information à ce sujet' uniquement si le contexte ne contient ABSOLUMENT RIEN de pertinent à la question
-            """),
-        "ESP": os.getenv('PROMPT_COMPLETE_CHAT_SYSTEM_ESP', """
-            Eres Dino, un asistente que ayuda a los usuarios respondiendo preguntas de forma concisa.
-            Recibirás información dividida por
-            INFORMACIÓN DE CONTEXTO:
-            Aquí encontrarás el contexto de la respuesta anterior
-            CONTENIDO RELEVANTE
-            Aquí encontrarás el contexto para responder a la PREGUNTA ACTUAL
-            CONTEXTO DE LA CONVERSACIÓN ANTERIOR
-            aquí encontrarás el historial del chat
-            PREGUNTA ACTUAL
-            la pregunta que debes responder siguiendo las importantes instrucciones a continuación
-
-            INSTRUCCIONES IMPORTANTES:
-            1. SIEMPRE DEBES verificar el contexto y la información proporcionada para responder a las preguntas
-            2. SOLO DEBES usar información del contexto proporcionado para responder
-            3. NO DEBES inventar ni inferir información que no esté presente en el contesto
-            4. NUNCA DEBES decir 'No tengo información sobre esto' si hay ALGUNA información relevante en el contexto
-            5. Si encuentras CUALQUIER informaciÃ³n relevante en el contexto, úsala para dar una respuesta parcial
-            6. Solo di 'No tengo información sobre esto' si el contexto no contiene ABSOLUTAMENTE NADA relevante para la pregunta
-            """),
-    }
-
+    full_prompt = f"{language_instruction}\n\n{base_prompt.strip()}"
+    
     messages = [
         {
             "role": "system",
-            "content": system_prompts.get(language, system_prompts["ENG"])
+            "content": full_prompt
         }
     ]
 
@@ -420,7 +366,6 @@ def complete_chat(
         logging.exception("Error in chat completion")
         return CompletionResponse(error=f"Chat completion failed: {str(e)}")
 
-
 def reply_to_prompt(prompt: str, username: str, llm_type: str, model: str, language: str = "ITA") -> str:
     """
     Generate a single text response from a structured prompt, using a fixed system message.
@@ -437,50 +382,26 @@ def reply_to_prompt(prompt: str, username: str, llm_type: str, model: str, langu
         logging.warning("Empty prompt provided to reply_to_prompt")
         return ""
 
-    system_prompts = {
-        "ITA": os.getenv('PROMPT_REPLY_TO_PROMPT_SYSTEM_ITA', (
-            "Sei un esperto di enti non-profit e devi realizzare il rapporto annuale della tua organizzazione.\n"
-            "Io ti chiederò di scrivere una sezione alla volta, dandoti indicazioni sui contenuti da includere in ciascuna sezione.\n"
-            "Usa un linguaggio preciso ma non troppo tecnico, che sia comprensibile anche al pubblico generale.\n"
-            "Non usare elenchi puntati o numerati. Non inserire titoli. Non aggiungere testo all'inizio o alla fine.\n"
-            'Non aggiungere paragrafi di conclusione o chiusura. Non usare espressioni come "in questo documento" usa invece "in questa sezione".\n'
-            "Scrivi sempre in italiano e genera l'output solo testo senza markdown o html.\n"
-            "Se non hai informazioni sufficienti per rispondere non rispondere niente."
-        )),
-        "ENG": os.getenv('PROMPT_REPLY_TO_PROMPT_SYSTEM_ENG', (
-            "You are an expert in non-profit organizations and you have to create the annual report for your organization.\n"
-            "I will ask you to write one section at a time, giving you instructions on the content to include in each section.\n"
-            "Use precise but not overly technical language that is understandable to the general public.\n"
-            "Do not use bulleted or numbered lists. Do not insert titles. Do not add text at the beginning or at the end.\n"
-            "Do not add concluding or closing paragraphs. Do not use expressions like 'in this document'; use 'in this section' instead.\n"
-            "Always write in English and generate the output as plain text without markdown or html.\n"
-            "If you do not have enough information to answer, do not answer anything."
-        )),
-        "FRA": os.getenv('PROMPT_REPLY_TO_PROMPT_SYSTEM_FRA', (
-            "Vous êtes un expert des organisations à but non lucratif et vous devez créer le rapport annuel de votre organisation.\n"
-            "Je vous demanderai d'écrire une section à la fois, en vous donnant des instructions sur le contenu à inclure dans chaque section.\n"
-            "Utilisez un langage précis mais pas trop technique, compréhensible pour le grand public.\n"
-            "N'utilisez pas de listes à puces ou numérotées. N'insérez pas de titres. N'ajoutez pas de texte au début ou à la fin.\n"
-            "N'ajoutez pas de paragraphes de conclusion. N'utilisez pas d'expressions comme 'dans ce document' ; utilisez plutôt 'dans cette section'.\n"
-            "Écrivez toujours en français et générez la sortie en texte brut sans markdown ou html.\n"
-            "Si vous n'avez pas assez d'informations pour répondre, ne répondez rien."
-        )),
-        "ESP": os.getenv('PROMPT_REPLY_TO_PROMPT_SYSTEM_ESP', (
-            "Eres un experto en organizaciones sin fines de lucro y tienes que crear el informe anual de tu organización.\n"
-            "Te pediré que escribas una sección a la vez, dándote instrucciones sobre el contenido a incluir en cada sección.\n"
-            "Usa un lenguaje preciso pero no demasiado técnico, que sea comprensible para el público en general.\n"
-            "No uses listas con viñetas o numeradas. No insertes títulos. No añadas texto al principio o al final.\n"
-            "No añadas párrafos de conclusión. No uses expresiones como 'en este documento'; en su lugar, usa 'en esta sección'.\n"
-            "Escribe siempre en español y genera la salida como texto sin formato, sin markdown o html.\n"
-            "Si no tienes suficiente información para responder, no respondas nada."
-        )),
-    }
+    # Language directive + Fallback to English if unsupported language
+    language_instruction = (
+        f"Please answer using the official language of the country corresponding to the following ISO 3166-1 alpha-3 code: {language}. "
+        f"If you can't match the language, please answer in English."
+    )
+
+    base_prompt = os.getenv('PROMPT_REPLY_TO_PROMPT_SYSTEM', (
+        "You are an expert in non-profit organizations and you have to create the annual report for your organization.\n"
+        "I will ask you to write one section at a time, giving you instructions on the content to include in each section.\n"
+        "Use precise but not overly technical language that is understandable to the general public.\n"
+        "Do not use bulleted or numbered lists. Do not insert titles. Do not add text at the beginning or at the end.\n"
+        "Do not add concluding or closing paragraphs. Do not use expressions like 'in this document'; use 'in this section' instead.\n"
+        "Always write in English and generate the output as plain text without markdown or html.\n"
+        "If you do not have enough information to answer, do not answer anything."
+    ))
+
+    full_prompt = f"{language_instruction}\n\n{base_prompt}"
 
     messages = [
-        {
-            "role": "system",
-            "content": system_prompts.get(language, system_prompts["ITA"])
-        },
+        {"role": "system", "content": full_prompt},
         {"role": "user", "content": prompt},
     ]
 
@@ -492,7 +413,6 @@ def reply_to_prompt(prompt: str, username: str, llm_type: str, model: str, langu
     except Exception as e:
         logging.exception(f"Error in prompt completion: {str(e)}")
         raise
-
 
 def describe_image(url: str, provider: str, model: str, language: str = "ITA") -> str:
     """
@@ -509,21 +429,25 @@ def describe_image(url: str, provider: str, model: str, language: str = "ITA") -
         f"Describing image from URL: {url} using provider: {provider}, model: {model}"
     )
 
-    text_prompts = {
-        "ITA": os.getenv('PROMPT_DESCRIBE_IMAGE_USER_ITA', "descrivi brevemente il contenuto di questa immagine"),
-        "ENG": os.getenv('PROMPT_DESCRIBE_IMAGE_USER_ENG', "briefly describe the content of this image"),
-        "FRA": os.getenv('PROMPT_DESCRIBE_IMAGE_USER_FRA', "décrivez brièvement le contenu de cette image"),
-        "ESP": os.getenv('PROMPT_DESCRIBE_IMAGE_USER_ESP', "describe brevemente el contenido de esta imagen"),
-    }
+    # Language directive + Fallback to English if unsupported language
+    language_instruction = (
+        f"Please answer using the official language of the country corresponding to the following ISO 3166-1 alpha-3 code: {language}. "
+        f"If you can't match the language, please answer in English."
+    )
+    
+    # Base user prompt
+    base_prompt = os.getenv(
+        'PROMPT_DESCRIBE_IMAGE_USER',
+        "briefly describe the content of this image"
+    )
+
+    full_prompt = f"{language_instruction}\n\n{base_prompt}"
 
     messages = [
         {
             "role": "user",
             "content": [
-                {
-                    "type": "text",
-                    "text": text_prompts.get(language, text_prompts["ITA"]),
-                },
+                {"type": "text", "text": full_prompt},
                 {"type": "image_url", "image_url": {"url": url}},
             ],
         }
@@ -540,7 +464,6 @@ def describe_image(url: str, provider: str, model: str, language: str = "ITA") -
     except Exception as e:
         logging.exception("Error while describing image")
         raise
-
 
 def audioFormPromptBuild(
     formSchemaExampleData: dict[str, Any],
@@ -571,50 +494,21 @@ def audioFormPromptBuild(
 
     logging.info("Building audio form prompts for schema: %s", formSchemaName)
 
-    system_prompts = {
-        "ITA": os.getenv('PROMPT_AUDIO_FORM_SYSTEM_ITA', f"""
-        Sei un assistente specializzato nell'estrazione di dati da trascrizioni audio.
-        Rispondi ESCLUSIVAMENTE in formato JSON valido.
-        Non aggiungere commenti, spiegazioni o testo aggiuntivo.
-        """),
-        "ENG": os.getenv('PROMPT_AUDIO_FORM_SYSTEM_ENG', f"""
+    # Language instruction
+    language_instruction = (
+        f"Please answer using the official language of the country corresponding to the following ISO 3166-1 alpha-3 code: {language}. "
+        f"If you can't match the language, please answer in English."
+    )
+
+    # Base prompts
+    
+    system_base = os.getenv('PROMPT_AUDIO_FORM_SYSTEM', """
         You are an assistant specialized in extracting data from audio transcriptions.
         Respond EXCLUSIVELY in valid JSON format.
         Do not add comments, explanations, or additional text.
-        """),
-        "FRA": os.getenv('PROMPT_AUDIO_FORM_SYSTEM_FRA', f"""
-        Vous êtes un assistant spécialisé dans l'extraction de données à partir de transcriptions audio.
-        Répondez EXCLUSIVEMENT en format JSON valide.
-        N'ajoutez pas de commentaires, d'explications ou de texte supplémentaire.
-        """),
-        "ESP": os.getenv('PROMPT_AUDIO_FORM_SYSTEM_ESP', f"""
-        Eres un asistente especializado en la extracción de datos de transcripciones de audio.
-        Responde EXCLUSIVAMENTE en formato JSON válido.
-        No agregues comentarios, explicaciones o texto adicional.
-        """),
-    }
+    """)
 
-    user_prompts = {
-        "ITA": os.getenv('PROMPT_AUDIO_FORM_USER_ITA', f"""
-        DATI INPUT:
-        Nome dello schema del form: {formSchemaName}
-        Opzioni disponibili: {formSchemaChoices}
-        Template di output e tipi dei campi: {fieldTypes}
-        Descrizione dei campi: {fieldDescriptions}
-        Trascrizione audio: {transcribedAudio}
-        
-        ISTRUZIONI:
-        Compila il template JSON utilizzando SOLO le informazioni dalla trascrizione.
-        REGOLE PER CAMPO:
-        - boolean: true/false basato sulla trascrizione
-        - multiplechoice: array di valori da "Opzioni disponibili". Se menzionata opzione non presente e se tra le Opzioni disponibili esiste "altro", includi "altro"
-        - singlechoice: array di valori da "Opzioni disponibili". Se menzionata opzione non presente e se tra le Opzioni disponibili esiste "altro", includi "altro"
-        - date: formato YYYY-MM-DD
-        - text/string: testo estratto dalla trascrizione
-        - range/number: valore numerico
-        OUTPUT: JSON compilato seguendo il template fornito.
-        """),
-        "ENG": os.getenv('PROMPT_AUDIO_FORM_USER_ENG', f"""
+    user_base = os.getenv('PROMPT_AUDIO_FORM_USER', f"""
         INPUT DATA:
         Form schema name: {formSchemaName}
         Available options: {formSchemaChoices}
@@ -632,51 +526,12 @@ def audioFormPromptBuild(
         - text/string: text extracted from the transcription
         - range/number: numeric value
         OUTPUT: Compiled JSON following the provided template.
-        """),
-        "FRA": os.getenv('PROMPT_AUDIO_FORM_USER_FRA', f"""
-        DONNÉES D'ENTRÉE:
-        Nom du schéma de formulaire: {formSchemaName}
-        Options disponibles: {formSchemaChoices}
-        Modèle de sortie et types de champs: {fieldTypes}
-        Description des champs: {fieldDescriptions}
-        Transcription audio: {transcribedAudio}
-        
-        INSTRUCTIONS:
-        Remplissez le modèle JSON en utilisant UNIQUEMENT les informations de la transcription.
-        RÈGLES PAR CHAMP:
-        - boolean: true/false basé sur la transcription
-        - multiplechoice: tableau de valeurs parmi les "Options disponibles". Si une option mentionnée n'est pas présente et si "autre" existe parmi les Options disponibles, inclure "autre"
-        - singlechoice: tableau de valeurs parmi les "Options disponibles". Si une option mentionnée n'est pas présente et si "autre" existe parmi les Options disponibles, inclure "autre"
-        - date: format YYYY-MM-DD
-        - text/string: texte extrait de la transcription
-        - range/number: valeur numérique
-        SORTIE: JSON compilé suivant le modèle fourni.
-        """),
-        "ESP": os.getenv('PROMPT_AUDIO_FORM_USER_ESP', f"""
-        DATOS DE ENTRADA:
-        Nombre del esquema del formulario: {formSchemaName}
-        Opciones disponibles: {formSchemaChoices}
-        Plantilla de salida y tipos de campo: {fieldTypes}
-        Descripciones de los campos: {fieldDescriptions}
-        Transcripción de audio: {transcribedAudio}
-        
-        INSTRUCCIONES:
-        Complete la plantilla JSON utilizando ÚNICAMENTE información de la transcripción.
-        REGLAS POR CAMPO:
-        - boolean: true/false basado en la transcripción
-        - multiplechoice: matriz de valores de "Opciones disponibles". Si una opción mencionada no está presente y si "otro" existe entre las Opciones disponibles, incluya "otro"
-        - singlechoice: matriz de valores de "Opciones disponibles". Si una opción mencionada no está presente y si "otro" existe entre las Opciones disponibles, incluya "otro"
-        - date: formato YYYY-MM-DD
-        - text/string: texto extraído de la transcripción
-        - range/number: valor numérico
-        SALIDA: JSON compilado siguiendo la plantilla proporcionada.
-        """),
-    }
+    """)
 
-    system = system_prompts.get(language, system_prompts["ITA"])
-    user = user_prompts.get(language, user_prompts["ITA"])
+    system = f"{language_instruction}\n\n{system_base.strip()}"
+    user = f"{language_instruction}\n\n{user_base.strip()}"
 
-    return {"systemprompt": system.strip(), "userprompt": user.strip()}
+    return {"systemprompt": system, "userprompt": user}
 
 
 def audioFormCompilation(
