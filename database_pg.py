@@ -84,6 +84,12 @@ def init_db():
             token_input_cost REAL NOT NULL,
             token_output_cost REAL NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS prompts (
+            id SERIAL PRIMARY KEY,
+            title TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            message TEXT NOT NULL
+        );
     """
     # Execute the SQL script
     try:
