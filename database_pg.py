@@ -18,6 +18,7 @@ from database_methods import (
     build_validate_api_key_query,
     build_get_token_cost_query,
     build_insert_token_log_query,
+    build_get_prompt_query
 )
 
 # Generate a key for encryption and decryption
@@ -424,6 +425,36 @@ def log_token_usage(user_id, token_input, token_output, model, provider) -> None
     cursor.execute(insert_query, insert_params)
     conn.commit()
     conn.close()
+
+
+def get_prompt_from_db(title: str, version: Optional[int] = None) -> Optional[str]:
+    """
+    Retrieves a prompt's message from the database by title, optionally filtering by version.
+
+    :param title: The identifier of the prompt (e.g., 'start_chat_system').
+    :param version: Optional specific version to retrieve. If None, retrieves the most recent version.
+    :return: The prompt message as a string, or None if not found.
+    """
+    logging.info(f"Retrieving prompt from DB: title='{title}', version={version}")
+
+    conn = connect()
+    cursor = conn.cursor()
+
+    query, params = build_get_prompt_query(title, version)
+
+    try:
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+        if result:
+            return result[0]  # message
+        else:
+            logging.warning(f"No prompt found in DB for title='{title}', version={version}")
+            return None
+    except Exception as e:
+        logging.exception(f"Error retrieving prompt from DB: {str(e)}")
+        return None
+    finally:
+        conn.close()
 
 
 def print_help():

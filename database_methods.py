@@ -4,7 +4,7 @@ Each function returns a composable SQL object (psycopg.sql) and its parameters.
 """
 
 from psycopg import sql
-from typing import Tuple, Any
+from typing import Tuple, Any, Optional
 
 
 def build_get_user_by_username_query(username: str) -> Tuple[sql.Composed, Tuple[str]]:
@@ -186,3 +186,41 @@ def build_insert_token_log_query(
     )
     params = (date, user_id, token_input, token_output, cost, model, provider)
     return query, params
+
+
+def build_get_prompt_query(
+    title: str, 
+    version: Optional[int] = None
+) -> Tuple[sql.Composed, Tuple[str, int] | Tuple[str]]:
+    """
+    Builds a SQL query to retrieve a prompt by title, optionally filtering by version.
+    If version is None, returns the prompt with the highest version for that title.
+
+    :param title: The identifier of the prompt (e.g., 'start_chat_system').
+    :param version: Optional specific version to retrieve.
+    :return: Tuple of SQL query and parameters.
+    """
+    if version is not None:
+        query = sql.SQL(
+            "SELECT {col_message} FROM {table} "
+            "WHERE {col_title} = %s AND {col_version} = %s"
+        ).format(
+            col_message=sql.Identifier("message"),
+            table=sql.Identifier("prompts"),
+            col_title=sql.Identifier("title"),
+            col_version=sql.Identifier("version"),
+        )
+        return query, (title, version)
+    else:
+        query = sql.SQL(
+            "SELECT {col_message} FROM {table} "
+            "WHERE {col_title} = %s "
+            "ORDER BY {col_version} DESC LIMIT 1"
+        ).format(
+            col_message=sql.Identifier("message"),
+            table=sql.Identifier("prompts"),
+            col_title=sql.Identifier("title"),
+            col_version=sql.Identifier("version"),
+        )
+        return query, (title,)
+

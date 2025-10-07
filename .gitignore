@@ -12,6 +12,7 @@ venv/
 cache/
 exports/
 .env
+.env.backup
 tmp/
 
 # Compiled Java class files
