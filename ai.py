@@ -1,9 +1,11 @@
 import logging
 import os
 import re
+import textwrap
 from dotenv import load_dotenv
 from pandasai.llm import BambooLLM
-from database_pg import get_user_by_username, log_token_usage
+from database_pg import get_user_by_username, log_token_usage, get_prompt_from_db
+from prompt_utils import load_prompt, render_prompt
 from vector_store import VectorStore
 from dataclasses import dataclass
 from typing import Optional, Union, List, Any, cast
@@ -238,7 +240,7 @@ def complete_chat(
         f"If you can't match the language, please answer in English."
     )
 
-    base_prompt = os.getenv('PROMPT_COMPLETE_CHAT_SYSTEM', """
+    default_complete_chat_prompt = textwrap.dedent("""\
             You are Dino, an assistant who helps users by answering questions concisely.
             You will receive information divided by
             BACKGROUND INFORMATION:
@@ -257,7 +259,14 @@ def complete_chat(
             4. You MUST NEVER say 'I have no information about this' if there is ANY relevant information in the context
             5. If you find ANY relevant information in the context, use it to provide a partial answer
             6. Only say 'I have no information about this' if the context contains ABSOLUTELY NOTHING relevant to the question
-            """)
+    """)
+
+    base_prompt_template = load_prompt(
+        "complete_chat_system",
+        default_text=default_complete_chat_prompt
+    )
+    
+    base_prompt = render_prompt(base_prompt_template)
 
     full_prompt = f"{language_instruction}\n\n{base_prompt.strip()}"
     
@@ -388,7 +397,7 @@ def reply_to_prompt(prompt: str, username: str, llm_type: str, model: str, langu
         f"If you can't match the language, please answer in English."
     )
 
-    base_prompt = os.getenv('PROMPT_REPLY_TO_PROMPT_SYSTEM', (
+    default_reply_to_prompt = (
         "You are an expert in non-profit organizations and you have to create the annual report for your organization.\n"
         "I will ask you to write one section at a time, giving you instructions on the content to include in each section.\n"
         "Use precise but not overly technical language that is understandable to the general public.\n"
@@ -396,7 +405,14 @@ def reply_to_prompt(prompt: str, username: str, llm_type: str, model: str, langu
         "Do not add concluding or closing paragraphs. Do not use expressions like 'in this document'; use 'in this section' instead.\n"
         "Always write in English and generate the output as plain text without markdown or html.\n"
         "If you do not have enough information to answer, do not answer anything."
-    ))
+    )
+
+    base_prompt_template = load_prompt(
+        "reply_to_prompt_system",
+        default_text=default_reply_to_prompt
+    )
+    
+    base_prompt = render_prompt(base_prompt_template)    
 
     full_prompt = f"{language_instruction}\n\n{base_prompt}"
 
@@ -435,11 +451,14 @@ def describe_image(url: str, provider: str, model: str, language: str = "ITA") -
         f"If you can't match the language, please answer in English."
     )
     
-    # Base user prompt
-    base_prompt = os.getenv(
-        'PROMPT_DESCRIBE_IMAGE_USER',
-        "briefly describe the content of this image"
+    default_describe_image_prompt = "briefly describe the content of this image"
+
+    base_prompt_template = load_prompt(
+        "describe_image_user",
+        default_text=default_describe_image_prompt
     )
+    
+    base_prompt = render_prompt(base_prompt_template)
 
     full_prompt = f"{language_instruction}\n\n{base_prompt}"
 
@@ -502,13 +521,13 @@ def audioFormPromptBuild(
 
     # Base prompts
     
-    system_base = os.getenv('PROMPT_AUDIO_FORM_SYSTEM', """
+    default_audio_form_system = textwrap.dedent("""\
         You are an assistant specialized in extracting data from audio transcriptions.
         Respond EXCLUSIVELY in valid JSON format.
         Do not add comments, explanations, or additional text.
     """)
 
-    user_base = os.getenv('PROMPT_AUDIO_FORM_USER', f"""
+    default_audio_form_user = textwrap.dedent("""\
         INPUT DATA:
         Form schema name: {formSchemaName}
         Available options: {formSchemaChoices}
@@ -527,6 +546,25 @@ def audioFormPromptBuild(
         - range/number: numeric value
         OUTPUT: Compiled JSON following the provided template.
     """)
+    
+    system_base_template = load_prompt(
+        "audio_form_system",
+        default_text=default_audio_form_system
+    )
+    system_base = render_prompt(system_base_template)
+
+    user_base_template = load_prompt(
+        "audio_form_user",
+        default_text=default_audio_form_user
+    )
+    user_base = render_prompt(
+        user_base_template,
+        formSchemaName=formSchemaName,
+        formSchemaChoices=formSchemaChoices,
+        fieldTypes=fieldTypes,
+        fieldDescriptions=fieldDescriptions,
+        transcribedAudio=transcribedAudio,
+    )    
 
     system = f"{language_instruction}\n\n{system_base.strip()}"
     user = f"{language_instruction}\n\n{user_base.strip()}"

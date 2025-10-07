@@ -30,15 +30,18 @@ from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
 from database_pg import edit_tokens, validate_api_key
 from dino import dino_authenticate
-import ai
 from ai import (
     audioFormCompilation,
     audioFormPromptBuild,
     CompletionResponse,
+    CompletionRequest,
     describe_image,
+    complete_chat,
+    reply_to_prompt,
+    choose_llm,
+    choose_emb_model
 )
-from ai import complete_chat, reply_to_prompt, choose_llm, choose_emb_model
-
+from prompt_utils import load_prompt, render_prompt
 from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env file
@@ -363,13 +366,16 @@ def startChat() -> Response | tuple[Response, int]:
             f"If you can't match the language, please answer in English."
         )
         
-        base_prompt = os.getenv('PROMPT_STARTCHAT_ENG', textwrap.dedent(f"""\
+        default_startchat_prompt = textwrap.dedent("""\
             This is a pandas dataframe: {data}
             Try to understand the nature of the data and suggest me what kind of analysis should I ask for.
             Explain in details your answers and make any suggestions about possible questions that I could ask.
             Do not suggest any python code.
             Please reply in a readable HTML format, with no asterisks and adding a line break after each paragraph.
-        """))
+        """)
+        
+        base_prompt_template = load_prompt("start_chat_system", default_text=default_startchat_prompt)
+        base_prompt = render_prompt(base_prompt_template, data=data)
         
         question = f"{language_instruction}\n\n{base_prompt}"
         
@@ -541,7 +547,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
             )
 
         # Request assembly
-        chat_request = ai.CompletionRequest(
+        chat_request = CompletionRequest(
             username=r["username"],
             info=r.get("info", []),
             chat=r["chat"],
