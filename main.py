@@ -1,5 +1,6 @@
 # === Built-in ===
 import os
+import base64
 import math
 import secrets
 import tempfile
@@ -739,22 +740,42 @@ def whisper_parse() -> Union[Response, tuple[Response, int]]:
     user_name = user_name_header.replace(" ", "_").strip()
     assert_valid_api_key(api_key, user_email)
 
-    request_file = request.files.get("file")
-    if not request_file:
+    file = request.files.get("file")
+    if not file:
         return jsonify({"error": "Missing file"}), 400
 
     lang = request.form.get("lang") or "ENG"
 
-    response = whisper_response(request_file)
+    if file.mimetype.startswith("audio"):
+        response = whisper_response(file)
+        if response.status_code == 200:
+            try:
+                return jsonify(response.json()), 200
+            except Exception as e:
+                return jsonify({"error": f"Invalid JSON from whisper: {str(e)}"}), 500
+        else:
+            app.logger.error(f"Whisper failed: {response.status_code} - {response.text}")
+            return jsonify({"error": "Whisper transcription failed"}), 500
 
-    if response.status_code == 200:
+    if file.mimetype == "application/pdf":
         try:
-            return jsonify(response.json()), 200
+            with tempfile.NamedTemporaryFile(suffix=".pdf") as temp:
+                file.save(temp.name)
+                text = pymupdf4llm.to_markdown(temp.name)
+                return jsonify({"text": text}), 200
         except Exception as e:
-            return jsonify({"error": f"Invalid JSON from whisper: {str(e)}"}), 500
-    else:
-        app.logger.error(f"Whisper failed: {response.status_code} - {response.text}")
-        return jsonify({"error": "Whisper transcription failed"}), 500
+            return jsonify({"error": f"Error extracting text from pdf: {str(e)}"}), 422
+        
+    if file.mimetype.startswith("image"):
+        try:
+            b64 = base64.b64encode(file.read()).decode()
+            dataurl = f"data:{file.mimetype};base64,{b64}"
+            text = describe_image(dataurl, VISION_PROVIDER or "", VISION_MODEL or "")
+            return jsonify({"text": text}), 200
+        except Exception as e:
+            return jsonify({"error": f"Error extracting text from image: {str(e)}"}), 500
+
+    return jsonify({"error": f"Unexpected file mimetype: {file.mimetype}"}), 400
 
 
 # Define a route for the '/audioformcompilation' endpoint
