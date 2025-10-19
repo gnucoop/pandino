@@ -23,6 +23,7 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
     MarkdownTextSplitter,
 )
+import bcrypt
 
 # === Local modules ===
 from agent_manager import getAgent, createAgent, deleteAgent
@@ -46,7 +47,7 @@ from prompt_utils import load_prompt, render_prompt
 from dotenv import load_dotenv
 
 
-from werkzeug.security import generate_password_hash, check_password_hash
+#from werkzeug.security import generate_password_hash, check_password_hash
 
 
 load_dotenv()  # Load environment variables from .env file
@@ -853,7 +854,7 @@ def img_comparison():
     return "The /img-comparison endpoint is not yet implemented.", 501
 
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
-ADMIN_PASSWORD_HASH = os.environ.get('ADMIN_PASSWORD_HASH', generate_password_hash('admin123', method='pbkdf2:sha256'))
+ADMIN_PASSWORD_HASH = os.environ.get('ADMIN_PASSWORD_HASH', '').encode("utf-8")
 
 # Importa le funzioni dal tuo database_pg.py
 from database_pg import get_users_for_admin, get_users_stats,get_logs_for_admin, get_logs_stats
@@ -874,7 +875,7 @@ def admin_login():
         username = request.form.get('username')
         password = request.form.get('password')
         
-        if username == ADMIN_USERNAME and check_password_hash(ADMIN_PASSWORD_HASH, password):
+        if username == ADMIN_USERNAME and bcrypt.checkpw(password.encode('utf-8'), ADMIN_PASSWORD_HASH):
             session['admin_logged_in'] = True
             session['admin_username'] = username
             flash('Successfully logged in!', 'success')
