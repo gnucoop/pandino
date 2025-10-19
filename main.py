@@ -36,7 +36,7 @@ from file_manager import isImageFilePath, fileToBase64
 from retriever_tool import RetrieverTool
 from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
-from database_pg import edit_tokens, validate_api_key, get_users_for_admin, get_users_stats, get_logs_for_admin, get_logs_stats, update_user_tokens, get_user_by_id
+from database_pg import edit_tokens, validate_api_key, get_users_for_admin, get_users_stats, get_logs_for_admin, get_logs_stats, update_user_tokens, get_user_by_id, get_all_prompts, get_prompt_by_id, add_prompt, update_prompt, delete_prompt
 
 
 from dino import dino_authenticate
@@ -1171,7 +1171,7 @@ def admin_edit_user(user_id):
                 flash('Utente non trovato', 'danger')
                 
         except Exception as e:
-            flash(f'Errore nell\'aggiornamento: {str(e)}', 'danger')
+            flash(f"Errore nell'aggiornamento: {str(e)}", 'danger')
         
         return redirect(url_for('admin_users'))
     
@@ -1186,6 +1186,86 @@ def admin_edit_user(user_id):
     except Exception as e:
         flash(f'Errore: {str(e)}', 'danger')
         return redirect(url_for('admin_users'))
+
+@app.route('/admin/prompts')
+@admin_required
+def admin_prompts():
+    try:
+        prompts = get_all_prompts()
+        return render_template('admin/prompts.html', prompts=prompts)
+    except Exception as e:
+        flash(f'Errore nel recupero prompt: {str(e)}', 'danger')
+        return render_template('admin/prompts.html', prompts=[])
+
+@app.route('/admin/prompts/add', methods=['POST'])
+@admin_required
+def admin_add_prompt():
+    try:
+        title = request.form.get('title')
+        version = request.form.get('version', type=int)
+        message = request.form.get('message')
+        
+        if not title or not version or not message:
+            flash('Tutti i campi sono obbligatori', 'danger')
+            return redirect(url_for('admin_prompts'))
+        
+        add_prompt(title, version, message)
+        flash('Prompt aggiunto con successo', 'success')
+    except Exception as e:
+        flash(f'Errore nell\'aggiunta del prompt: {str(e)}', 'danger')
+    
+    return redirect(url_for('admin_prompts'))
+
+@app.route('/admin/prompts/<int:prompt_id>/edit', methods=['GET', 'POST'])
+@admin_required
+def admin_edit_prompt(prompt_id):
+    if request.method == 'POST':
+        try:
+            title = request.form.get('title')
+            version = request.form.get('version', type=int)
+            message = request.form.get('message')
+            
+            if not title or not version or not message:
+                flash('Tutti i campi sono obbligatori', 'danger')
+                return redirect(url_for('admin_edit_prompt', prompt_id=prompt_id))
+            
+            success = update_prompt(prompt_id, title, version, message)
+            
+            if success:
+                flash('Prompt aggiornato con successo', 'success')
+            else:
+                flash('Prompt non trovato', 'danger')
+                
+        except Exception as e:
+            flash(f"Errore nell'aggiornamento: {str(e)}", 'danger')
+        
+        return redirect(url_for('admin_prompts'))
+    
+    # GET request - show edit form
+    try:
+        prompt = get_prompt_by_id(prompt_id)
+        if prompt:
+            return render_template('admin/edit_prompt.html', prompt=prompt)
+        else:
+            flash('Prompt non trovato', 'danger')
+            return redirect(url_for('admin_prompts'))
+    except Exception as e:
+        flash(f'Errore: {str(e)}', 'danger')
+        return redirect(url_for('admin_prompts'))
+
+@app.route('/admin/prompts/<int:prompt_id>/delete', methods=['POST'])
+@admin_required
+def admin_delete_prompt(prompt_id):
+    try:
+        success = delete_prompt(prompt_id)
+        if success:
+            flash('Prompt eliminato con successo', 'success')
+        else:
+            flash('Prompt non trovato', 'danger')
+    except Exception as e:
+        flash(f"Errore nell'eliminazione: {str(e)}", 'danger')
+    
+    return redirect(url_for('admin_prompts'))
 
 @app.route("/health")
 def health():

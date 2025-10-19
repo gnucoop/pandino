@@ -1,0 +1,67 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Manage Prompts - Admin Panel{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+    <h1 class="h2">Manage Prompts</h1>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        Add New Prompt
+    </div>
+    <div class="card-body">
+        <form method="POST" action="{{ url_for('admin_add_prompt') }}">
+            <div class="mb-3">
+                <label for="title" class="form-label">Title</label>
+                <input type="text" class="form-control" id="title" name="title" required>
+            </div>
+            <div class="mb-3">
+                <label for="version" class="form-label">Version</label>
+                <input type="number" class="form-control" id="version" name="version" required>
+            </div>
+            <div class="mb-3">
+                <label for="message" class="form-label">Message</label>
+                <textarea class="form-control" id="message" name="message" rows="5" required></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Add Prompt</button>
+        </form>
+    </div>
+</div>
+
+<div class="card mt-4">
+    <div class="card-header">
+        Existing Prompts
+    </div>
+    <div class="card-body">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th scope="col">ID</th>
+                    <th scope="col">Title</th>
+                    <th scope="col">Version</th>
+                    <th scope="col">Message</th>
+                    <th scope="col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for prompt in prompts %}
+                <tr>
+                    <td>{{ prompt.id }}</td>
+                    <td>{{ prompt.title }}</td>
+                    <td>{{ prompt.version }}</td>
+                    <td>{{ prompt.message|truncate(100) }}</td>
+                    <td>
+                        <a href="{{ url_for('admin_edit_prompt', prompt_id=prompt.id) }}" class="btn btn-sm btn-outline-primary">Edit</a>
+                        <form method="POST" action="{{ url_for('admin_delete_prompt', prompt_id=prompt.id) }}" style="display:inline;">
+                            <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete this prompt?');">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

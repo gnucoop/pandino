@@ -377,3 +377,100 @@ def build_get_prompt_query(
         )
         return query, (title,)
 
+
+def build_get_all_prompts_query() -> Tuple[sql.Composed, Tuple[()]]:
+    """
+    Builds a SQL query to retrieve all prompts.
+
+    :return: Tuple with SQL query and empty parameter tuple.
+    """
+    query = sql.SQL("SELECT {id}, {title}, {version}, {message} FROM {table} ORDER BY {id} ASC").format(
+        id=sql.Identifier("id"),
+        title=sql.Identifier("title"),
+        version=sql.Identifier("version"),
+        message=sql.Identifier("message"),
+        table=sql.Identifier("prompts"),
+    )
+    return query, ()
+
+
+def build_get_prompt_by_id_query(prompt_id: int) -> Tuple[sql.Composed, Tuple[int]]:
+    """
+    Builds a SQL query to retrieve a prompt by its ID.
+
+    :param prompt_id: The ID of the prompt to retrieve.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "SELECT {id}, {title}, {version}, {message} FROM {table} WHERE {id} = %s"
+    ).format(
+        id=sql.Identifier("id"),
+        title=sql.Identifier("title"),
+        version=sql.Identifier("version"),
+        message=sql.Identifier("message"),
+        table=sql.Identifier("prompts"),
+    )
+    return query, (prompt_id,)
+
+
+def build_add_prompt_query(
+    title: str, version: int, message: str
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to insert a new prompt into the 'prompts' table.
+
+    :param title: Title of the prompt.
+    :param version: Version of the prompt.
+    :param message: Message of the prompt.
+    :return: Tuple with SQL query and parameters.
+    """
+    query = sql.SQL(
+        "INSERT INTO {table} ({col_title}, {col_version}, {col_message}) "
+        "VALUES (%s, %s, %s)"
+    ).format(
+        table=sql.Identifier("prompts"),
+        col_title=sql.Identifier("title"),
+        col_version=sql.Identifier("version"),
+        col_message=sql.Identifier("message"),
+    )
+    params = (title, version, message)
+    return query, params
+
+
+def build_update_prompt_query(
+    prompt_id: int, title: str, version: int, message: str
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to update a prompt.
+
+    :param prompt_id: ID of the prompt to update.
+    :param title: New title value.
+    :param version: New version value.
+    :param message: New message value.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "UPDATE {table} SET {title} = %s, {version} = %s, {message} = %s WHERE {id} = %s"
+    ).format(
+        table=sql.Identifier("prompts"),
+        title=sql.Identifier("title"),
+        version=sql.Identifier("version"),
+        message=sql.Identifier("message"),
+        id=sql.Identifier("id"),
+    )
+    return query, (title, version, message, prompt_id)
+
+
+def build_delete_prompt_query(prompt_id: int) -> Tuple[sql.Composed, Tuple[int]]:
+    """
+    Builds a SQL query to delete a prompt from the 'prompts' table by prompt_id.
+
+    :param prompt_id: The id of the prompt to remove.
+    :return: A tuple with the SQL query and parameters.
+    """
+    query = sql.SQL("DELETE FROM {table} WHERE {col_id} = %s").format(
+        table=sql.Identifier("prompts"), col_id=sql.Identifier("id")
+    )
+    return query, (prompt_id,)
+
+
