@@ -5,9 +5,7 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h1>Users Management</h1>
-    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addUserModal">
-        <i class="fas fa-plus me-2"></i>Add New User
-    </button>
+
 </div>
 
 <div class="card">
@@ -57,7 +55,8 @@
                                 <i class="fas fa-copy"></i>
                             </button>
                         </td>
-                        <td><span class="badge bg-info">{{ user.role }}</span></td>
+                            <td><span class="badge bg-info">{{ user.tokens }}</span></td>
+
                         <td>
                             {% if user.is_active %}
                             <span class="badge bg-success">Active</span>
@@ -68,13 +67,10 @@
                         <td>{{ user.created_at if user.created_at else 'N/A' }}</td>
                         <td>
                             <div class="btn-group" role="group">
-                                <button class="btn btn-sm btn-outline-primary" title="View">
-                                    <i class="fas fa-eye"></i>
-                                </button>
-                                <button class="btn btn-sm btn-outline-warning" title="Edit">
+                                <a href="{{ url_for('admin_edit_user', user_id=user.id) }}" class="btn btn-sm btn-outline-warning" title="Edit Tokens">
                                     <i class="fas fa-edit"></i>
-                                </button>
-                                <button class="btn btn-sm btn-outline-danger" title="Delete">
+                                </a>
+                                <button class="btn btn-sm btn-outline-danger" title="Delete" disabled>
                                     <i class="fas fa-trash"></i>
                                 </button>
                             </div>
@@ -106,54 +102,6 @@
             <p class="text-muted">Start by adding your first user</p>
         </div>
         {% endif %}
-    </div>
-</div>
-
-<!-- Add User Modal -->
-<div class="modal fade" id="addUserModal" tabindex="-1" aria-labelledby="addUserModalLabel" aria-hidden="true">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="addUserModalLabel">Add New User</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <form method="POST" action="{{ url_for('admin_users') }}">
-                <div class="modal-body">
-                    <div class="mb-3">
-                        <label for="userName" class="form-label">Name</label>
-                        <input type="text" class="form-control" id="userName" name="name" required>
-                    </div>
-                    <div class="mb-3">
-                        <label for="userEmail" class="form-label">Email</label>
-                        <input type="email" class="form-control" id="userEmail" name="email" required>
-                    </div>
-                    <div class="mb-3">
-                        <label for="userPassword" class="form-label">Password</label>
-                        <input type="password" class="form-control" id="userPassword" name="password" required>
-                    </div>
-                    <div class="mb-3">
-                        <label for="userRole" class="form-label">Role</label>
-                        <select class="form-select" id="userRole" name="role">
-                            <option value="user">User</option>
-                            <option value="moderator">Moderator</option>
-                            <option value="admin">Admin</option>
-                        </select>
-                    </div>
-                    <div class="mb-3">
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="userActive" name="is_active" checked>
-                            <label class="form-check-label" for="userActive">
-                                Active Account
-                            </label>
-                        </div>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Add User</button>
-                </div>
-            </form>
-        </div>
     </div>
 </div>
 

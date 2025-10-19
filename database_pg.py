@@ -3,7 +3,7 @@ import sys
 from cryptography.fernet import Fernet, InvalidToken
 import os
 import base64
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Tuple
 import logging
 import pandas as pd
@@ -481,24 +481,64 @@ def get_users_for_admin():
 
     users = []
     if users_raw:
-        for id, username, api_key, data_valid_until, tokens in users_raw:
+        for id, username, api_key, date_valid_until, tokens in users_raw:
             try:
                 decrypted_api_key = cipher_suite.decrypt(api_key).decode()
             except InvalidToken:
                 decrypted_api_key = "Decryption failed"
             
             # Formatta la data se esiste
-            if data_valid_until and hasattr(data_valid_until, 'strftime'):
-                formatted_date = data_valid_until.strftime('%Y-%m-%d')
+            if date_valid_until and hasattr(date_valid_until, 'strftime'):
+                formatted_date = date_valid_until.strftime('%Y-%m-%d')
             else:
-                formatted_date = str(data_valid_until) if data_valid_until else 'N/A'
+                formatted_date = str(date_valid_until) if date_valid_until else 'N/A'
+
+            # Check if user is active (today < date_valid_until)
+            if date_valid_until:
+                try:
+                    # Se è una stringa, prova a parsarla
+                    if isinstance(date_valid_until, str):
+                        # Prova vari formati
+                        for fmt in ['%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d']:
+                            try:
+                                valid_date = datetime.strptime(date_valid_until, fmt).date()
+                                break
+                            except ValueError:
+                                continue
+                        else:
+                            # Se nessun formato funziona
+                            valid_date = None
+                        
+                        if valid_date:
+                            formatted_date = valid_date.strftime('%Y-%m-%d')
+                    # Se è già un datetime
+                    elif hasattr(date_valid_until, 'date'):
+                        valid_date = date_valid_until.date()
+                        formatted_date = valid_date.strftime('%Y-%m-%d')
+                    # Se è già un date
+                    elif hasattr(date_valid_until, 'year'):
+                        valid_date = date_valid_until
+                        formatted_date = valid_date.strftime('%Y-%m-%d')
+                    else:
+                        valid_date = None
+                        formatted_date = str(date_valid_until)
+                    
+                    # Controlla se è attivo (oggi < data_scadenza)
+                    if valid_date:
+                        today = datetime.now().date()
+                        is_active = today < valid_date
+                        
+                except (ValueError, AttributeError):
+                    # Se il parsing fallisce, considera l'utente non attivo
+                    is_active = False
+                    formatted_date = str(date_valid_until)
             
             users.append({
                 'id': id,
                 'name': username,
                 'email': decrypted_api_key,
-                'role': f"{tokens} tokens",
-                'is_active': True if data_valid_until else False,
+                'tokens': f"{tokens} tokens",
+                'is_active': is_active,
                 'created_at': formatted_date
             })
     
@@ -578,6 +618,35 @@ def get_logs_for_admin(limit=100):
     
     return logs
 
+def update_user_tokens(user_id, new_tokens):
+    """
+    Update the tokens field for a specific user.
+    Sets date_valid_until to one year from today.
+    
+    :param user_id: ID of the user to update
+    :param new_tokens: New token value
+    :return: True if successful, False otherwise
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        # Calculate date one year from today
+        one_year_from_today = datetime.now() + timedelta(days=365)
+
+        query = "UPDATE users SET tokens = %s, date_valid_until = %s WHERE id = %s"
+        cursor.execute(query, (new_tokens, one_year_from_today, user_id))
+        conn.commit()
+        
+        if cursor.rowcount > 0:
+            return True
+        else:
+            return False
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
 
 def get_logs_stats():
     """
@@ -657,6 +726,47 @@ def get_logs_stats():
         'daily_stats': daily_data,
         'top_users': top_users_data
     }
+
+def get_user_by_id(user_id):
+    """
+    Get a single user by ID.
+    
+    :param user_id: ID of the user
+    :return: User dictionary or None
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    try:
+        query = "SELECT id, username, api_key, date_valid_until, tokens FROM users WHERE id = %s"
+        cursor.execute(query, (user_id,))
+        user_data = cursor.fetchone()
+        
+        if user_data:
+            id, username, api_key, date_valid_until, tokens = user_data
+            
+            try:
+                decrypted_api_key = cipher_suite.decrypt(api_key).decode()
+            except InvalidToken:
+                decrypted_api_key = "Decryption failed"
+            
+            # Formatta la data se esiste
+            if date_valid_until and hasattr(date_valid_until, 'strftime'):
+                formatted_date = date_valid_until.strftime('%Y-%m-%d')
+            else:
+                formatted_date = str(date_valid_until) if date_valid_until else 'N/A'
+            
+            return {
+                'id': id,
+                'username': username,
+                'api_key': decrypted_api_key,
+                'date_valid_until': formatted_date,
+                'tokens': tokens
+            }
+        return None
+        
+    finally:
+        conn.close()
 
 def print_help():
     print("Usage: python database-pg.py <command>")
