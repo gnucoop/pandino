@@ -27,6 +27,11 @@ from database_methods import (
     build_get_daily_log_stats_query,
     build_get_top_users_by_token_usage_query,
     build_get_user_by_id_query,
+    build_get_all_prompts_query,
+    build_get_prompt_by_id_query,
+    build_add_prompt_query,
+    build_update_prompt_query,
+    build_delete_prompt_query,
 )
 
 # Generate a key for encryption and decryption
@@ -748,6 +753,144 @@ def get_user_by_id(user_id):
         
     finally:
         conn.close()
+
+def get_all_prompts():
+    """
+    Retrieves all prompts from the database.
+
+    :return: List of prompt dictionaries
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    try:
+        query, params = build_get_all_prompts_query()
+        cursor.execute(query, params)
+        prompts_raw = cursor.fetchall()
+    finally:
+        conn.close()
+    
+    prompts = []
+    if prompts_raw:
+        for id, title, version, message in prompts_raw:
+            prompts.append({
+                'id': id,
+                'title': title,
+                'version': version,
+                'message': message,
+            })
+    
+    return prompts
+
+def get_prompt_by_id(prompt_id):
+    """
+    Get a single prompt by ID.
+    
+    :param prompt_id: ID of the prompt
+    :return: Prompt dictionary or None
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    try:
+        query, params = build_get_prompt_by_id_query(prompt_id)
+        cursor.execute(query, params)
+        prompt_data = cursor.fetchone()
+        
+        if prompt_data:
+            id, title, version, message = prompt_data
+            return {
+                'id': id,
+                'title': title,
+                'version': version,
+                'message': message,
+            }
+        return None
+        
+    finally:
+        conn.close()
+
+def add_prompt(title: str, version: int, message: str) -> Optional[str]:
+    """
+    Adds a new prompt to the 'prompts' table.
+
+    :param title: Title of the prompt.
+    :param version: Version of the prompt.
+    :param message: Message of the prompt.
+    :return: None if success, or an error message string if an exception occurs.
+    """
+    logging.info(f"Adding prompt: {title}")
+
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_add_prompt_query(
+            title, version, message
+        )
+        cursor.execute(query, params)
+        conn.commit()
+        return None
+    except psycopg.IntegrityError as e:
+        logging.warning(f"IntegrityError while adding prompt {title}: {str(e)}")
+        return f"Error adding new prompt: {e}"
+    except Exception as e:
+        logging.exception("Unexpected error in add_prompt")
+        return f"Error adding new prompt: {e}"
+    finally:
+        conn.close()
+
+def update_prompt(prompt_id: int, title: str, version: int, message: str) -> bool:
+    """
+    Update a prompt.
+    
+    :param prompt_id: ID of the prompt to update
+    :param title: New title value.
+    :param version: New version value.
+    :param message: New message value.
+    :return: True if successful, False otherwise
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_update_prompt_query(prompt_id, title, version, message)
+        cursor.execute(query, params)
+        conn.commit()
+        
+        if cursor.rowcount > 0:
+            return True
+        else:
+            return False
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+def delete_prompt(prompt_id: int) -> bool:
+    """
+    Deletes a prompt from the 'prompts' table by its ID.
+
+    :param prompt_id: The ID of the prompt to be removed.
+    :return: True if deletion was successful, False otherwise.
+    """
+    logging.info(f"Attempting to remove prompt: {prompt_id}")
+
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_delete_prompt_query(prompt_id)
+        cursor.execute(query, params)
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        logging.exception(f"Unexpected error in delete_prompt: {e}")
+        return False
+    finally:
+        conn.close()
+
 
 def print_help():
     print("Usage: python database-pg.py <command>")
