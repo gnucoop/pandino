@@ -24,13 +24,16 @@ from langchain_text_splitters import (
     MarkdownTextSplitter,
 )
 import bcrypt
+import psutil
 
 # === Local modules ===
 from agent_manager import getAgent, createAgent, deleteAgent
 from file_manager import isImageFilePath, fileToBase64
 from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
-from database_pg import edit_tokens, validate_api_key
+from database_pg import edit_tokens, validate_api_key, get_users_for_admin, get_users_stats, get_logs_for_admin, get_logs_stats, update_user_tokens, get_user_by_id
+
+
 from dino import dino_authenticate
 from ai import (
     audioFormCompilation,
@@ -856,9 +859,6 @@ def img_comparison():
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
 ADMIN_PASSWORD_HASH = os.environ.get('ADMIN_PASSWORD_HASH', '').encode("utf-8")
 
-# Importa le funzioni dal tuo database_pg.py
-from database_pg import get_users_for_admin, get_users_stats,get_logs_for_admin, get_logs_stats
-
 # Admin authentication decorator
 def admin_required(f):
     @wraps(f)
@@ -903,12 +903,31 @@ def admin_dashboard():
             'active_sessions': stats_data['total_tokens'],
             'total_orders': 0  # Aggiungi altre metriche se necessario
         }
-        
-        return render_template('admin/dashboard.html', stats=stats)
+        env_vars = {
+            "DATACHAT_MODEL": DATACHAT_MODEL,
+            "DATACHAT_PROVIDER": DATACHAT_PROVIDER,
+            "PROMPT_MODEL": PROMPT_MODEL,
+            "PROMPT_PROVIDER": PROMPT_PROVIDER,
+            "AUDIO_MODEL": AUDIO_MODEL,
+            "AUDIO_PROVIDER": AUDIO_PROVIDER,
+            "COMPLETION_MODEL": COMPLETION_MODEL,
+            "COMPLETION_MODEL_PROVIDER": COMPLETION_MODEL_PROVIDER,
+            "COMPLETION_EMBEDDING_MODEL": COMPLETION_EMBEDDING_MODEL,
+            "COMPLETION_EMBEDDING_MODEL_PROVIDER": COMPLETION_EMBEDDING_MODEL_PROVIDER,
+            "WHISPER_MODEL": WHISPER_MODEL,
+            "VISION_PROVIDER": VISION_PROVIDER,
+            "VISION_MODEL": VISION_MODEL,
+            "DATACHAT_TOKEN_COST": DATACHAT_TOKEN_COST,
+            "COMPLETION_TOKEN_COST": COMPLETION_TOKEN_COST,
+            "PROMPT_TOKEN_COST": PROMPT_TOKEN_COST,
+            "AUDIO_FORM_TOKEN_COST": AUDIO_FORM_TOKEN_COST
+        }
+        return render_template('admin/dashboard.html', stats=stats, env_vars=env_vars)
         
     except Exception as e:
         flash(f'Errore nel caricamento dashboard: {str(e)}', 'danger')
         stats = {'total_users': 0, 'active_sessions': 0, 'total_orders': 0}
+        
         return render_template('admin/dashboard.html', stats=stats)
 
 @app.route('/admin/users')
@@ -933,6 +952,56 @@ def admin_logs():
     except Exception as e:
         flash(f'Errore nel recupero logs: {str(e)}', 'danger')
         return render_template('admin/logs.html', logs=[], stats={})
+
+@app.route('/admin/users/<int:user_id>/edit', methods=['GET', 'POST'])
+@admin_required
+def admin_edit_user(user_id):
+    if request.method == 'POST':
+        try:
+            new_tokens = request.form.get('tokens', type=int)
+            
+            if new_tokens is None or new_tokens < 0:
+                flash('Numero di token non valido', 'danger')
+                return redirect(url_for('admin_users'))
+            
+            success = update_user_tokens(user_id, new_tokens)
+            
+            if success:
+                flash(f'Token aggiornati con successo a {new_tokens}', 'success')
+            else:
+                flash('Utente non trovato', 'danger')
+                
+        except Exception as e:
+            flash(f'Errore nell\'aggiornamento: {str(e)}', 'danger')
+        
+        return redirect(url_for('admin_users'))
+    
+    # GET request - show edit form
+    try:
+        user = get_user_by_id(user_id)
+        if user:
+            return render_template('admin/edit_user.html', user=user)
+        else:
+            flash('Utente non trovato', 'danger')
+            return redirect(url_for('admin_users'))
+    except Exception as e:
+        flash(f'Errore: {str(e)}', 'danger')
+        return redirect(url_for('admin_users'))
+
+@app.route("/health")
+def health():
+    # Stato base
+    status = {
+        "status": "ok",
+    #    "cpu_percent": psutil.cpu_percent(interval=0.5),  # utilizzo CPU
+    #    "memory": {
+    #        "total": psutil.virtual_memory().total,
+    #        "used": psutil.virtual_memory().used,
+    #        "available": psutil.virtual_memory().available,
+    #        "percent": psutil.virtual_memory().percent
+    #    }
+    }
+    return jsonify(status)
 
 # Run the Flask application in debug mode if this script is executed directly
 if __name__ == "__main__":
