@@ -8,9 +8,10 @@ from dotenv import load_dotenv
 from typing import Any, List, Union
 import textwrap
 import logging
+from functools import wraps
 
 # === Third-party ===
-from flask import Flask, request, Response, jsonify, abort
+from flask import Flask, request, Response, jsonify, abort, render_template,redirect, url_for, session, flash
 from flask_cors import CORS
 import pandas as pd
 from pandasai import Agent
@@ -44,12 +45,17 @@ from ai import (
 from prompt_utils import load_prompt, render_prompt
 from dotenv import load_dotenv
 
+
+from werkzeug.security import generate_password_hash, check_password_hash
+
+
 load_dotenv()  # Load environment variables from .env file
 
 # Initialize the Flask application
 app = Flask(__name__)
 # origins=["http://localhost:4200"]
 CORS(app)
+app.secret_key = os.environ.get('ENCRYPTION_KEY', 'your-secret-key-change-this-in-production')
 
 # Verify Matplotlib backend
 print(f"Matplotlib backend: {matplotlib.get_backend()}")
@@ -826,6 +832,8 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
     app.logger.debug(f"Audio form compilation result: {invocation}")
     return jsonify(invocation), 200
 
+@app.route("/agentic-rag")
+
 
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
 @app.route("/summarize", methods=["GET"])
@@ -844,6 +852,86 @@ def categorize():
 def img_comparison():
     return "The /img-comparison endpoint is not yet implemented.", 501
 
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
+ADMIN_PASSWORD_HASH = os.environ.get('ADMIN_PASSWORD_HASH', generate_password_hash('admin123', method='pbkdf2:sha256'))
+
+# Importa le funzioni dal tuo database_pg.py
+from database_pg import get_users_for_admin, get_users_stats,get_logs_for_admin, get_logs_stats
+
+# Admin authentication decorator
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('admin_logged_in'):
+            flash('Please log in to access the admin panel', 'warning')
+            return redirect(url_for('admin_login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        if username == ADMIN_USERNAME and check_password_hash(ADMIN_PASSWORD_HASH, password):
+            session['admin_logged_in'] = True
+            session['admin_username'] = username
+            flash('Successfully logged in!', 'success')
+            return redirect(url_for('admin_dashboard'))
+        else:
+            flash('Invalid credentials', 'danger')
+    
+    return render_template('admin/login.html')
+
+@app.route('/admin/logout')
+def admin_logout():
+    session.pop('admin_logged_in', None)
+    session.pop('admin_username', None)
+    flash('Successfully logged out', 'info')
+    return redirect(url_for('admin_login'))
+
+@app.route('/admin')
+@admin_required
+def admin_dashboard():
+    try:
+        stats_data = get_users_stats()
+        
+        stats = {
+            'total_users': stats_data['total_users'],
+            'active_sessions': stats_data['total_tokens'],
+            'total_orders': 0  # Aggiungi altre metriche se necessario
+        }
+        
+        return render_template('admin/dashboard.html', stats=stats)
+        
+    except Exception as e:
+        flash(f'Errore nel caricamento dashboard: {str(e)}', 'danger')
+        stats = {'total_users': 0, 'active_sessions': 0, 'total_orders': 0}
+        return render_template('admin/dashboard.html', stats=stats)
+
+@app.route('/admin/users')
+@admin_required
+def admin_users():
+    try:
+        users = get_users_for_admin()
+        return render_template('admin/users.html', users=users)
+        
+    except Exception as e:
+        flash(f'Errore nel recupero utenti: {str(e)}', 'danger')
+        return render_template('admin/users.html', users=[])
+
+@app.route('/admin/logs')
+@admin_required
+def admin_logs():
+    try:
+        logs = get_logs_for_admin(limit=100)
+        stats = get_logs_stats()
+        return render_template('admin/logs.html', logs=logs, stats=stats)
+        
+    except Exception as e:
+        flash(f'Errore nel recupero logs: {str(e)}', 'danger')
+        return render_template('admin/logs.html', logs=[], stats={})
 
 # Run the Flask application in debug mode if this script is executed directly
 if __name__ == "__main__":

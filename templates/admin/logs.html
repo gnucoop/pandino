@@ -1,0 +1,210 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Logs - Admin Panel{% endblock %}
+
+{% block content %}
+<h1 class="mb-4">API Usage Logs</h1>
+
+<!-- Stats Cards -->
+<div class="row mb-4">
+    <div class="col-md-3">
+        <div class="card text-white bg-primary">
+            <div class="card-body">
+                <h6 class="card-title text-uppercase">Total Requests</h6>
+                <h2 class="mb-0">{{ stats.total_requests if stats else 0 }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-white bg-success">
+            <div class="card-body">
+                <h6 class="card-title text-uppercase">Input Tokens</h6>
+                <h2 class="mb-0">{{ "{:,}".format(stats.total_input|int) if stats else 0 }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-white bg-info">
+            <div class="card-body">
+                <h6 class="card-title text-uppercase">Output Tokens</h6>
+                <h2 class="mb-0">{{ "{:,}".format(stats.total_output|int) if stats else 0 }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-white bg-warning">
+            <div class="card-body">
+                <h6 class="card-title text-uppercase">Total Cost</h6>
+                <h2 class="mb-0">${{ "%.2f"|format(stats.total_cost|float) if stats else 0 }}</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Charts Row -->
+<div class="row mb-4">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="fas fa-chart-line me-2"></i>Token Usage (Last 7 Days)</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="tokenChart" height="80"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header bg-white">
+                <h5 class="mb-0"><i class="fas fa-trophy me-2"></i>Top Users</h5>
+            </div>
+            <div class="card-body">
+                {% if stats and stats.top_users %}
+                <ul class="list-group list-group-flush">
+                    {% for user in stats.top_users %}
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span>{{ user.username }}</span>
+                        <span class="badge bg-primary rounded-pill">{{ "{:,}".format(user.total_tokens|int) }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p class="text-muted">No data available</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Logs Table -->
+<div class="card">
+    <div class="card-header bg-white">
+        <div class="row align-items-center">
+            <div class="col-md-6">
+                <h5 class="mb-0"><i class="fas fa-list me-2"></i>Recent Logs</h5>
+            </div>
+            <div class="col-md-6">
+                <div class="input-group">
+                    <span class="input-group-text"><i class="fas fa-search"></i></span>
+                    <input type="text" class="form-control" placeholder="Search logs..." id="searchInput">
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="card-body">
+        {% if logs %}
+        <div class="table-responsive">
+            <table class="table table-hover table-sm">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>User</th>
+                        <th>Date</th>
+                        <th>Input Tokens</th>
+                        <th>Output Tokens</th>
+                        <th>Total Tokens</th>
+                        <th>Cost</th>
+                        <th>Model</th>
+                        <th>Provider</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for log in logs %}
+                    <tr>
+                        <td>{{ log.id }}</td>
+                        <td>
+                            <span class="badge bg-secondary">{{ log.username }}</span>
+                        </td>
+                        <td class="small">{{ log.date }}</td>
+                        <td class="text-end">{{ "{:,}".format(log.token_input|int) }}</td>
+                        <td class="text-end">{{ "{:,}".format(log.token_output|int) }}</td>
+                        <td class="text-end"><strong>{{ "{:,}".format((log.token_input + log.token_output)|int) }}</strong></td>
+                        <td class="text-end">${{ "%.4f"|format(log.cost|float) }}</td>
+                        <td><span class="badge bg-info">{{ log.model }}</span></td>
+                        <td><span class="badge bg-primary">{{ log.provider }}</span></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-5">
+            <i class="fas fa-list fa-4x text-muted mb-3"></i>
+            <h4 class="text-muted">No logs found</h4>
+            <p class="text-muted">Logs will appear here when API calls are made</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+<script>
+// Search functionality
+document.getElementById('searchInput').addEventListener('keyup', function() {
+    const searchTerm = this.value.toLowerCase();
+    const tableRows = document.querySelectorAll('tbody tr');
+    
+    tableRows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        row.style.display = text.includes(searchTerm) ? '' : 'none';
+    });
+});
+
+// Token Usage Chart
+{% if stats and stats.daily_stats %}
+const ctx = document.getElementById('tokenChart').getContext('2d');
+const chartData = {
+    labels: {{ stats.daily_stats|map(attribute='day')|list|tojson }},
+    datasets: [
+        {
+            label: 'Input Tokens',
+            data: {{ stats.daily_stats|map(attribute='input')|list|tojson }},
+            backgroundColor: 'rgba(40, 167, 69, 0.2)',
+            borderColor: 'rgba(40, 167, 69, 1)',
+            borderWidth: 2,
+            tension: 0.4
+        },
+        {
+            label: 'Output Tokens',
+            data: {{ stats.daily_stats|map(attribute='output')|list|tojson }},
+            backgroundColor: 'rgba(23, 162, 184, 0.2)',
+            borderColor: 'rgba(23, 162, 184, 1)',
+            borderWidth: 2,
+            tension: 0.4
+        }
+    ]
+};
+
+const config = {
+    type: 'line',
+    data: chartData,
+    options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {
+            legend: {
+                display: true,
+                position: 'top',
+            },
+            tooltip: {
+                mode: 'index',
+                intersect: false,
+            }
+        },
+        scales: {
+            y: {
+                beginAtZero: true,
+                ticks: {
+                    callback: function(value) {
+                        return value.toLocaleString();
+                    }
+                }
+            }
+        }
+    }
+};
+
+new Chart(ctx, config);
+{% endif %}
+</script>
+{% endblock %}

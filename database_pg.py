@@ -456,6 +456,201 @@ def get_prompt_from_db(title: str, version: Optional[int] = None) -> Optional[st
     finally:
         conn.close()
 
+def get_users_for_admin():
+    """
+    Retrieves users from the database and returns them as a list of dictionaries
+    for use in the admin panel.
+
+    :return: List of user dictionaries with decrypted API keys
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_list_users_query()
+        cursor.execute(query, params)
+        users_raw = cursor.fetchall()
+    finally:
+        conn.close()
+
+    users = []
+    if users_raw:
+        for id, username, api_key, data_valid_until, tokens in users_raw:
+            try:
+                decrypted_api_key = cipher_suite.decrypt(api_key).decode()
+            except InvalidToken:
+                decrypted_api_key = "Decryption failed"
+            
+            # Formatta la data se esiste
+            if data_valid_until and hasattr(data_valid_until, 'strftime'):
+                formatted_date = data_valid_until.strftime('%Y-%m-%d')
+            else:
+                formatted_date = str(data_valid_until) if data_valid_until else 'N/A'
+            
+            users.append({
+                'id': id,
+                'name': username,
+                'email': decrypted_api_key,
+                'role': f"{tokens} tokens",
+                'is_active': True if data_valid_until else False,
+                'created_at': formatted_date
+            })
+    
+    return users
+
+
+def get_users_stats():
+    """
+    Get statistics about users for the admin dashboard.
+    
+    :return: Dictionary with user statistics
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    try:
+        # Count total users
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0]
+        
+        # Sum total tokens
+        cursor.execute("SELECT SUM(tokens) FROM users")
+        total_tokens = cursor.fetchone()[0] or 0
+        
+    finally:
+        conn.close()
+    
+    return {
+        'total_users': total_users,
+        'total_tokens': total_tokens
+    }
+
+def get_logs_for_admin(limit=100):
+    """
+    Retrieves logs from the database for the admin panel.
+    
+    :param limit: Maximum number of logs to retrieve
+    :return: List of log dictionaries
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    try:
+        query = """
+            SELECT l.id, l.user_id, u.username, l.date, l.token_input, 
+                   l.token_output, l.cost, l.model, l.provider
+            FROM logs l
+            LEFT JOIN users u ON l.user_id = u.id
+            ORDER BY l.date DESC
+            LIMIT %s
+        """
+        cursor.execute(query, (limit,))
+        logs_raw = cursor.fetchall()
+    finally:
+        conn.close()
+    
+    logs = []
+    if logs_raw:
+        for log_id, user_id, username, date, token_input, token_output, cost, model, provider in logs_raw:
+            # Formatta la data
+            if date and hasattr(date, 'strftime'):
+                formatted_date = date.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                formatted_date = str(date) if date else 'N/A'
+            
+            logs.append({
+                'id': log_id,
+                'user_id': user_id,
+                'username': username or 'Unknown',
+                'date': formatted_date,
+                'token_input': token_input or 0,
+                'token_output': token_output or 0,
+                'cost': cost or 0,
+                'model': model or 'N/A',
+                'provider': provider or 'N/A'
+            })
+    
+    return logs
+
+
+def get_logs_stats():
+    """
+    Get statistics about logs for charts and dashboard.
+    
+    :return: Dictionary with log statistics
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    try:
+        # Total tokens input/output
+        cursor.execute("""
+            SELECT 
+                SUM(token_input) as total_input,
+                SUM(token_output) as total_output,
+                SUM(cost) as total_cost,
+                COUNT(*) as total_requests
+            FROM logs
+        """)
+        totals = cursor.fetchone()
+        
+        # Tokens by day (last 7 days)
+        cursor.execute("""
+            SELECT 
+                DATE(date::timestamp) as day,
+                SUM(token_input) as input_tokens,
+                SUM(token_output) as output_tokens
+            FROM logs
+            WHERE date::timestamp >= CURRENT_DATE - INTERVAL '7 days'
+            GROUP BY DATE(date::timestamp)
+            ORDER BY day
+        """)
+        daily_stats = cursor.fetchall()
+        
+        # Top users by token usage
+        cursor.execute("""
+            SELECT 
+                u.username,
+                SUM(l.token_input + l.token_output) as total_tokens
+            FROM logs l
+            LEFT JOIN users u ON l.user_id = u.id
+            GROUP BY u.username
+            ORDER BY total_tokens DESC
+            LIMIT 5
+        """)
+        top_users = cursor.fetchall()
+        
+    finally:
+        conn.close()
+    
+    # Format daily stats
+    daily_data = []
+    if daily_stats:
+        for day, input_t, output_t in daily_stats:
+            day_str = day.strftime('%Y-%m-%d') if hasattr(day, 'strftime') else str(day)
+            daily_data.append({
+                'day': day_str,
+                'input': input_t or 0,
+                'output': output_t or 0
+            })
+    
+    # Format top users
+    top_users_data = []
+    if top_users:
+        for username, total in top_users:
+            top_users_data.append({
+                'username': username or 'Unknown',
+                'total_tokens': total or 0
+            })
+    
+    return {
+        'total_input': totals[0] or 0 if totals else 0,
+        'total_output': totals[1] or 0 if totals else 0,
+        'total_cost': totals[2] or 0 if totals else 0,
+        'total_requests': totals[3] or 0 if totals else 0,
+        'daily_stats': daily_data,
+        'top_users': top_users_data
+    }
 
 def print_help():
     print("Usage: python database-pg.py <command>")
