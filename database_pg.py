@@ -635,7 +635,7 @@ def update_user_tokens(user_id, new_tokens):
 
     try:
         # Calculate date one year from today
-        one_year_from_today = datetime.now() + timedelta(days=365)
+        one_year_from_today = datetime.now().replace(microsecond=0) + timedelta(days=365)
 
         query, params = build_update_user_tokens_query(user_id, new_tokens, one_year_from_today)
         cursor.execute(query, params)
