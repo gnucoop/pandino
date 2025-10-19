@@ -24,7 +24,17 @@ To install Pandino, follow these steps:
    pip install -r requirements.txt
    ```
 
-3. Set up environment variables:
+3. Setup admini panel hash
+   ```python
+   import bcrypt
+
+   password = b"my-strong-password"
+   hashed = bcrypt.hashpw(password, bcrypt.gensalt())
+
+   print(hashed.decode()) 
+   ```
+
+4. Set up environment variables:
    Create a `.env` file in the project root and add the following variables:
    ```
    GROQ_API_KEY=your_groq_api_key
@@ -33,6 +43,8 @@ To install Pandino, follow these steps:
    MISTRAL_API_KEY=your_mistral_api_key
    OPENAI_API_KEY=your_openai_api_key
    ENCRYPTION_KEY=your_encryption_key_for_database
+   ADMIN_USERNAME='myadmin'
+   ADMIN_PASSWORD_HASH='my-admin-password-has-created-with-bcrypt'
    ```
 
 ## Troubleshooting
