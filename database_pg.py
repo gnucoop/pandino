@@ -18,7 +18,15 @@ from database_methods import (
     build_validate_api_key_query,
     build_get_token_cost_query,
     build_insert_token_log_query,
-    build_get_prompt_query
+    build_get_prompt_query,
+    build_get_total_users_query,
+    build_get_total_tokens_query,
+    build_get_logs_for_admin_query,
+    build_update_user_tokens_query,
+    build_get_total_log_stats_query,
+    build_get_daily_log_stats_query,
+    build_get_top_users_by_token_usage_query,
+    build_get_user_by_id_query,
 )
 
 # Generate a key for encryption and decryption
@@ -556,11 +564,13 @@ def get_users_stats():
     
     try:
         # Count total users
-        cursor.execute("SELECT COUNT(*) FROM users")
+        query, params = build_get_total_users_query()
+        cursor.execute(query, params)
         total_users = cursor.fetchone()[0]
         
         # Sum total tokens
-        cursor.execute("SELECT SUM(tokens) FROM users")
+        query, params = build_get_total_tokens_query()
+        cursor.execute(query, params)
         total_tokens = cursor.fetchone()[0] or 0
         
     finally:
@@ -582,15 +592,8 @@ def get_logs_for_admin(limit=100):
     cursor = conn.cursor()
     
     try:
-        query = """
-            SELECT l.id, l.user_id, u.username, l.date, l.token_input, 
-                   l.token_output, l.cost, l.model, l.provider
-            FROM logs l
-            LEFT JOIN users u ON l.user_id = u.id
-            ORDER BY l.date DESC
-            LIMIT %s
-        """
-        cursor.execute(query, (limit,))
+        query, params = build_get_logs_for_admin_query(limit)
+        cursor.execute(query, params)
         logs_raw = cursor.fetchall()
     finally:
         conn.close()
@@ -634,8 +637,8 @@ def update_user_tokens(user_id, new_tokens):
         # Calculate date one year from today
         one_year_from_today = datetime.now() + timedelta(days=365)
 
-        query = "UPDATE users SET tokens = %s, date_valid_until = %s WHERE id = %s"
-        cursor.execute(query, (new_tokens, one_year_from_today, user_id))
+        query, params = build_update_user_tokens_query(user_id, new_tokens, one_year_from_today)
+        cursor.execute(query, params)
         conn.commit()
         
         if cursor.rowcount > 0:
@@ -659,40 +662,18 @@ def get_logs_stats():
     
     try:
         # Total tokens input/output
-        cursor.execute("""
-            SELECT 
-                SUM(token_input) as total_input,
-                SUM(token_output) as total_output,
-                SUM(cost) as total_cost,
-                COUNT(*) as total_requests
-            FROM logs
-        """)
+        query, params = build_get_total_log_stats_query()
+        cursor.execute(query, params)
         totals = cursor.fetchone()
         
         # Tokens by day (last 7 days)
-        cursor.execute("""
-            SELECT 
-                DATE(date::timestamp) as day,
-                SUM(token_input) as input_tokens,
-                SUM(token_output) as output_tokens
-            FROM logs
-            WHERE date::timestamp >= CURRENT_DATE - INTERVAL '7 days'
-            GROUP BY DATE(date::timestamp)
-            ORDER BY day
-        """)
+        query, params = build_get_daily_log_stats_query()
+        cursor.execute(query, params)
         daily_stats = cursor.fetchall()
         
         # Top users by token usage
-        cursor.execute("""
-            SELECT 
-                u.username,
-                SUM(l.token_input + l.token_output) as total_tokens
-            FROM logs l
-            LEFT JOIN users u ON l.user_id = u.id
-            GROUP BY u.username
-            ORDER BY total_tokens DESC
-            LIMIT 5
-        """)
+        query, params = build_get_top_users_by_token_usage_query()
+        cursor.execute(query, params)
         top_users = cursor.fetchall()
         
     finally:
@@ -738,8 +719,8 @@ def get_user_by_id(user_id):
     cursor = conn.cursor()
     
     try:
-        query = "SELECT id, username, api_key, date_valid_until, tokens FROM users WHERE id = %s"
-        cursor.execute(query, (user_id,))
+        query, params = build_get_user_by_id_query(user_id)
+        cursor.execute(query, params)
         user_data = cursor.fetchone()
         
         if user_data:

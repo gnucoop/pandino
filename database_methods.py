@@ -188,6 +188,159 @@ def build_insert_token_log_query(
     return query, params
 
 
+def build_get_total_users_query() -> Tuple[sql.Composed, Tuple[()]]:
+    """
+    Builds a SQL query to count the total number of users.
+
+    :return: Tuple with SQL query and empty parameter tuple.
+    """
+    query = sql.SQL("SELECT COUNT(*) FROM {table}").format(
+        table=sql.Identifier("users")
+    )
+    return query, ()
+
+
+def build_get_total_tokens_query() -> Tuple[sql.Composed, Tuple[()]]:
+    """
+    Builds a SQL query to sum the total number of tokens for all users.
+
+    :return: Tuple with SQL query and empty parameter tuple.
+    """
+    query = sql.SQL("SELECT SUM({tokens}) FROM {table}").format(
+        tokens=sql.Identifier("tokens"),
+        table=sql.Identifier("users")
+    )
+    return query, ()
+
+
+def build_get_logs_for_admin_query(limit: int) -> Tuple[sql.Composed, Tuple[int]]:
+    """
+    Builds a SQL query to retrieve logs for the admin panel.
+
+    :param limit: Maximum number of logs to retrieve.
+    :return: Tuple with SQL query and parameters.
+    """
+    query = sql.SQL("""
+        SELECT l.id, l.user_id, u.username, l.date, l.token_input,
+               l.token_output, l.cost, l.model, l.provider
+        FROM {logs} l
+        LEFT JOIN {users} u ON l.user_id = u.id
+        ORDER BY l.date DESC
+        LIMIT %s
+    """).format(
+        logs=sql.Identifier("logs"),
+        users=sql.Identifier("users")
+    )
+    return query, (limit,)
+
+
+def build_update_user_tokens_query(user_id: int, new_tokens: int, date_valid_until: Any) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to update the tokens and expiration date for a user.
+
+    :param user_id: ID of the user to update.
+    :param new_tokens: New token value.
+    :param date_valid_until: New expiration date.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "UPDATE {table} SET {tokens} = %s, {date_valid_until} = %s WHERE {id} = %s"
+    ).format(
+        table=sql.Identifier("users"),
+        tokens=sql.Identifier("tokens"),
+        date_valid_until=sql.Identifier("date_valid_until"),
+        id=sql.Identifier("id"),
+    )
+    return query, (new_tokens, date_valid_until, user_id)
+
+
+def build_get_total_log_stats_query() -> Tuple[sql.Composed, Tuple[()]]:
+    """
+    Builds a SQL query to get total log statistics.
+
+    :return: Tuple with SQL query and empty parameter tuple.
+    """
+    query = sql.SQL("""
+        SELECT
+            SUM({token_input}) as total_input,
+            SUM({token_output}) as total_output,
+            SUM({cost}) as total_cost,
+            COUNT(*) as total_requests
+        FROM {logs}
+    """).format(
+        token_input=sql.Identifier("token_input"),
+        token_output=sql.Identifier("token_output"),
+        cost=sql.Identifier("cost"),
+        logs=sql.Identifier("logs")
+    )
+    return query, ()
+
+
+def build_get_daily_log_stats_query() -> Tuple[sql.Composed, Tuple[()]]:
+    """
+    Builds a SQL query to get daily log statistics for the last 7 days.
+
+    :return: Tuple with SQL query and empty parameter tuple.
+    """
+    query = sql.SQL("""
+        SELECT
+            DATE(date::timestamp) as day,
+            SUM({token_input}) as input_tokens,
+            SUM({token_output}) as output_tokens
+        FROM {logs}
+        WHERE date::timestamp >= CURRENT_DATE - INTERVAL '7 days'
+        GROUP BY DATE(date::timestamp)
+        ORDER BY day
+    """).format(
+        token_input=sql.Identifier("token_input"),
+        token_output=sql.Identifier("token_output"),
+        logs=sql.Identifier("logs")
+    )
+    return query, ()
+
+
+def build_get_top_users_by_token_usage_query() -> Tuple[sql.Composed, Tuple[()]]:
+    """
+    Builds a SQL query to get top 5 users by token usage.
+
+    :return: Tuple with SQL query and empty parameter tuple.
+    """
+    query = sql.SQL("""
+        SELECT
+            u.username,
+            SUM(l.token_input + l.token_output) as total_tokens
+        FROM {logs} l
+        LEFT JOIN {users} u ON l.user_id = u.id
+        GROUP BY u.username
+        ORDER BY total_tokens DESC
+        LIMIT 5
+    """).format(
+        logs=sql.Identifier("logs"),
+        users=sql.Identifier("users")
+    )
+    return query, ()
+
+
+def build_get_user_by_id_query(user_id: int) -> Tuple[sql.Composed, Tuple[int]]:
+    """
+    Builds a SQL query to retrieve a user by their ID.
+
+    :param user_id: The ID of the user to retrieve.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "SELECT {id}, {username}, {api_key}, {date_valid_until}, {tokens} FROM {table} WHERE {id} = %s"
+    ).format(
+        id=sql.Identifier("id"),
+        username=sql.Identifier("username"),
+        api_key=sql.Identifier("api_key"),
+        date_valid_until=sql.Identifier("date_valid_until"),
+        tokens=sql.Identifier("tokens"),
+        table=sql.Identifier("users"),
+    )
+    return query, (user_id,)
+
+
 def build_get_prompt_query(
     title: str, 
     version: Optional[int] = None
