@@ -25,3 +25,4 @@ psycopg_binary==3.2.6
 gunicorn
 pymupdf4llm
 bcrypt
+psutil
