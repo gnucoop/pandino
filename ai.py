@@ -221,7 +221,7 @@ def complete_chat(
     vectors: list[dict[str, Any]] = []
 
     try:
-        vectors = store.find_similar_vectors(text=question, top_k=3, min_similarity=0.5)
+        vectors = store.find_similar_vectors(text=question, top_k=5, min_similarity=0.5)
         logging.info(f"Found {len(vectors)} relevant paragraphs")
     except Exception as e:
         error_msg = f"Vector retrieval failed: {str(e)}"

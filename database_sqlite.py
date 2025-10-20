@@ -190,8 +190,10 @@ def validate_api_key(api_key, user_email):
         return False, "No matching API key found"
 
     current_date = datetime.now().strftime("%Y-%m-%d")
+    found_expired = False
     for encrypted_key, date_valid_until in encrypted_keys:
         if date_valid_until < current_date:
+            found_expired = True
             continue
         try:
             if isinstance(encrypted_key, str):
@@ -203,7 +205,7 @@ def validate_api_key(api_key, user_email):
             pass
         except Exception:
             pass
-    if date_valid_until < current_date:
+    if found_expired:
         return False, "API key expired"
     return False, "No matching API key found"
 
