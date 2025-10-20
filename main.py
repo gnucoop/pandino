@@ -9,6 +9,7 @@ from typing import Any, List, Union
 import textwrap
 import logging
 from functools import wraps
+import io
 
 # === Third-party ===
 from flask import Flask, request, Response, jsonify, abort, render_template,redirect, url_for, session, flash
@@ -48,9 +49,6 @@ from ai import (
 )
 from prompt_utils import load_prompt, render_prompt
 from dotenv import load_dotenv
-
-
-#from werkzeug.security import generate_password_hash, check_password_hash
 
 
 load_dotenv()  # Load environment variables from .env file
@@ -358,7 +356,7 @@ def startChat() -> Response | tuple[Response, int]:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
     # Read the data from the provided CSV file
-    data = pd.read_csv(request_file.stream, sep=",")
+    data = pd.read_csv(io.StringIO(request_file.stream.read().decode('utf-8')), sep=",")
     # Initialize the language model based on the provided type
     llm = choose_llm(llm_type, model_name)
     # Initialize the agent with the data and configuration
@@ -875,7 +873,7 @@ def admin_login():
         username = request.form.get('username')
         password = request.form.get('password')
         
-        if username == ADMIN_USERNAME and bcrypt.checkpw(password.encode('utf-8'), ADMIN_PASSWORD_HASH):
+        if username == ADMIN_USERNAME and password and bcrypt.checkpw(password.encode('utf-8'), ADMIN_PASSWORD_HASH):
             session['admin_logged_in'] = True
             session['admin_username'] = username
             flash('Successfully logged in!', 'success')
@@ -1085,4 +1083,4 @@ def health():
 
 # Run the Flask application in debug mode if this script is executed directly
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, port=8000)

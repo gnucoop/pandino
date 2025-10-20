@@ -494,6 +494,7 @@ def get_users_for_admin():
             except InvalidToken:
                 decrypted_api_key = "Decryption failed"
             
+            is_active = False
             # Formatta la data se esiste
             if date_valid_until and hasattr(date_valid_until, 'strftime'):
                 formatted_date = date_valid_until.strftime('%Y-%m-%d')
@@ -565,12 +566,14 @@ def get_users_stats():
         # Count total users
         query, params = build_get_total_users_query()
         cursor.execute(query, params)
-        total_users = cursor.fetchone()[0]
+        total_users_row = cursor.fetchone()
+        total_users = total_users_row[0] if total_users_row else 0
         
         # Sum total tokens
         query, params = build_get_total_tokens_query()
         cursor.execute(query, params)
-        total_tokens = cursor.fetchone()[0] or 0
+        total_tokens_row = cursor.fetchone()
+        total_tokens = total_tokens_row[0] if total_tokens_row else 0
         
     finally:
         conn.close()
