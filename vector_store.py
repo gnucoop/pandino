@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Any, cast
 import base64
 import hashlib
 import os
@@ -54,16 +54,17 @@ class PineconeStore(VectorStore):
                 namespace=self.namespace,
                 include_metadata=True,
             )
-            if not hasattr(resp, "matches"):
+            matches = getattr(resp, "matches", [])
+            if not matches:
                 raise RuntimeError(
                     "Pinecone query result does not contain 'matches' attribute."
                 )
             logging.info(
-                f"Vector Database query completed, found {len(resp.matches)} matches"
+                f"Vector Database query completed, found {len(matches)} matches"
             )
 
             vectors = []
-            for vec in resp.matches:
+            for vec in matches:
                 vectors.append(
                     {
                         "similarity": vec.score,
@@ -96,7 +97,7 @@ class PineconeStore(VectorStore):
             )
             logging.info(f"Successfully created {len(vectors)} embeddings")
 
-            pc_vectors = [
+            pc_vectors: list[dict] = [
                 {
                     "id": ids[i],
                     "values": vectors[i],
@@ -106,7 +107,7 @@ class PineconeStore(VectorStore):
             ]
             try:
                 upsert_response = self.index.upsert(
-                    vectors=pc_vectors, namespace=self.namespace
+                    vectors=cast(Any, pc_vectors), namespace=self.namespace
                 )
                 logging.info(
                     f"Successfully upserted {upsert_response['upserted_count']} vectors"
