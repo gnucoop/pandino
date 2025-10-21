@@ -2,7 +2,7 @@ Flask
 flask-cors
 python-dotenv==1.0.0
 pandas
-pandasai
+pandasai==2.3.2
 tabulate
 langchain_community
 langchain_core
