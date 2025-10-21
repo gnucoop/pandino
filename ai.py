@@ -3,7 +3,7 @@ import os
 import re
 import textwrap
 from dotenv import load_dotenv
-from pandasai.llm import BambooLLM
+# from pandasai.llm import BambooLLM
 from database_pg import get_user_by_username, log_token_usage, get_prompt_from_db
 from prompt_utils import load_prompt, render_prompt
 from vector_store import VectorStore
@@ -90,8 +90,9 @@ def choose_llm(
             base_url="https://api.deepinfra.com/v1/openai",
             api_key=SecretStr(os.getenv("DEEPINFRA_API_KEY") or ""),
         )
-    elif llm_type == "BambooLLM":
-        return cast(BaseChatModel, BambooLLM(api_key=os.getenv("PANDASAI_API_KEY")))
+    # TODO: check pandasai version (import of BambooLLM from pandasai.llm causes error on pandino-dev)
+    # elif llm_type == "BambooLLM":
+    #     return cast(BaseChatModel, BambooLLM(api_key=os.getenv("PANDASAI_API_KEY")))
     elif llm_type == "Together":
         return ChatOpenAI(
             model=model,
