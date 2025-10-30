@@ -9,12 +9,15 @@ from dotenv import load_dotenv
 from typing import Any, List, Union
 import textwrap
 import logging
+import time
 
 # === Third-party ===
 from flask import Flask, request, Response, jsonify, abort
 from flask_cors import CORS
 import pandas as pd
 from pandasai import Agent
+from smolagents import CodeAgent
+from smolagents.models import LiteLLMModel
 import matplotlib
 import requests
 import pymupdf4llm
@@ -27,6 +30,7 @@ from langchain_text_splitters import (
 # === Local modules ===
 from agent_manager import getAgent, createAgent, deleteAgent
 from file_manager import isImageFilePath, fileToBase64
+from retriever_tool import DinoRetrieverTool
 from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
 from database_pg import edit_tokens, validate_api_key
@@ -43,6 +47,8 @@ from ai import (
     choose_emb_model
 )
 from prompt_utils import load_prompt, render_prompt
+from utils.agent_serialization import serialize_runresult
+from utils.agent_logging import log_runresult, setup_agent_logger
 from dotenv import load_dotenv
 
 load_dotenv()  # Load environment variables from .env file
@@ -51,6 +57,9 @@ load_dotenv()  # Load environment variables from .env file
 app = Flask(__name__)
 # origins=["http://localhost:4200"]
 CORS(app)
+
+# Configure the agent run logger
+setup_agent_logger()
 
 # Verify Matplotlib backend
 print(f"Matplotlib backend: {matplotlib.get_backend()}")
@@ -598,6 +607,174 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
 
 
 textContentType = {"Content-Type": "text/plain"}
+
+
+@app.route("/agentchat", methods=["POST"])
+def agentchat() -> Response | tuple[Response, int]:
+    """
+    AI endpoint based on Smolagents.
+    The agent must always use DinoRetrieverTool to retrieve context
+    before generating the response.
+    """
+    try:
+        # === INPUT VALIDATION ===
+        
+        r = request.get_json()
+        if not r:
+            return jsonify({"error": "No JSON data provided"}), 400
+
+        required = ["chat", "username"]
+        missing = [k for k in required if k not in r]
+        if missing:
+            return jsonify({"error": f"Missing required keys: {', '.join(missing)}"}), 400
+
+        api_key = request.headers.get("X-API-KEY")
+        if not api_key:
+            return jsonify({"error": "Missing X-API-KEY header"}), 400
+
+        # === Validate the provided API key for the given user email ===
+        
+        assert_valid_api_key(api_key, r["username"])
+        
+        # === PARAMETERS WITH FALLBACK ===
+        
+        chat = r["chat"]
+        if not isinstance(chat, list) or not chat:
+            return jsonify({"error": "Invalid 'chat': expected non-empty list"}), 400
+
+        namespace = r.get("namespace") or os.getenv("RAG_DEFAULT_NAMESPACE", "Dino")
+        language = r.get("language") or "ITA"
+        k = int(r.get("k") or os.getenv("RAG_TOP_K", 3))
+        min_sim = float(r.get("min_similarity") or os.getenv("RAG_MIN_SIM", 0.5))
+        token_cost = int(os.getenv("COMPLETION_TOKEN_COST", "1"))
+
+        app.logger.info(
+            f"[agentchat] user={r['username']} ns={namespace} lang={language} k={k} min_sim={min_sim}"
+        )
+
+        # === TOKEN CHECK ===
+        user_tokens = database_pg.get_user_tokens(r["username"])
+        if user_tokens is None:
+            return jsonify({"error": "Could not retrieve user tokens"}), 500
+        if token_cost > user_tokens:
+            return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 403
+        
+        # === DYNAMIC PROMPT (COMPASS AI TUTOR) ===
+
+        default_agentchat_prompt = textwrap.dedent("""\
+            You are "Compass AI Tutor", an assistant embedded in the Compass training platform.
+
+            PURPOSE
+            - Answer user questions about topics available in the selected namespace: "{namespace}".
+            - Use ONLY the information retrieved via the `retriever` tool. Do NOT rely on your general pre-trained knowledge.
+            - Always call the retriever BEFORE answering. If the first retrieval is insufficient, try again with semantically different queries.
+
+            INPUTS
+            - User question: "{user_question}"
+
+            INSTRUCTIONS
+            1) Read all retrieved context passages and synthesize a clear, technically-accurate answer in the language indicated by the variable {language}.
+            2) Maintain a cordial but neutral and technical tone (no hype, no speculation).
+            3) After the answer, produce 2–3 suggested follow-up questions (in the language indicated by the variable {language}) that the user might ask to deepen understanding.
+            4) OUTPUT FORMAT: return a VALID JSON object with exactly these top-level fields:
+            - "answer": string
+            - "follow_ups": array of strings
+            5) If no context passages are retrieved or they are empty, return a valid JSON object with the following structure:
+            - "answer": "Mi dispiace, non ho trovato informazioni sufficienti nel materiale disponibile per rispondere con precisione.",
+            - "follow_ups": []
+
+            LANGUAGE
+            - Always respond in the language indicated by the variable {language}.
+        """)
+
+
+        # === MODEL AND TOOL INITIALIZATION ===
+
+        llm = LiteLLMModel(
+            model_id=os.getenv("COMPLETION_MODEL_AGENT_CHAT"), 
+            api_key=os.getenv("DEEPINFRA_API_KEY"),
+            temperature=0,
+        )        
+        
+        retriever_tool = DinoRetrieverTool()
+
+        agent = CodeAgent(
+            tools=[retriever_tool],
+            model=llm,
+            max_steps=5,
+        )
+                
+        # EXTRACTING LAST USER MESSAGE
+        user_message = chat[-1]
+
+        # Dynamic prompt retrieval:
+        base_prompt_template = load_prompt(
+            "compass_agentchat_system",
+            default_text=default_agentchat_prompt
+        )
+
+        # Rendering the prompt with dynamic variables (namespace, user_question, language)
+        system_prompt = render_prompt(
+            base_prompt_template,
+            namespace=namespace,
+            user_question=user_message,
+            language=language
+        )
+        
+        # === AGENT EXECUTION AND TIME MEASUREMENT ===
+        start_time = time.time()
+        app.logger.info(f"[agentchat] Executing agent message='{user_message[:60]}...'")
+
+        result = agent.run(
+            user_message,
+            additional_args={
+                "namespace": namespace,
+                "k": k,
+                "min_similarity": min_sim,
+                "system_prompt": system_prompt,
+            },
+            return_full_result=True, 
+        )
+
+        duration_ms = round((time.time() - start_time) * 1000, 2)
+        app.logger.debug(f"[agentchat] Run completed in {duration_ms} ms")
+
+        # === RESULT SERIALIZATION ===
+
+        payload = serialize_runresult(result)
+        payload["metrics"]["duration_ms"] = duration_ms  # aggiunta durata misurata lato Flask
+
+        # === STRUCTURED LOGGING ===
+
+        log_runresult(
+            result,
+            user=r["username"],
+            namespace=namespace,
+            language=language,
+            question=user_message,
+        )
+
+        # === TOKEN MANAGEMENT ===
+
+        answer_text = payload.get("answer", "")
+        if answer_text:
+            edit_tokens(r["username"], -token_cost)
+
+
+        app.logger.info(
+            f"[agentchat] done user={r['username']} duration={duration_ms}ms "
+            f"tools={len(payload.get('tool_calls', []))} "
+            f"vectors={len(payload.get('vectors', []))} "
+            f"fu={len(payload.get('follow_ups', []))}"
+        )
+
+        return jsonify(payload), 200
+
+    except Exception as e:
+        import traceback
+        app.logger.error(f"[agentchat] Unexpected error: {str(e)}")
+        app.logger.error(traceback.format_exc())
+        return jsonify({"error": "An unexpected error occurred"}), 500
 
 
 @app.route("/prompt.txt", methods=["POST"])

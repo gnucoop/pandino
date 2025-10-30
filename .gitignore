@@ -22,6 +22,7 @@ tmp/
 *.py[cod]
 
 # Log files
+logs/
 *.log
 
 # Package files
@@ -58,3 +59,4 @@ Thumbs.db
 *.wmv
 
 .aider*
+
