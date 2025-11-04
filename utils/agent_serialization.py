@@ -2,19 +2,20 @@
 from __future__ import annotations
 from typing import Any, Dict, List
 import ast
+import json
 
 def _try_parse_vectors_from_string(s: str) -> list[dict]:
     """
-    Gestisce casi di observations come stringa:
+    Handles cases where observations are a string:
     'Execution logs:\n{\'vectors\': [...], \'used\': {...}}\nLast output...'
-    Prova a estrarre il dict con ast.literal_eval in modo sicuro.
+    Attempts to safely extract the dict using ast.literal_eval.
     """
     if not isinstance(s, str) or "{'vectors':" not in s:
         return []
     try:
-        # isola il blocco che inizia con {'vectors':
+        # isolate the block that starts with {'vectors':
         start = s.find("{'vectors':")
-        # termina prima di "\nLast output" o alla fine stringa
+        # end before "\nLast output" or at the end of the string
         end = s.find("\nLast output", start)
         fragment = s[start:] if end == -1 else s[start:end]
         obs_dict = ast.literal_eval(fragment)
@@ -24,33 +25,33 @@ def _try_parse_vectors_from_string(s: str) -> list[dict]:
 
 def _extract_vectors_from_steps(steps):
     """
-    Estrae tutti i vettori presenti negli step del RunResult.
-    Deduplica i risultati in base al testo contenuto in metadata['text'].
+    Extracts all vectors present in the RunResult steps.
+    Deduplicates results based on the text found in metadata['text'].
     """
     vectors = []
-    seen = set()  # tiene traccia dei testi già aggiunti per evitare duplicati
+    seen = set()  # keeps track of already added texts to avoid duplicates
 
     for step in steps or []:
         obs = step.get("observations")
 
-        # Caso 1: dict JSON con chiave 'vectors'
+        # Case 1: JSON dict with 'vectors' key
         if isinstance(obs, dict) and "vectors" in obs:
             new_vectors = obs.get("vectors", [])
 
-        # Caso 2: stringa (Execution logs come testo)
+        # Case 2: string (Execution logs as text)
         elif isinstance(obs, str):
             new_vectors = _try_parse_vectors_from_string(obs)
 
-        # Caso 3: nessun vettore disponibile
+        # Case 3: no vector available
         else:
             new_vectors = []
 
-        # Itera sui nuovi vettori trovati
+        # Iterate over the newly found vectors
         for v in new_vectors:
             metadata = v.get("metadata", {}) or {}
             text = metadata.get("text", "").strip()
 
-            # Evita duplicati basandosi sul contenuto testuale
+            # Avoid duplicates based on textual content
             if text and text not in seen:
                 seen.add(text)
                 vectors.append({
@@ -60,22 +61,6 @@ def _extract_vectors_from_steps(steps):
 
     return vectors
 
-# def _extract_vectors_from_steps(steps):
-#     vectors = []
-#     seen = set()  # per deduplicare sul contenuto testuale
-    
-#     for step in steps or []:
-#         obs = step.get("observations")
-#         if isinstance(obs, dict) and "vectors" in obs:
-#             for v in obs.get("vectors", []):
-#                 vectors.append({"similarity": float(v.get("similarity", 0.0)),
-#                                 "metadata": v.get("metadata", {}) or {}})
-#         elif isinstance(obs, str):
-#             for v in _try_parse_vectors_from_string(obs):
-#                 vectors.append({"similarity": float(v.get("similarity", 0.0)),
-#                                 "metadata": v.get("metadata", {}) or {}})
-#     return vectors
-
 def _extract_simple_tool_calls(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     calls: List[Dict[str, Any]] = []
     for step in steps or []:
@@ -84,15 +69,14 @@ def _extract_simple_tool_calls(steps: List[Dict[str, Any]]) -> List[Dict[str, An
             calls.append({
                 "tool_name": fn.get("name"),
                 "arguments": fn.get("arguments"),
-                # opzionale: durata step come proxy della tool call
                 "duration_ms": round(float(step.get("timing", {}).get("duration", 0.0)) * 1000, 2) if step.get("timing") else None,
             })
     return calls
 
 def serialize_runresult(result: Any) -> Dict[str, Any]:
     """
-    Serializza un RunResult (smolagents) in un JSON compatto e stabile per /compass/agentchat.
-    Non ha dipendenze da Flask, così resta facilmente testabile.
+    Serializes a RunResult (smolagents) into a compact, stable JSON for /agentchat.
+    It has no Flask dependencies, so it remains easily testable.
     """
     steps: List[Dict[str, Any]] = getattr(result, "steps", []) or []
     timing = getattr(result, "timing", None)
@@ -106,6 +90,16 @@ def serialize_runresult(result: Any) -> Dict[str, Any]:
         fu = out.get("follow_ups", []) or []
         if isinstance(fu, list):
             follow_ups = [str(x).strip() for x in fu if str(x).strip()]
+    elif isinstance(out, str):
+        try:
+            parsed = json.loads(out)
+            answer = str(parsed.get("answer", "")).strip()
+            fu = parsed.get("follow_ups", []) or []
+            if isinstance(fu, list):
+                follow_ups = [str(x).strip() for x in fu if str(x).strip()]
+        except Exception:
+            pass
+
 
     # vectors + tool_calls
     vectors = _extract_vectors_from_steps(steps)
