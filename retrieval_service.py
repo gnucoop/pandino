@@ -67,34 +67,3 @@ def retrieve_from_collection(
         logging.exception("[retrieval] Error during vector retrieval")
         raise RuntimeError(f"Error retrieving vectors from Dino: {str(e)}") from e
 
-
-# # Test rapido da linea di comando
-# if __name__ == "__main__":
-#     import sys
-
-#     # Controllo degli argomenti passati da riga di comando:
-#     # il primo argomento (obbligatorio) è la domanda da cercare,
-#     # il secondo (opzionale) è il namespace/collezione.
-#     if len(sys.argv) < 2:
-#         # Se manca la domanda, mostro l'uso corretto e termino con codice di errore
-#         print("Usage: python retrieval_service.py '<your question>' [namespace]")
-#         sys.exit(1)
-
-#     # Legge la domanda dal primo argomento
-#     question = sys.argv[1]
-#     # Se è stato passato un namespace lo usa, altrimenti legge la variabile d'ambiente RAG_DEFAULT_NAMESPACE
-#     namespace = sys.argv[2] if len(sys.argv) > 2 else os.getenv("RAG_DEFAULT_NAMESPACE", "Dino")
-
-#     # Stampa informativa sul namespace che verrà interrogato
-#     print(f"\n Querying namespace: {namespace}")
-#     # Esegue la funzione di retrieval definita sopra passando domanda e namespace
-#     results = retrieve_from_collection(question, namespace)
-#     # Stampa quanti vettori sono stati trovati
-#     print(f"\n Found {len(results)} vectors\n")
-
-#     # Itera sui risultati e mostra una breve anteprima del testo e la similarità
-#     for i, r in enumerate(results, 1):
-#         # Prende dal metadata il campo 'text' (se presente), tronca a 120 caratteri e rimuove newline
-#         snippet = r['metadata'].get('text', '')[:120].replace('\n', ' ')
-#         # Stampa indice, similarità (formattata a 3 decimali) e l'anteprima del contenuto
-#         print(f"{i}. sim={r['similarity']:.3f} | {snippet}...")

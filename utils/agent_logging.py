@@ -136,6 +136,6 @@ def log_runresult(
         _agent_logger.info(json.dumps(asdict(record), ensure_ascii=False))
 
     except (AttributeError, TypeError, ValueError) as e:
-        # Errori specifici per getattr falliti o tipi errati
+        # Specific errors for failed getattr or wrong types
         logging.getLogger(__name__).warning(f"[agentchat] Failed to log RunResult: {e}")
 

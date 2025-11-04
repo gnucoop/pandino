@@ -30,7 +30,7 @@ from langchain_text_splitters import (
 # === Local modules ===
 from agent_manager import getAgent, createAgent, deleteAgent
 from file_manager import isImageFilePath, fileToBase64
-from retriever_tool import DinoRetrieverTool
+from retriever_tool import RetrieverTool
 from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
 from database_pg import edit_tokens, validate_api_key
@@ -696,12 +696,13 @@ def agentchat() -> Response | tuple[Response, int]:
             temperature=0,
         )        
         
-        retriever_tool = DinoRetrieverTool()
+        retriever_tool = RetrieverTool()
 
         agent = CodeAgent(
             tools=[retriever_tool],
             model=llm,
             max_steps=5,
+            additional_authorized_imports=["json"],
         )
                 
         # EXTRACTING LAST USER MESSAGE

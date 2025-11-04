@@ -16,15 +16,16 @@ from retrieval_service import retrieve_from_collection
 load_dotenv()
 
 
-class DinoRetrieverTool(Tool):
+class RetrieverTool(Tool):
     """
-    Smolagents tool that queries the Dino collection via PGVector.
-    Provides the agent with the ability to obtain relevant context for grounded responses.
+    Smolagents tool that queries any PGVector-backed collection.
+    Provides agents with access to relevant contextual passages for grounded responses,
+    based on vector similarity search.
     """
 
     name = "retriever"
     description = (
-        "Fetch relevant context passages from the Dino knowledge base using vector similarity search. "
+        "Fetch relevant context passages from a PGVector-backed knowledge base using vector similarity search. "
         "Use this before answering user questions to ensure your response is grounded in real data."
     )
     output_type = "object"
@@ -98,27 +99,3 @@ class DinoRetrieverTool(Tool):
         except Exception as e:
             logging.exception("[retriever_tool] Error during retrieval execution")
             return {"vectors": [], "error": str(e)}
-
-
-# # --- test manuale da CLI ---
-# if __name__ == "__main__":
-#     import sys
-
-#     if len(sys.argv) < 2:
-#         print("Usage: python retriever_tool.py '<your question>' [namespace]")
-#         sys.exit(1)
-
-#     question = sys.argv[1]
-#     namespace = sys.argv[2] if len(sys.argv) > 2 else None
-
-#     tool = DinoRetrieverTool()
-#     result = tool.forward(question, namespace)
-
-#     print("\nRetrieval result:")
-#     print(f"Found {len(result.get('vectors', []))} vectors")
-#     if "error" in result:
-#         print(f"Error: {result['error']}")
-#     else:
-#         for i, r in enumerate(result["vectors"], 1):
-#             snippet = r["metadata"].get("text", "")[:100].replace("\n", " ")
-#             print(f"{i}. sim={r['similarity']:.3f} | {snippet}...")
