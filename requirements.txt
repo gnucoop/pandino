@@ -76,6 +76,7 @@ langchain-postgres==0.0.15
 langchain-tests==0.3.20
 langchain-text-splitters==0.3.11
 langsmith==0.4.5
+litellm==1.79.1
 markdown-it-py==3.0.0
 MarkupSafe==3.0.2
 marshmallow==3.26.1
