@@ -32,6 +32,7 @@ PGUSER = os.environ["PGUSER"]
 PGPWD = os.environ["PGPWD"]
 PGHOST = os.environ["PGHOST"]
 PGDB = os.environ["PGDB"]
+schema = os.environ.get("MAUI_SCHEMA", "public")
 
 if not KEY:
     print("Error: ENCRYPTION_KEY not found in environment variables.")
@@ -51,7 +52,12 @@ cipher_suite = Fernet(KEY)
 
 
 def connect():
-    return psycopg.connect(host=PGHOST, dbname=PGDB, user=PGUSER, password=PGPWD)
+    conn = psycopg.connect(host=PGHOST, dbname=PGDB, user=PGUSER, password=PGPWD)
+
+    with conn.cursor() as cur:
+        cur.execute(f"SET search_path TO {schema};")
+
+    return conn
 
 
 def init_db():

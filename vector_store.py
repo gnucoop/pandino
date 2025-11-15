@@ -18,7 +18,7 @@ PGUSER = os.environ["PGUSER"]
 PGPWD = os.environ["PGPWD"]
 PGHOST = os.environ["PGHOST"]
 PGDB = os.environ["PGDB"]
-
+schema = os.environ.get("MAUI_SCHEMA", "public")
 
 class VectorStore(ABC):
     def __init__(self, embeddings: Embeddings):
@@ -118,7 +118,10 @@ class PineconeStore(VectorStore):
 class PGVectorStore(VectorStore):
     def __init__(self, embeddings: Embeddings, collection_name: str):
 
-        connection = f"postgresql+psycopg://{PGUSER}:{PGPWD}@{PGHOST}/{PGDB}"
+        connection = (
+            f"postgresql+psycopg://{PGUSER}:{PGPWD}@{PGHOST}/{PGDB}"
+            f"?options=-csearch_path%3D{schema}"
+        ) 
         self.collection = PGVector(
             embeddings=embeddings,
             collection_name=collection_name,
