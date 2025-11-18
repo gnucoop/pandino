@@ -64,7 +64,11 @@ load_dotenv()  # Load environment variables from .env file
 app = Flask(__name__)
 # origins=["http://localhost:4200"]
 CORS(app)
-app.secret_key = os.environ.get('ENCRYPTION_KEY', 'your-secret-key-change-this-in-production')
+
+secret_key = os.environ.get('ENCRYPTION_KEY')
+if not secret_key:
+    raise RuntimeError("ENCRYPTION_KEY must be set in environment")
+app.secret_key = secret_key
 
 # Configure the agent run logger
 setup_agent_logger()
@@ -98,6 +102,8 @@ DATACHAT_TOKEN_COST = int(os.environ.get("DATACHAT_TOKEN_COST", "1"))
 COMPLETION_TOKEN_COST = os.environ.get("COMPLETION_TOKEN_COST")
 PROMPT_TOKEN_COST = os.environ.get("PROMPT_TOKEN_COST")
 AUDIO_FORM_TOKEN_COST = os.environ.get("AUDIO_FORM_TOKEN_COST")
+ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
+ADMIN_PASSWORD_HASH = os.environ.get('ADMIN_PASSWORD_HASH', '').encode("utf-8")
 
 
 # Define a route for the '/' endpoint that returns a welcome message
@@ -1053,8 +1059,6 @@ def categorize():
 def img_comparison():
     return "The /img-comparison endpoint is not yet implemented.", 501
 
-ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
-ADMIN_PASSWORD_HASH = os.environ.get('ADMIN_PASSWORD_HASH', '').encode("utf-8")
 
 # Admin authentication decorator
 def admin_required(f):
