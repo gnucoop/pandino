@@ -1,0 +1,93 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Manage Costs - Admin Panel{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+    <h1 class="h2">Manage Costs</h1>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        Add New Cost
+    </div>
+    <div class="card-body">
+        <form method="POST" action="{{ url_for('admin_add_cost') }}">
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <label for="provider" class="form-label">Provider</label>
+                    <input type="text" class="form-control" id="provider" name="provider" required>
+                </div>
+                <div class="col-md-6">
+                    <label for="model" class="form-label">Model</label>
+                    <input type="text" class="form-control" id="model" name="model" required>
+                </div>
+            </div>
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <label for="token_input_cost" class="form-label">Input Cost (per token)</label>
+                    <input type="number" step="0.00000001" class="form-control" id="token_input_cost" name="token_input_cost" required>
+                </div>
+                <div class="col-md-6">
+                    <label for="token_output_cost" class="form-label">Output Cost (per token)</label>
+                    <input type="number" step="0.00000001" class="form-control" id="token_output_cost" name="token_output_cost" required>
+                </div>
+            </div>
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <label for="start_date_valid" class="form-label">Start Date</label>
+                    <input type="date" class="form-control" id="start_date_valid" name="start_date_valid" required>
+                </div>
+                <div class="col-md-6">
+                    <label for="end_date_valid" class="form-label">End Date</label>
+                    <input type="date" class="form-control" id="end_date_valid" name="end_date_valid" required>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Add Cost</button>
+        </form>
+    </div>
+</div>
+
+<div class="card mt-4">
+    <div class="card-header">
+        Existing Costs
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th scope="col">ID</th>
+                        <th scope="col">Provider</th>
+                        <th scope="col">Model</th>
+                        <th scope="col">Input Cost</th>
+                        <th scope="col">Output Cost</th>
+                        <th scope="col">Start Date</th>
+                        <th scope="col">End Date</th>
+                        <th scope="col">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for cost in costs %}
+                    <tr>
+                        <td>{{ cost.id }}</td>
+                        <td>{{ cost.provider }}</td>
+                        <td>{{ cost.model }}</td>
+                        <td>{{ cost.token_input_cost }}</td>
+                        <td>{{ cost.token_output_cost }}</td>
+                        <td>{{ cost.start_date_valid }}</td>
+                        <td>{{ cost.end_date_valid }}</td>
+                        <td>
+                            <a href="{{ url_for('admin_edit_cost', cost_id=cost.id) }}" class="btn btn-sm btn-outline-primary">Edit</a>
+                            <form method="POST" action="{{ url_for('admin_delete_cost', cost_id=cost.id) }}" style="display:inline;">
+                                <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure you want to delete this cost?');">Delete</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

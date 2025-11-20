@@ -37,7 +37,7 @@ from file_manager import isImageFilePath, fileToBase64
 from retriever_tool import RetrieverTool
 from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
-from database_pg import edit_tokens, validate_api_key, get_users_for_admin, get_users_stats, get_logs_for_admin, get_logs_stats, update_user_tokens, get_user_by_id, get_all_prompts, get_prompt_by_id, add_prompt, update_prompt, delete_prompt
+from database_pg import edit_tokens, validate_api_key, get_users_for_admin, get_users_stats, get_logs_for_admin, get_logs_stats, update_user_tokens, get_user_by_id, get_all_prompts, get_prompt_by_id, add_prompt, update_prompt, delete_prompt, get_all_costs, add_cost, update_cost, delete_cost, get_cost_by_id, get_daily_stats, get_recent_activity
 
 
 from dino import dino_authenticate
@@ -104,6 +104,17 @@ PROMPT_TOKEN_COST = os.environ.get("PROMPT_TOKEN_COST")
 AUDIO_FORM_TOKEN_COST = os.environ.get("AUDIO_FORM_TOKEN_COST")
 ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
 ADMIN_PASSWORD_HASH = os.environ.get('ADMIN_PASSWORD_HASH', '').encode("utf-8")
+
+
+# Admin authentication decorator
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('admin_logged_in'):
+            flash('Please log in to access the admin panel', 'warning')
+            return redirect(url_for('admin_login'))
+        return f(*args, **kwargs)
+    return decorated_function
 
 
 # Define a route for the '/' endpoint that returns a welcome message
@@ -798,6 +809,86 @@ def prompt_handler() -> Union[str, tuple[str, int, dict[str, str]]]:
     username = request.form.get("username")
     api_key = request.headers.get("X-API-KEY")
 
+
+# Define a route for the '/admin/costs' endpoint
+@app.route("/admin/costs", methods=["GET"])
+@admin_required
+def admin_costs() -> str:
+    costs = get_all_costs()
+    return render_template("admin/costs.html", costs=costs)
+
+
+# Define a route for the '/admin/costs/add' endpoint
+@app.route("/admin/costs/add", methods=["POST"])
+@admin_required
+def admin_add_cost() -> Response:
+    model = request.form.get("model")
+    provider = request.form.get("provider")
+    token_input_cost = float(request.form.get("token_input_cost"))
+    token_output_cost = float(request.form.get("token_output_cost"))
+    start_date_valid = request.form.get("start_date_valid")
+    end_date_valid = request.form.get("end_date_valid")
+
+    error = add_cost(
+        model,
+        provider,
+        token_input_cost,
+        token_output_cost,
+        start_date_valid,
+        end_date_valid,
+    )
+    if error:
+        flash(error, "danger")
+    else:
+        flash("Cost added successfully", "success")
+    return redirect(url_for("admin_costs"))
+
+
+# Define a route for the '/admin/costs/edit/<int:cost_id>' endpoint
+@app.route("/admin/costs/edit/<int:cost_id>", methods=["GET", "POST"])
+@admin_required
+def admin_edit_cost(cost_id: int) -> str | Response:
+    if request.method == "POST":
+        model = request.form.get("model")
+        provider = request.form.get("provider")
+        token_input_cost = float(request.form.get("token_input_cost"))
+        token_output_cost = float(request.form.get("token_output_cost"))
+        start_date_valid = request.form.get("start_date_valid")
+        end_date_valid = request.form.get("end_date_valid")
+
+        error = update_cost(
+            cost_id,
+            model,
+            provider,
+            token_input_cost,
+            token_output_cost,
+            start_date_valid,
+            end_date_valid,
+        )
+        if error:
+            flash(error, "danger")
+        else:
+            flash("Cost updated successfully", "success")
+        return redirect(url_for("admin_costs"))
+
+    cost = get_cost_by_id(cost_id)
+    if not cost:
+        flash("Cost not found", "danger")
+        return redirect(url_for("admin_costs"))
+    return render_template("admin/edit_cost.html", cost=cost)
+
+
+# Define a route for the '/admin/costs/delete/<int:cost_id>' endpoint
+@app.route("/admin/costs/delete/<int:cost_id>", methods=["POST"])
+@admin_required
+def admin_delete_cost(cost_id: int) -> Response:
+    error = delete_cost(cost_id)
+    if error:
+        flash(error, "danger")
+    else:
+        flash("Cost deleted successfully", "success")
+    return redirect(url_for("admin_costs"))
+
     if not api_key:
         return "Missing API key", 400, textContentType
     if not prompt:
@@ -1039,9 +1130,6 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
     app.logger.debug(f"Audio form compilation result: {invocation}")
     return jsonify(invocation), 200
 
-@app.route("/agentic-rag")
-
-
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
 @app.route("/summarize", methods=["GET"])
 def summarize():
@@ -1060,15 +1148,7 @@ def img_comparison():
     return "The /img-comparison endpoint is not yet implemented.", 501
 
 
-# Admin authentication decorator
-def admin_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if not session.get('admin_logged_in'):
-            flash('Please log in to access the admin panel', 'warning')
-            return redirect(url_for('admin_login'))
-        return f(*args, **kwargs)
-    return decorated_function
+
 
 @app.route('/admin/login', methods=['GET', 'POST'])
 def admin_login():
@@ -1096,40 +1176,72 @@ def admin_logout():
 @app.route('/admin')
 @admin_required
 def admin_dashboard():
+    env_vars = {
+        "DATACHAT_MODEL": DATACHAT_MODEL,
+        "DATACHAT_PROVIDER": DATACHAT_PROVIDER,
+        "PROMPT_MODEL": PROMPT_MODEL,
+        "PROMPT_PROVIDER": PROMPT_PROVIDER,
+        "AUDIO_MODEL": AUDIO_MODEL,
+        "AUDIO_PROVIDER": AUDIO_PROVIDER,
+        "COMPLETION_MODEL": COMPLETION_MODEL,
+        "COMPLETION_MODEL_PROVIDER": COMPLETION_MODEL_PROVIDER,
+        "COMPLETION_EMBEDDING_MODEL": COMPLETION_EMBEDDING_MODEL,
+        "COMPLETION_EMBEDDING_MODEL_PROVIDER": COMPLETION_EMBEDDING_MODEL_PROVIDER,
+        "WHISPER_MODEL": WHISPER_MODEL,
+        "VISION_PROVIDER": VISION_PROVIDER,
+        "VISION_MODEL": VISION_MODEL,
+        "DATACHAT_TOKEN_COST": DATACHAT_TOKEN_COST,
+        "COMPLETION_TOKEN_COST": COMPLETION_TOKEN_COST,
+        "PROMPT_TOKEN_COST": PROMPT_TOKEN_COST,
+        "AUDIO_FORM_TOKEN_COST": AUDIO_FORM_TOKEN_COST
+    }
+    
     try:
         stats_data = get_users_stats()
         
+        today = datetime.now().strftime("%Y-%m-%d")
+        daily_stats = get_daily_stats(today)
+        recent_activity = get_recent_activity()
+        
         stats = {
             'total_users': stats_data['total_users'],
-            'active_sessions': stats_data['total_tokens'],
-            'total_orders': 0  # Aggiungi altre metriche se necessario
-        }
-        env_vars = {
-            "DATACHAT_MODEL": DATACHAT_MODEL,
-            "DATACHAT_PROVIDER": DATACHAT_PROVIDER,
-            "PROMPT_MODEL": PROMPT_MODEL,
-            "PROMPT_PROVIDER": PROMPT_PROVIDER,
-            "AUDIO_MODEL": AUDIO_MODEL,
-            "AUDIO_PROVIDER": AUDIO_PROVIDER,
-            "COMPLETION_MODEL": COMPLETION_MODEL,
-            "COMPLETION_MODEL_PROVIDER": COMPLETION_MODEL_PROVIDER,
-            "COMPLETION_EMBEDDING_MODEL": COMPLETION_EMBEDDING_MODEL,
-            "COMPLETION_EMBEDDING_MODEL_PROVIDER": COMPLETION_EMBEDDING_MODEL_PROVIDER,
-            "WHISPER_MODEL": WHISPER_MODEL,
-            "VISION_PROVIDER": VISION_PROVIDER,
-            "VISION_MODEL": VISION_MODEL,
-            "DATACHAT_TOKEN_COST": DATACHAT_TOKEN_COST,
-            "COMPLETION_TOKEN_COST": COMPLETION_TOKEN_COST,
-            "PROMPT_TOKEN_COST": PROMPT_TOKEN_COST,
-            "AUDIO_FORM_TOKEN_COST": AUDIO_FORM_TOKEN_COST
+            'active_sessions': stats_data['total_tokens'], # Keeping this for now, but will replace in template
+            'daily_tokens': daily_stats['total_tokens'],
+            'daily_cost': daily_stats['total_cost'],
+            'total_orders': 0,
+            'recent_activity': recent_activity,
+            'db_connected': True,  # If we got here, DB is connected
+  
+            "cpu_percent": psutil.cpu_percent(interval=0.5),  # utilizzo CPU
+            "memory": {
+                "total": psutil.virtual_memory().total,
+                "used": psutil.virtual_memory().used,
+                "available": psutil.virtual_memory().available,
+                "percent": psutil.virtual_memory().percent
+            }
         }
         return render_template('admin/dashboard.html', stats=stats, env_vars=env_vars)
         
     except Exception as e:
         flash(f'Errore nel caricamento dashboard: {str(e)}', 'danger')
-        stats = {'total_users': 0, 'active_sessions': 0, 'total_orders': 0}
+        stats = {
+            'total_users': 0, 
+            'active_sessions': 0, 
+            'total_orders': 0,
+            'db_connected': False,  # DB connection failed
+            'recent_activity': [],
+            'daily_tokens': 0,
+            'daily_cost': 0.0,
+            'cpu_percent': 0,
+            'memory': {
+                'total': 0,
+                'used': 0,
+                'available': 0,
+                'percent': 0
+            }
+        }
         
-        return render_template('admin/dashboard.html', stats=stats)
+        return render_template('admin/dashboard.html', stats=stats, env_vars=env_vars)
 
 @app.route('/admin/users')
 @admin_required
@@ -1274,13 +1386,6 @@ def health():
     # Stato base
     status = {
         "status": "ok",
-    #    "cpu_percent": psutil.cpu_percent(interval=0.5),  # utilizzo CPU
-    #    "memory": {
-    #        "total": psutil.virtual_memory().total,
-    #        "used": psutil.virtual_memory().used,
-    #        "available": psutil.virtual_memory().available,
-    #        "percent": psutil.virtual_memory().percent
-    #    }
     }
     return jsonify(status)
 

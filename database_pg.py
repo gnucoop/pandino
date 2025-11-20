@@ -32,6 +32,13 @@ from database_methods import (
     build_add_prompt_query,
     build_update_prompt_query,
     build_delete_prompt_query,
+    build_add_cost_query,
+    build_update_cost_query,
+    build_delete_cost_query,
+    build_get_all_costs_query,
+    build_get_cost_by_id_query,
+    build_get_daily_stats_query,
+    build_get_recent_activity_query,
 )
 
 # Generate a key for encryption and decryption
@@ -813,6 +820,204 @@ def get_prompt_by_id(prompt_id):
     finally:
         conn.close()
 
+
+def add_cost(
+    model: str,
+    provider: str,
+    token_input_cost: float,
+    token_output_cost: float,
+    start_date_valid: str,
+    end_date_valid: str,
+) -> Optional[str]:
+    """
+    Adds a new cost entry to the 'costs' table.
+
+    :param model: Model name.
+    :param provider: Provider name.
+    :param token_input_cost: Cost per input token.
+    :param token_output_cost: Cost per output token.
+    :param start_date_valid: Start date of validity.
+    :param end_date_valid: End date of validity.
+    :return: None if success, or an error message string if an exception occurs.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_add_cost_query(
+            model,
+            provider,
+            token_input_cost,
+            token_output_cost,
+            start_date_valid,
+            end_date_valid,
+        )
+        cursor.execute(query, params)
+        conn.commit()
+        return None
+    except Exception as e:
+        logging.exception("Unexpected error in add_cost")
+        return f"Error adding new cost: {e}"
+    finally:
+        conn.close()
+
+
+def update_cost(
+    cost_id: int,
+    model: str,
+    provider: str,
+    token_input_cost: float,
+    token_output_cost: float,
+    start_date_valid: str,
+    end_date_valid: str,
+) -> Optional[str]:
+    """
+    Updates a cost entry.
+
+    :param cost_id: ID of the cost entry to update.
+    :param model: New model name.
+    :param provider: New provider name.
+    :param token_input_cost: New input token cost.
+    :param token_output_cost: New output token cost.
+    :param start_date_valid: New start date.
+    :param end_date_valid: New end date.
+    :return: None if success, or an error message string if an exception occurs.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_update_cost_query(
+            cost_id,
+            model,
+            provider,
+            token_input_cost,
+            token_output_cost,
+            start_date_valid,
+            end_date_valid,
+        )
+        cursor.execute(query, params)
+        conn.commit()
+        return None
+    except Exception as e:
+        logging.exception("Unexpected error in update_cost")
+        return f"Error updating cost: {e}"
+    finally:
+        conn.close()
+
+
+def delete_cost(cost_id: int) -> Optional[str]:
+    """
+    Deletes a cost entry from the 'costs' table by id.
+
+    :param cost_id: The id of the cost entry to remove.
+    :return: None if success, or an error message string if an exception occurs.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_delete_cost_query(cost_id)
+        cursor.execute(query, params)
+        conn.commit()
+        return None
+    except Exception as e:
+        logging.exception("Unexpected error in delete_cost")
+        return f"Error deleting cost: {e}"
+    finally:
+        conn.close()
+
+
+def get_all_costs():
+    """
+    Retrieves all cost entries from the database.
+
+    :return: List of cost dictionaries
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_get_all_costs_query()
+        cursor.execute(query, params)
+        costs_raw = cursor.fetchall()
+    finally:
+        conn.close()
+
+    costs = []
+    if costs_raw:
+        for id, model, provider, in_cost, out_cost, start, end in costs_raw:
+            costs.append({
+                'id': id,
+                'model': model,
+                'provider': provider,
+                'token_input_cost': in_cost,
+                'token_output_cost': out_cost,
+                'start_date_valid': start,
+                'end_date_valid': end,
+            })
+
+    return costs
+
+
+def get_cost_by_id(cost_id: int):
+    """
+    Get a single cost entry by ID.
+
+    :param cost_id: ID of the cost entry
+    :return: Cost dictionary or None
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_get_cost_by_id_query(cost_id)
+        cursor.execute(query, params)
+        cost_data = cursor.fetchone()
+
+        if cost_data:
+            id, model, provider, in_cost, out_cost, start, end = cost_data
+            return {
+                'id': id,
+                'model': model,
+                'provider': provider,
+                'token_input_cost': in_cost,
+                'token_output_cost': out_cost,
+                'start_date_valid': start,
+                'end_date_valid': end,
+            }
+        return None
+
+    finally:
+        conn.close()
+
+
+def get_daily_stats(date: str):
+    """
+    Get total tokens and cost for a specific date.
+
+    :param date: Date string in YYYY-MM-DD format.
+    :return: Dictionary with daily stats
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_get_daily_stats_query(date)
+        cursor.execute(query, params)
+        result = cursor.fetchone()
+        
+        total_tokens = result[0] if result and result[0] else 0
+        total_cost = result[1] if result and result[1] else 0.0
+        
+        return {
+            'total_tokens': total_tokens,
+            'total_cost': total_cost
+        }
+    finally:
+        conn.close()
+
+
 def add_prompt(title: str, version: int, message: str) -> Optional[str]:
     """
     Adds a new prompt to the 'prompts' table.
@@ -891,6 +1096,33 @@ def delete_prompt(prompt_id: int) -> bool:
     except Exception as e:
         logging.exception(f"Unexpected error in delete_prompt: {e}")
         return False
+    finally:
+        conn.close()
+
+
+def get_recent_activity():
+    """
+    Get the 3 most recent activities (logs and new users).
+    
+    :return: List of activity dictionaries
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_get_recent_activity_query()
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        
+        activities = []
+        if rows:
+            for type, date, details in rows:
+                activities.append({
+                    'type': type,
+                    'date': date,
+                    'details': details
+                })
+        return activities
     finally:
         conn.close()
 

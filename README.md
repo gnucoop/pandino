@@ -81,6 +81,7 @@ Here is a list of the available non-admin endpoints:
 - **POST /storeragfile**: Stores a file for Retrieval-Augmented Generation (RAG).
 - **POST /transcribe**: Transcribes an audio file using Whisper.
 - **POST /audioformcompilation**: Compiles a form from transcribed audio.
+- **POST /agentchat**: AI agent endpoint powered by Smolagents that uses retrieval tools to answer questions based on stored documents in a specified namespace.
 - **GET /health**: Returns the health status of the application.
 
 ## Usage
@@ -142,6 +143,21 @@ curl -X POST "http://127.0.0.1:5000/datachat" \
      {
          "chat": "your_request_to_pandas_here"
      }
+```
+
+To access the `/agentchat` endpoint using `curl`, use the following command:
+```bash
+curl -X POST "http://127.0.0.1:5000/agentchat" \
+     -H "Content-Type: application/json" \
+     -H "X-API-KEY: your_api_key_here" \
+     -d '{
+         "chat": ["What is the main topic of the training material?"],
+         "username": "user@example.com",
+         "namespace": "Dino",
+         "language": "ITA",
+         "k": 3,
+         "min_similarity": 0.5
+     }'
 ```
 
 Replace `your_api_key_here` with a valid API key from the database, `your_full_user_name_here` with a user name (it will be used to create the agent dedicated export folder), `your_request_to_pandas_here` with your natural language request to Pandas and adjust the `model_name`, `llm_type`, and `data` fields as needed.

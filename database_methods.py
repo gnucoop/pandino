@@ -474,3 +474,210 @@ def build_delete_prompt_query(prompt_id: int) -> Tuple[sql.Composed, Tuple[int]]
     return query, (prompt_id,)
 
 
+def build_add_cost_query(
+    model: str,
+    provider: str,
+    token_input_cost: float,
+    token_output_cost: float,
+    start_date_valid: str,
+    end_date_valid: str,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to insert a new cost entry into the 'costs' table.
+
+    :param model: Model name.
+    :param provider: Provider name.
+    :param token_input_cost: Cost per input token.
+    :param token_output_cost: Cost per output token.
+    :param start_date_valid: Start date of validity.
+    :param end_date_valid: End date of validity.
+    :return: Tuple with SQL query and parameters.
+    """
+    query = sql.SQL(
+        "INSERT INTO {table} ({col_model}, {col_provider}, {col_in_cost}, {col_out_cost}, {col_start}, {col_end}) "
+        "VALUES (%s, %s, %s, %s, %s, %s)"
+    ).format(
+        table=sql.Identifier("costs"),
+        col_model=sql.Identifier("model"),
+        col_provider=sql.Identifier("provider"),
+        col_in_cost=sql.Identifier("token_input_cost"),
+        col_out_cost=sql.Identifier("token_output_cost"),
+        col_start=sql.Identifier("start_date_valid"),
+        col_end=sql.Identifier("end_date_valid"),
+    )
+    params = (
+        model,
+        provider,
+        token_input_cost,
+        token_output_cost,
+        start_date_valid,
+        end_date_valid,
+    )
+    return query, params
+
+
+def build_update_cost_query(
+    cost_id: int,
+    model: str,
+    provider: str,
+    token_input_cost: float,
+    token_output_cost: float,
+    start_date_valid: str,
+    end_date_valid: str,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to update a cost entry.
+
+    :param cost_id: ID of the cost entry to update.
+    :param model: New model name.
+    :param provider: New provider name.
+    :param token_input_cost: New input token cost.
+    :param token_output_cost: New output token cost.
+    :param start_date_valid: New start date.
+    :param end_date_valid: New end date.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "UPDATE {table} SET {col_model} = %s, {col_provider} = %s, "
+        "{col_in_cost} = %s, {col_out_cost} = %s, "
+        "{col_start} = %s, {col_end} = %s "
+        "WHERE {col_id} = %s"
+    ).format(
+        table=sql.Identifier("costs"),
+        col_model=sql.Identifier("model"),
+        col_provider=sql.Identifier("provider"),
+        col_in_cost=sql.Identifier("token_input_cost"),
+        col_out_cost=sql.Identifier("token_output_cost"),
+        col_start=sql.Identifier("start_date_valid"),
+        col_end=sql.Identifier("end_date_valid"),
+        col_id=sql.Identifier("id"),
+    )
+    params = (
+        model,
+        provider,
+        token_input_cost,
+        token_output_cost,
+        start_date_valid,
+        end_date_valid,
+        cost_id,
+    )
+    return query, params
+
+
+def build_delete_cost_query(cost_id: int) -> Tuple[sql.Composed, Tuple[int]]:
+    """
+    Builds a SQL query to delete a cost entry from the 'costs' table by id.
+
+    :param cost_id: The id of the cost entry to remove.
+    :return: A tuple with the SQL query and parameters.
+    """
+    query = sql.SQL("DELETE FROM {table} WHERE {col_id} = %s").format(
+        table=sql.Identifier("costs"), col_id=sql.Identifier("id")
+    )
+    return query, (cost_id,)
+
+
+def build_get_all_costs_query() -> Tuple[sql.Composed, Tuple[()]]:
+    """
+    Builds a SQL query to retrieve all cost entries.
+
+    :return: Tuple with SQL query and empty parameter tuple.
+    """
+    query = sql.SQL(
+        "SELECT {id}, {model}, {provider}, {in_cost}, {out_cost}, {start}, {end} "
+        "FROM {table} ORDER BY {id} ASC"
+    ).format(
+        id=sql.Identifier("id"),
+        model=sql.Identifier("model"),
+        provider=sql.Identifier("provider"),
+        in_cost=sql.Identifier("token_input_cost"),
+        out_cost=sql.Identifier("token_output_cost"),
+        start=sql.Identifier("start_date_valid"),
+        end=sql.Identifier("end_date_valid"),
+        table=sql.Identifier("costs"),
+    )
+    return query, ()
+
+
+def build_get_cost_by_id_query(cost_id: int) -> Tuple[sql.Composed, Tuple[int]]:
+    """
+    Builds a SQL query to retrieve a cost entry by its ID.
+
+    :param cost_id: The ID of the cost entry to retrieve.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "SELECT {id}, {model}, {provider}, {in_cost}, {out_cost}, {start}, {end} "
+        "FROM {table} WHERE {id} = %s"
+    ).format(
+        id=sql.Identifier("id"),
+        model=sql.Identifier("model"),
+        provider=sql.Identifier("provider"),
+        in_cost=sql.Identifier("token_input_cost"),
+        out_cost=sql.Identifier("token_output_cost"),
+        start=sql.Identifier("start_date_valid"),
+        end=sql.Identifier("end_date_valid"),
+        table=sql.Identifier("costs"),
+    )
+    return query, (cost_id,)
+
+
+def build_get_daily_stats_query(date: str) -> Tuple[sql.Composed, Tuple[str]]:
+    """
+    Builds a SQL query to get total tokens and cost for a specific date.
+
+    :param date: Date string in YYYY-MM-DD format.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL("""
+        SELECT
+            SUM({token_input} + {token_output}) as total_tokens,
+            SUM({cost}) as total_cost
+        FROM {table}
+        WHERE {col_date} = %s
+    """).format(
+        token_input=sql.Identifier("token_input"),
+        token_output=sql.Identifier("token_output"),
+        cost=sql.Identifier("cost"),
+        table=sql.Identifier("logs"),
+        col_date=sql.Identifier("date"),
+    )
+    return query, (date,)
+
+
+def build_get_recent_activity_query() -> Tuple[sql.Composed, Tuple[()]]:
+    """
+    Builds a SQL query to get the 3 most recent activities (logs and new users).
+    Derives user creation date from date_valid_until (assuming 1 year validity).
+
+    :return: Tuple of SQL query and empty parameters.
+    """
+    query = sql.SQL("""
+        SELECT type, date, details FROM (
+            SELECT 
+                'log' as type, 
+                {log_date}::timestamp as date, 
+                'New Log: ' || {model} as details
+            FROM {logs_table}
+            
+            UNION ALL
+            
+            SELECT 
+                'user' as type, 
+                ({user_date}::date - INTERVAL '1 year')::timestamp as date, 
+                'New User: ' || {username} as details
+            FROM {users_table}
+        ) as combined_activity
+        ORDER BY date DESC
+        LIMIT 3
+    """).format(
+        log_date=sql.Identifier("date"),
+        model=sql.Identifier("model"),
+        logs_table=sql.Identifier("logs"),
+        user_date=sql.Identifier("date_valid_until"),
+        username=sql.Identifier("username"),
+        users_table=sql.Identifier("users")
+    )
+    return query, ()
+
+
