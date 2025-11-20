@@ -25,10 +25,10 @@
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h6 class="card-title text-uppercase mb-2">Active Sessions</h6>
-                        <h2 class="mb-0">{{ stats.active_sessions }}</h2>
+                        <h6 class="card-title text-uppercase mb-2">Tokens (Today)</h6>
+                        <h2 class="mb-0">{{ stats.daily_tokens }}</h2>
                     </div>
-                    <i class="fas fa-signal fa-3x opacity-50"></i>
+                    <i class="fas fa-coins fa-3x opacity-50"></i>
                 </div>
             </div>
         </div>
@@ -39,10 +39,10 @@
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <h6 class="card-title text-uppercase mb-2">Total Orders</h6>
-                        <h2 class="mb-0">{{ stats.total_orders }}</h2>
+                        <h6 class="card-title text-uppercase mb-2">Cost (Today)</h6>
+                        <h2 class="mb-0">${{ "%.4f"|format(stats.daily_cost) }}</h2>
                     </div>
-                    <i class="fas fa-shopping-cart fa-3x opacity-50"></i>
+                    <i class="fas fa-dollar-sign fa-3x opacity-50"></i>
                 </div>
             </div>
         </div>
@@ -66,21 +66,25 @@
                             </tr>
                         </thead>
                         <tbody>
+                            {% for activity in stats.recent_activity %}
                             <tr>
-                                <td>2 hours ago</td>
-                                <td><span class="badge bg-success">New User</span></td>
-                                <td>User registration completed</td>
+                                <td>{{ activity.date }}</td>
+                                <td>
+                                    {% if activity.type == 'log' %}
+                                    <span class="badge bg-info">Log</span>
+                                    {% elif activity.type == 'user' %}
+                                    <span class="badge bg-success">New User</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">{{ activity.type }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ activity.details }}</td>
                             </tr>
+                            {% else %}
                             <tr>
-                                <td>5 hours ago</td>
-                                <td><span class="badge bg-info">Order</span></td>
-                                <td>New order #1234 received</td>
+                                <td colspan="3" class="text-center">No recent activity found.</td>
                             </tr>
-                            <tr>
-                                <td>1 day ago</td>
-                                <td><span class="badge bg-warning">Update</span></td>
-                                <td>System configuration changed</td>
-                            </tr>
+                            {% endfor %}
                         </tbody>
                     </table>
                 </div>
@@ -93,27 +97,30 @@
     <div class="col-md-6">
         <div class="card">
             <div class="card-header bg-white">
-                <h5 class="mb-0"><i class="fas fa-clock me-2"></i>Quick Stats</h5>
+                <h5 class="mb-0"><i class="fas fa-server me-2"></i>System Resources</h5>
             </div>
             <div class="card-body">
-                <ul class="list-group list-group-flush">
-                    <li class="list-group-item d-flex justify-content-between">
-                        <span>Today's Signups</span>
-                        <strong>12</strong>
-                    </li>
-                    <li class="list-group-item d-flex justify-content-between">
-                        <span>Pending Orders</span>
-                        <strong>8</strong>
-                    </li>
-                    <li class="list-group-item d-flex justify-content-between">
-                        <span>Revenue (Today)</span>
-                        <strong>$1,245</strong>
-                    </li>
-                </ul>
+                <h6 class="card-title">CPU Usage</h6>
+                <div class="progress mb-3" style="height: 25px;">
+                    <div class="progress-bar bg-primary" role="progressbar" style="width: {{ stats.cpu_percent }}%;"
+                        aria-valuenow="{{ stats.cpu_percent }}" aria-valuemin="0" aria-valuemax="100">{{
+                        stats.cpu_percent }}%</div>
+                </div>
+
+                <h6 class="card-title">Memory Usage</h6>
+                <div class="progress mb-2" style="height: 25px;">
+                    <div class="progress-bar bg-warning" role="progressbar" style="width: {{ stats.memory.percent }}%;"
+                        aria-valuenow="{{ stats.memory.percent }}" aria-valuemin="0" aria-valuemax="100">{{
+                        stats.memory.percent }}%</div>
+                </div>
+                <div class="d-flex justify-content-between text-muted small">
+                    <span>Used: {{ (stats.memory.used / 1024 / 1024 / 1024) | round(2) }} GB</span>
+                    <span>Total: {{ (stats.memory.total / 1024 / 1024 / 1024) | round(2) }} GB</span>
+                </div>
             </div>
         </div>
     </div>
-    
+
     <div class="col-md-6">
         <div class="card">
             <div class="card-header bg-white">
@@ -127,11 +134,16 @@
                     </li>
                     <li class="list-group-item d-flex justify-content-between align-items-center">
                         <span>Database</span>
+                        {% if stats.db_connected %}
                         <span class="badge bg-success">Connected</span>
+                        {% else %}
+                        <span class="badge bg-danger">Disconnected</span>
+                        {% endif %}
                     </li>
                     <li class="list-group-item d-flex justify-content-between align-items-center">
-                        <span>Server Load</span>
-                        <span class="badge bg-warning">Medium</span>
+                        <span>Available Memory</span>
+                        <span class="badge bg-info">{{ (stats.memory.available / 1024 / 1024 / 1024) | round(2) }}
+                            GB</span>
                     </li>
                 </ul>
             </div>
@@ -154,8 +166,8 @@
                                 <th>Value</th>
                             </tr>
                         </thead>
-			 <tbody>
-			    {% for key, value in env_vars.items() %}
+                        <tbody>
+                            {% for key, value in env_vars.items() %}
                             <tr>
                                 <td>{{ key }}</td>
                                 <td><span class="badge bg-success">{{ value }}</span></td>
