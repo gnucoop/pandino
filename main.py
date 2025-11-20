@@ -1286,4 +1286,4 @@ def health():
 
 # Run the Flask application in debug mode if this script is executed directly
 if __name__ == "__main__":
-    app.run(debug=True, port=8000)
+    app.run(debug=True)
