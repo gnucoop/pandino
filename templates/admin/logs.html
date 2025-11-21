@@ -35,7 +35,7 @@
         <div class="card text-white bg-warning">
             <div class="card-body">
                 <h6 class="card-title text-uppercase">Total Cost</h6>
-                <h2 class="mb-0">${{ "%.2f"|format(stats.total_cost|float) if stats else 0 }}</h2>
+                <h2 class="mb-0">${{ "%.4f"|format(stats.total_cost|float) if stats else 0 }}</h2>
             </div>
         </div>
     </div>
@@ -118,7 +118,8 @@
                         <td class="small">{{ log.date }}</td>
                         <td class="text-end">{{ "{:,}".format(log.token_input|int) }}</td>
                         <td class="text-end">{{ "{:,}".format(log.token_output|int) }}</td>
-                        <td class="text-end"><strong>{{ "{:,}".format((log.token_input + log.token_output)|int) }}</strong></td>
+                        <td class="text-end"><strong>{{ "{:,}".format((log.token_input + log.token_output)|int)
+                                }}</strong></td>
                         <td class="text-end">${{ "%.4f"|format(log.cost|float) }}</td>
                         <td><span class="badge bg-info">{{ log.model }}</span></td>
                         <td><span class="badge bg-primary">{{ log.provider }}</span></td>
@@ -139,72 +140,72 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
 <script>
-// Search functionality
-document.getElementById('searchInput').addEventListener('keyup', function() {
-    const searchTerm = this.value.toLowerCase();
-    const tableRows = document.querySelectorAll('tbody tr');
-    
-    tableRows.forEach(row => {
-        const text = row.textContent.toLowerCase();
-        row.style.display = text.includes(searchTerm) ? '' : 'none';
-    });
-});
+    // Search functionality
+    document.getElementById('searchInput').addEventListener('keyup', function () {
+        const searchTerm = this.value.toLowerCase();
+        const tableRows = document.querySelectorAll('tbody tr');
 
-// Token Usage Chart
-{% if stats and stats.daily_stats %}
-const ctx = document.getElementById('tokenChart').getContext('2d');
-const chartData = {
-    labels: {{ stats.daily_stats|map(attribute='day')|list|tojson }},
+        tableRows.forEach(row => {
+            const text = row.textContent.toLowerCase();
+            row.style.display = text.includes(searchTerm) ? '' : 'none';
+        });
+    });
+
+    // Token Usage Chart
+    {% if stats and stats.daily_stats %}
+    const ctx = document.getElementById('tokenChart').getContext('2d');
+    const chartData = {
+        labels: {{ stats.daily_stats| map(attribute = 'day') | list | tojson }},
     datasets: [
         {
             label: 'Input Tokens',
-            data: {{ stats.daily_stats|map(attribute='input')|list|tojson }},
-            backgroundColor: 'rgba(40, 167, 69, 0.2)',
-            borderColor: 'rgba(40, 167, 69, 1)',
-            borderWidth: 2,
-            tension: 0.4
+            data: {{ stats.daily_stats | map(attribute = 'input') | list | tojson }},
+        backgroundColor: 'rgba(40, 167, 69, 0.2)',
+        borderColor: 'rgba(40, 167, 69, 1)',
+        borderWidth: 2,
+        tension: 0.4
         },
         {
             label: 'Output Tokens',
-            data: {{ stats.daily_stats|map(attribute='output')|list|tojson }},
-            backgroundColor: 'rgba(23, 162, 184, 0.2)',
-            borderColor: 'rgba(23, 162, 184, 1)',
-            borderWidth: 2,
-            tension: 0.4
+            data: {{ stats.daily_stats | map(attribute = 'output') | list | tojson }},
+        backgroundColor: 'rgba(23, 162, 184, 0.2)',
+        borderColor: 'rgba(23, 162, 184, 1)',
+        borderWidth: 2,
+        tension: 0.4
         }
     ]
 };
 
-const config = {
-    type: 'line',
-    data: chartData,
-    options: {
-        responsive: true,
-        maintainAspectRatio: true,
-        plugins: {
-            legend: {
-                display: true,
-                position: 'top',
+    const config = {
+        type: 'line',
+        data: chartData,
+        options: {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                legend: {
+                    display: true,
+                    position: 'top',
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                }
             },
-            tooltip: {
-                mode: 'index',
-                intersect: false,
-            }
-        },
-        scales: {
-            y: {
-                beginAtZero: true,
-                ticks: {
-                    callback: function(value) {
-                        return value.toLocaleString();
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        callback: function (value) {
+                            return value.toLocaleString();
+                        }
                     }
                 }
             }
         }
-    }
-};
+    };
 
-new Chart(ctx, config);
-{% endif %}
+    new Chart(ctx, config);
+    {% endif %}
 </script>
 {% endblock %}

@@ -262,9 +262,9 @@ def build_get_total_log_stats_query() -> Tuple[sql.Composed, Tuple[()]]:
     """
     query = sql.SQL("""
         SELECT
-            SUM({token_input}) as total_input,
-            SUM({token_output}) as total_output,
-            SUM({cost}) as total_cost,
+            COALESCE(SUM({token_input}), 0) as total_input,
+            COALESCE(SUM({token_output}), 0) as total_output,
+            COALESCE(SUM({cost}), 0.0) as total_cost,
             COUNT(*) as total_requests
         FROM {logs}
     """).format(
