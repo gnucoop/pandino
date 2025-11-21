@@ -715,10 +715,10 @@ def get_logs_stats():
             })
     
     return {
-        'total_input': totals[0] or 0 if totals else 0,
-        'total_output': totals[1] or 0 if totals else 0,
-        'total_cost': totals[2] or 0 if totals else 0,
-        'total_requests': totals[3] or 0 if totals else 0,
+        'total_input': totals[0] if totals and totals[0] is not None else 0,
+        'total_output': totals[1] if totals and totals[1] is not None else 0,
+        'total_cost': totals[2] if totals and totals[2] is not None else 0.0,
+        'total_requests': totals[3] if totals and totals[3] is not None else 0,
         'daily_stats': daily_data,
         'top_users': top_users_data
     }
