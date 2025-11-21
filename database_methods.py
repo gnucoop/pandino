@@ -631,10 +631,10 @@ def build_get_daily_stats_query(date: str) -> Tuple[sql.Composed, Tuple[str]]:
     """
     query = sql.SQL("""
         SELECT
-            SUM({token_input} + {token_output}) as total_tokens,
-            SUM({cost}) as total_cost
+            COALESCE(SUM({token_input} + {token_output}), 0) as total_tokens,
+            COALESCE(SUM({cost}), 0.0) as total_cost
         FROM {table}
-        WHERE {col_date} = %s
+        WHERE DATE({col_date}) = %s
     """).format(
         token_input=sql.Identifier("token_input"),
         token_output=sql.Identifier("token_output"),
