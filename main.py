@@ -35,6 +35,7 @@ import psutil
 from agent_manager import getAgent, createAgent, deleteAgent
 from file_manager import isImageFilePath, fileToBase64
 from retriever_tool import RetrieverTool
+from db_query_tool import DatabaseQueryTool
 from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
 from database_pg import edit_tokens, validate_api_key, get_users_for_admin, get_users_stats, get_logs_for_admin, get_logs_stats, update_user_tokens, get_user_by_id, get_all_prompts, get_prompt_by_id, add_prompt, update_prompt, delete_prompt, get_all_costs, add_cost, update_cost, delete_cost, get_cost_by_id, get_daily_stats, get_recent_activity
@@ -55,6 +56,7 @@ from ai import (
 from prompt_utils import load_prompt, render_prompt
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult, setup_agent_logger
+from utils.split_message import split_message
 from dotenv import load_dotenv
 
 
@@ -667,14 +669,13 @@ def agentchat() -> Response | tuple[Response, int]:
         if not isinstance(chat, list) or not chat:
             return jsonify({"error": "Invalid 'chat': expected non-empty list"}), 400
 
+        # namespace è usato solo per prompt/logging; il retriever usa RAG_NAMESPACE_DINO
         namespace = r.get("namespace") or os.getenv("RAG_DEFAULT_NAMESPACE", "Dino")
         language = r.get("language") or "ITA"
-        k = int(r.get("k") or os.getenv("RAG_TOP_K", 3))
-        min_sim = float(r.get("min_similarity") or os.getenv("RAG_MIN_SIM", 0.5))
         token_cost = int(os.getenv("COMPLETION_TOKEN_COST", "1"))
 
         app.logger.info(
-            f"[agentchat] user={r['username']} ns={namespace} lang={language} k={k} min_sim={min_sim}"
+            f"[agentchat] user={r['username']} ns={namespace} lang={language}"
         )
 
         # === TOKEN CHECK ===
@@ -721,7 +722,9 @@ def agentchat() -> Response | tuple[Response, int]:
             temperature=0,
         )        
         
-        retriever_tool = RetrieverTool()
+        retriever_tool = RetrieverTool(
+            namespace=os.getenv("RAG_NAMESPACE_DINO") or "Dino"
+        )
 
         agent = CodeAgent(
             tools=[retriever_tool],
@@ -754,12 +757,9 @@ def agentchat() -> Response | tuple[Response, int]:
         result = agent.run(
             user_message,
             additional_args={
-                "namespace": namespace,
-                "k": k,
-                "min_similarity": min_sim,
-                "system_prompt": system_prompt,
+                "system_prompt": system_prompt
             },
-            return_full_result=True, 
+            return_full_result=True,
         )
 
         duration_ms = round((time.time() - start_time) * 1000, 2)
@@ -801,6 +801,216 @@ def agentchat() -> Response | tuple[Response, int]:
         app.logger.error(f"[agentchat] Unexpected error: {str(e)}")
         app.logger.error(traceback.format_exc())
         return jsonify({"error": "An unexpected error occurred"}), 500
+
+
+@app.route("/farmagentchat", methods=["POST"])
+def farmagentchat() -> Response | tuple[Response, int]:
+    """
+    Agricultural AI endpoint based on Smolagents.
+    The agent decides whether to use DatabaseQueryTool (structured data)
+    or RetrieverTool (manuals), and returns a JSON answer shaped for
+    the WhatsApp proxy (answer as list of chunks + follow_ups).
+    """
+    try:
+        # === INPUT VALIDATION ===
+
+        r = request.get_json()
+        if not r:
+            return jsonify({"error": "No JSON data provided"}), 400
+
+        required = ["chat", "username"]
+        missing = [k for k in required if k not in r]
+        if missing:
+            return jsonify({"error": f"Missing required keys: {', '.join(missing)}"}), 400
+
+        api_key = request.headers.get("X-API-KEY")
+        if not api_key:
+            return jsonify({"error": "Missing X-API-KEY header"}), 400
+
+        # === API KEY CHECK ===
+
+        assert_valid_api_key(api_key, r["username"])
+
+        # === PARAMETERS WITH FALLBACK ===
+
+        chat = r["chat"]
+        if not isinstance(chat, list) or not chat:
+            return jsonify({"error": "Invalid 'chat': expected non-empty list"}), 400
+
+        # usiamo il portoghese come default per il dominio agricolo
+        language = r.get("language") or "PT"
+
+        # costo token specifico per farm, con fallback
+        token_cost = int(
+            os.getenv("FARM_COMPLETION_TOKEN_COST", os.getenv("COMPLETION_TOKEN_COST", "1"))
+        )
+
+        app.logger.info(
+            f"[farmagentchat] user={r['username']} lang={language}"
+        )
+
+        # === TOKEN CHECK ===
+
+        user_tokens = database_pg.get_user_tokens(r["username"])
+        if user_tokens is None:
+            return jsonify({"error": "Could not retrieve user tokens"}), 500
+        if token_cost > user_tokens:
+            return (
+                jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
+                403,
+            )
+
+        # === DYNAMIC PROMPT (COMPASS AI TUTOR) ===
+
+        default_farmagentchat_prompt = textwrap.dedent("""\
+            You are an agricultural assistant specialized in the Mozambique dataset
+            exposed by the Pandino/Maui service.
+
+            DATA SOURCES
+            - For STRUCTURED DATA (associations, districts, products, yields, prices):
+            you MUST use the `db_query` tool.
+            - For THEORETICAL / MANUAL content:
+            you MAY use the `retriever` tool to access the agricultural manuals.
+            
+            TOOL USAGE
+            - When the user asks about which association produces what, in which district,
+            or similar data-centric questions, ALWAYS call `db_query`.
+            - When calling `db_query`, you MUST build a `parsed` object that contains:
+            - "product": the crop name, if mentioned (e.g. "milho", "feijao")
+            - "district": the district name, if mentioned
+            - "association": the association name, if the user is asking about a specific one
+            - Examples:
+            - "Quem produz milho em Magude?" ->
+                db_query(question=<full question>, parsed={"product": "milho", "district": "Magude"})
+            - "Quais associações existem em Magude?" ->
+                db_query(question=<full question>, parsed={"district": "Magude"})
+            - "Informações sobre a associação Chipene" ->
+                db_query(question=<full question>, parsed={"association": "Chipene"})
+            - If you cannot extract any of these fields reliably, do NOT call `db_query`.
+            - When using the `retriever` tool, NEVER specify a namespace. The correct namespace is already pre-configured.
+
+            OUTPUT FORMAT
+            - You MUST always return a VALID JSON object with exactly these top-level fields:
+            - "answer": string
+            - "follow_ups": array of strings
+            
+            ANSWER CONTENT
+            - For DB queries:
+            - Read the "results" array returned by `db_query`.
+            - Do NOT invent data: only use what is present in "results".
+            - Summarize the results in a short, clear text in Portuguese.
+            - If there are multiple associations, present them as a brief, readable list.
+            - If there are no results, reply explicitly that no matching data was found.
+            - For manual / theoretical questions:
+            - Use the `retriever` tool on the appropriate namespace and synthesize
+                a short, didactic explanation (still in Portuguese), based ONLY on the retrieved context.
+            
+            FOLLOW UPS
+            - After answering, propose 2–3 follow-up questions (in Portuguese)
+            that the user might ask to continue the exploration.
+
+            LANGUAGE
+            - Always respond in Portuguese (pt-PT or pt-PT-like).
+        """)
+        
+        # === MODEL & TOOLS INITIALIZATION ===
+
+        llm = LiteLLMModel(
+            model_id=os.getenv("FARM_COMPLETION_MODEL") or os.getenv("COMPLETION_MODEL_AGENT_CHAT"),
+            api_key=os.getenv("DEEPINFRA_API_KEY"),
+            temperature=0,
+        )
+
+        db_tool = DatabaseQueryTool()
+        retriever_tool = RetrieverTool(
+            namespace=os.getenv("RAG_NAMESPACE_FARM") or "hcmoz"
+        )
+        
+        agent = CodeAgent(
+            tools=[db_tool, retriever_tool],
+            model=llm,
+            max_steps=5,
+            additional_authorized_imports=["json"],
+        )
+
+        # === LAST USER MESSAGE ===
+
+        user_message = chat[-1]
+
+        # === DYNAMIC PROMPT LOADING ===
+
+        base_prompt_template = load_prompt(
+            "farm_agentchat_system",
+            default_text=default_farmagentchat_prompt,
+        )
+
+        system_prompt = render_prompt(
+            base_prompt_template,
+            language=language,
+        )
+
+        # === AGENT EXECUTION ===
+
+        start_time = time.time()
+        app.logger.info(
+            f"[farmagentchat] Executing agent message='{user_message[:60]}...'"
+        )
+
+        result = agent.run(
+            user_message,
+            additional_args={
+                "system_prompt": system_prompt,
+            },
+            return_full_result=True,
+        )
+
+        duration_ms = round((time.time() - start_time) * 1000, 2)
+        app.logger.debug(f"[farmagentchat] Run completed in {duration_ms} ms")
+
+        # === RESULT SERIALIZATION ===
+
+        payload = serialize_runresult(result)
+        payload.setdefault("metrics", {})
+        payload["metrics"]["duration_ms"] = duration_ms
+
+        # === MESSAGE SPLITTING PER WHATSAPP ===
+
+        answer = payload.get("answer", "")
+        if isinstance(answer, str):
+            chunks = split_message(answer, limit=900)
+            payload["answer"] = chunks
+
+        # === STRUCTURED LOGGING ===
+
+        log_runresult(
+            result,
+            user=r["username"],
+            namespace="Farm",
+            language=language,
+            question=user_message,
+        )
+
+        # === TOKEN MANAGEMENT ===
+
+        if answer:
+            edit_tokens(r["username"], -token_cost)
+
+        app.logger.info(
+            f"[farmagentchat] done user={r['username']} duration={duration_ms}ms "
+            f"chunks={len(payload.get('answer', []))} "
+            f"fu={len(payload.get('follow_ups', []))}"
+        )
+
+        return jsonify(payload), 200
+
+    except Exception as e:
+        import traceback
+
+        app.logger.error(f"[farmagentchat] Unexpected error: {str(e)}")
+        app.logger.error(traceback.format_exc())
+        return jsonify({"error": "An unexpected error occurred"}), 500
+
+
 
 
 @app.route("/prompt.txt", methods=["POST"])

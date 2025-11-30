@@ -681,3 +681,154 @@ def build_get_recent_activity_query() -> Tuple[sql.Composed, Tuple[()]]:
     return query, ()
 
 
+def build_query_associations_by_district_query(district: str) -> Tuple[sql.Composed, Tuple[str]]:
+    """
+    Builds a SQL query that returns all associations located in a given district.
+    The match is case-insensitive and uses substring search (ILIKE %...%).
+
+    :param district: District name to filter by (e.g., "Magude").
+    :return: Tuple (sql.Composed query, tuple params)
+    """
+
+    # SQL template con placeholder %s per il parametro
+    query = sql.SQL("""
+        SELECT
+            id,
+            nome_associazione,
+            soci_maschi,
+            soci_femmine,
+            descrizione,
+            distretto,
+            area_coltivata_ha,
+            sistema_irrigazione,
+            sistema_conservazione,
+            sistema_processamento
+        FROM {table}
+        WHERE {col_distretto} ILIKE %s
+        ORDER BY nome_associazione ASC
+    """).format(
+        table=sql.Identifier("associazioni"),
+        col_distretto=sql.Identifier("distretto")
+    )
+
+    # Parametro con wildcard a sinistra e destra per match flessibile
+    param = (f"%{district}%",)
+
+    return query, param
+
+
+def build_query_associations_by_product_query(product: str) -> Tuple[sql.Composed, Tuple[str]]:
+    """
+    Builds a SQL query that returns all associations that produce a given product.
+    Case-insensitive substring match (ILIKE %...%) on the 'cultura' field.
+
+    :param product: Product name to search for (e.g., "milho").
+    :return: Tuple (sql.Composed query, tuple params)
+    """
+
+    query = sql.SQL("""
+        SELECT
+            a.id,
+            a.nome_associazione,
+            a.soci_maschi,
+            a.soci_femmine,
+            a.descrizione,
+            a.distretto,
+            a.area_coltivata_ha,
+            a.sistema_irrigazione,
+            a.sistema_conservazione,
+            a.sistema_processamento,
+            p.cultura,
+            p.rendimento_estimado_kg,
+            p.preco_venda_estimado_kg
+        FROM {prodotti} p
+        JOIN {associazioni} a
+            ON p.id_associazione = a.id
+        WHERE p.cultura ILIKE %s
+        ORDER BY a.nome_associazione ASC;
+    """).format(
+        prodotti=sql.Identifier("prodotti"),
+        associazioni=sql.Identifier("associazioni")
+    )
+
+    # Parametro con match parziale e case-insensitive
+    params = (f"%{product}%",)
+
+    return query, params
+
+
+def build_query_product_in_district_query(product: str, district: str) -> Tuple[sql.Composed, Tuple[str, str]]:
+    """
+    Builds a SQL query that returns associations that produce a given product
+    AND are located in a specific district.
+    Both filters use case-insensitive substring matching (ILIKE %...%).
+
+    :param product: Product name to search for (e.g., "milho").
+    :param district: District name to filter by (e.g., "Magude").
+    :return: Tuple (sql.Composed query, tuple params)
+    """
+
+    query = sql.SQL("""
+        SELECT
+            a.id,
+            a.nome_associazione,
+            a.soci_maschi,
+            a.soci_femmine,
+            a.descrizione,
+            a.distretto,
+            a.area_coltivata_ha,
+            a.sistema_irrigazione,
+            a.sistema_conservazione,
+            a.sistema_processamento,
+            p.cultura,
+            p.rendimento_estimado_kg,
+            p.preco_venda_estimado_kg
+        FROM {prodotti} p
+        JOIN {associazioni} a
+            ON p.id_associazione = a.id
+        WHERE p.cultura ILIKE %s
+          AND a.distretto ILIKE %s
+        ORDER BY a.nome_associazione ASC;
+    """).format(
+        prodotti=sql.Identifier("prodotti"),
+        associazioni=sql.Identifier("associazioni")
+    )
+
+    params = (f"%{product}%", f"%{district}%")
+
+    return query, params
+
+
+def build_query_association_details_query(name: str) -> Tuple[sql.Composed, Tuple[str]]:
+    """
+    Builds a SQL query that returns detailed information about a specific association.
+    Match is case-insensitive and uses substring search (ILIKE %...%).
+
+    :param name: Partial or full name of the association (e.g., "Chipene", "chip").
+    :return: Tuple (sql.Composed query, tuple params)
+    """
+
+    query = sql.SQL("""
+        SELECT
+            id,
+            nome_associazione,
+            soci_maschi,
+            soci_femmine,
+            descrizione,
+            distretto,
+            area_coltivata_ha,
+            sistema_irrigazione,
+            sistema_conservazione,
+            sistema_processamento
+        FROM {table}
+        WHERE {col_name} ILIKE %s
+        ORDER BY nome_associazione ASC;
+    """).format(
+        table=sql.Identifier("associazioni"),
+        col_name=sql.Identifier("nome_associazione")
+    )
+
+    params = (f"%{name}%",)
+
+    return query, params
+
