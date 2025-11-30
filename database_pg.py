@@ -4,7 +4,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import os
 import base64
 from datetime import datetime, timedelta
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict, Any
 import logging
 import pandas as pd
 
@@ -39,6 +39,10 @@ from database_methods import (
     build_get_cost_by_id_query,
     build_get_daily_stats_query,
     build_get_recent_activity_query,
+    build_query_associations_by_district_query,
+    build_query_associations_by_product_query,
+    build_query_product_in_district_query,
+    build_query_association_details_query
 )
 
 # Generate a key for encryption and decryption
@@ -1123,6 +1127,193 @@ def get_recent_activity():
                     'details': details
                 })
         return activities
+    finally:
+        conn.close()
+
+
+def get_associations_by_district(district: str) -> List[Dict[str, Any]]:
+    """
+    Returns all associations located in a given district.
+    Case-insensitive substring match via ILIKE is handled by the query builder.
+
+    :param district: District name to filter (e.g., "Magude").
+    :return: List of dictionaries representing associations.
+    """
+
+    from database_methods import build_query_associations_by_district_query
+
+    query, params = build_query_associations_by_district_query(district)
+
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        results = []
+        for row in rows:
+            results.append({
+                "id": row[0],
+                "nome_associazione": row[1],
+                "soci_maschi": row[2],
+                "soci_femmine": row[3],
+                "descrizione": row[4],
+                "distretto": row[5],
+                "area_coltivata_ha": row[6],
+                "sistema_irrigazione": row[7],
+                "sistema_conservazione": row[8],
+                "sistema_processamento": row[9],
+            })
+
+        return results
+
+    except Exception as e:
+        logging.exception("[database_pg] Error in get_associations_by_district")
+        return []
+
+    finally:
+        conn.close()
+
+
+def get_associations_by_product(product: str) -> List[Dict[str, Any]]:
+    """
+    Returns all associations that produce a given product.
+    Case-insensitive substring match handled by the query builder.
+
+    :param product: Product name (e.g., "milho", "feijao").
+    :return: List of dictionaries with association + product info.
+    """
+
+    from database_methods import build_query_associations_by_product_query
+
+    query, params = build_query_associations_by_product_query(product)
+
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        results = []
+        for row in rows:
+            results.append({
+                "id": row[0],                           # associazione.id
+                "nome_associazione": row[1],
+                "soci_maschi": row[2],
+                "soci_femmine": row[3],
+                "descrizione": row[4],
+                "distretto": row[5],
+                "area_coltivata_ha": row[6],
+                "sistema_irrigazione": row[7],
+                "sistema_conservazione": row[8],
+                "sistema_processamento": row[9],
+                "cultura": row[10],                     # prodotto.cultura
+                "rendimento_estimado_kg": row[11],
+                "preco_venda_estimado_kg": row[12],
+            })
+
+        return results
+
+    except Exception as e:
+        logging.exception("[database_pg] Error in get_associations_by_product")
+        return []
+
+    finally:
+        conn.close()
+
+
+def get_product_in_district(product: str, district: str) -> List[Dict[str, Any]]:
+    """
+    Returns associations that produce a given product AND are located in a given district.
+    Case-insensitive substring match via ILIKE is handled by the query builder.
+
+    :param product: Product name (e.g., "milho").
+    :param district: District name (e.g., "Magude").
+    :return: List of dictionaries with association + product info.
+    """
+
+    from database_methods import build_query_product_in_district_query
+
+    query, params = build_query_product_in_district_query(product, district)
+
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        results = []
+        for row in rows:
+            results.append({
+                "id": row[0],
+                "nome_associazione": row[1],
+                "soci_maschi": row[2],
+                "soci_femmine": row[3],
+                "descrizione": row[4],
+                "distretto": row[5],
+                "area_coltivata_ha": row[6],
+                "sistema_irrigazione": row[7],
+                "sistema_conservazione": row[8],
+                "sistema_processamento": row[9],
+                "cultura": row[10],
+                "rendimento_estimado_kg": row[11],
+                "preco_venda_estimado_kg": row[12],
+            })
+
+        return results
+
+    except Exception:
+        logging.exception("[database_pg] Error in get_product_in_district")
+        return []
+
+    finally:
+        conn.close()
+
+
+def get_association_details(name: str) -> List[Dict[str, Any]]:
+    """
+    Returns detailed information about associations whose name matches
+    the provided substring (case-insensitive).
+    
+    :param name: Partial or full association name (e.g., "Chipene", "chip").
+    :return: List of dictionaries with full association details.
+    """
+
+    from database_methods import build_query_association_details_query
+
+    query, params = build_query_association_details_query(name)
+
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        results = []
+        for row in rows:
+            results.append({
+                "id": row[0],
+                "nome_associazione": row[1],
+                "soci_maschi": row[2],
+                "soci_femmine": row[3],
+                "descrizione": row[4],
+                "distretto": row[5],
+                "area_coltivata_ha": row[6],
+                "sistema_irrigazione": row[7],
+                "sistema_conservazione": row[8],
+                "sistema_processamento": row[9],
+            })
+
+        return results
+
+    except Exception:
+        logging.exception("[database_pg] Error in get_association_details")
+        return []
+
     finally:
         conn.close()
 
