@@ -722,9 +722,7 @@ def agentchat() -> Response | tuple[Response, int]:
             temperature=0,
         )        
         
-        retriever_tool = RetrieverTool(
-            namespace=os.getenv("RAG_NAMESPACE_DINO") or "Dino"
-        )
+        retriever_tool = RetrieverTool(namespace)
 
         agent = CodeAgent(
             tools=[retriever_tool],
