@@ -56,7 +56,7 @@ PGUSER = os.environ["PGUSER"]
 PGPWD = os.environ["PGPWD"]
 PGHOST = os.environ["PGHOST"]
 PGDB = os.environ["PGDB"]
-PGPORT = os.environ["PG_PORT"]
+PGPORT = os.getenv("PG_PORT", "5432")
 schema = os.environ.get("MAUI_SCHEMA", "public")
 
 if not KEY:
