@@ -887,6 +887,52 @@ def farmagentchat() -> Response | tuple[Response, int]:
             - If you cannot extract any of these fields reliably, do NOT call `db_query`.
             - When using the `retriever` tool, NEVER specify a namespace. The correct namespace is already pre-configured.
 
+            PRODUCT NORMALIZATION RULES
+            - Product names may appear with small spelling variations, missing spaces, hyphens,
+            capitalization differences, accents, or concatenated forms (e.g., "batatareno").
+            - When the intention is clear, you MUST normalize these variations to the correct
+            product name before constructing the parsed object.
+
+            CANONICAL PRODUCT LIST
+            - The valid crop names in the Mozambique dataset are:
+            - alface
+            - alho
+            - batata reno
+            - batata doce
+            - beringela
+            - beterraba
+            - cebola
+            - cenoura
+            - couve
+            - feijão verde
+            - feijão vulgar
+            - mandioca
+            - massaroca
+            - milho
+            - pepino
+            - pimento
+            - piri-piri
+            - piripiri
+            - quiabo
+            - repolho
+            - tomate
+
+            ADVANCED NORMALIZATION RULES
+            - Normalize all product names to lowercase before comparison.
+            - Treat the following variants as the same product:
+                - "batatareno", "batata-reno", "batata renno", "batatarenno"
+                → "batata reno"
+                - "piripiri", "piri piri", "piri–piri"
+                → "piri-piri"
+                - "feijão verde", "feijao verde"
+                → "feijão verde"
+            - Treat all extended forms of "feijão vulgar" as varieties of the same product:
+                - "feijão vulgar - bonus", "feijão vulgar - manteiga", "feijão vulgar - nua"
+                → "feijão vulgar"
+            - If the user clearly refers to one of the canonical products with minor orthographic mistakes,
+            normalize it. Only avoid normalization if the meaning is genuinely ambiguous.
+
+ 
             OUTPUT FORMAT
             - You MUST always return a VALID JSON object with exactly these top-level fields:
             - "answer": string
@@ -971,12 +1017,12 @@ def farmagentchat() -> Response | tuple[Response, int]:
         payload.setdefault("metrics", {})
         payload["metrics"]["duration_ms"] = duration_ms
 
-        # === MESSAGE SPLITTING PER WHATSAPP ===
+        # # === MESSAGE SPLITTING PER WHATSAPP ===
 
-        answer = payload.get("answer", "")
-        if isinstance(answer, str):
-            chunks = split_message(answer, limit=900)
-            payload["answer"] = chunks
+        # answer = payload.get("answer", "")
+        # if isinstance(answer, str):
+        #     chunks = split_message(answer, limit=900)
+        #     payload["answer"] = chunks
 
         # === STRUCTURED LOGGING ===
 
@@ -989,7 +1035,8 @@ def farmagentchat() -> Response | tuple[Response, int]:
         )
 
         # === TOKEN MANAGEMENT ===
-
+        
+        answer = payload.get("answer", "")
         if answer:
             edit_tokens(r["username"], -token_cost)
 
