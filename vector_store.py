@@ -18,6 +18,7 @@ PGUSER = os.environ["PGUSER"]
 PGPWD = os.environ["PGPWD"]
 PGHOST = os.environ["PGHOST"]
 PGDB = os.environ["PGDB"]
+PGPORT = os.environ["PG_PORT"]
 schema = os.environ.get("MAUI_SCHEMA", "public")
 
 class VectorStore(ABC):
@@ -120,7 +121,7 @@ class PGVectorStore(VectorStore):
     def __init__(self, embeddings: Embeddings, collection_name: str):
 
         connection = (
-            f"postgresql+psycopg://{PGUSER}:{PGPWD}@{PGHOST}/{PGDB}"
+            f"postgresql+psycopg://{PGUSER}:{PGPWD}@{PGHOST}:{PGPORT}/{PGDB}"
             f"?options=-csearch_path%3D{schema}"
         ) 
         self.collection = PGVector(

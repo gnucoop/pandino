@@ -56,6 +56,7 @@ PGUSER = os.environ["PGUSER"]
 PGPWD = os.environ["PGPWD"]
 PGHOST = os.environ["PGHOST"]
 PGDB = os.environ["PGDB"]
+PGPORT = os.environ["PG_PORT"]
 schema = os.environ.get("MAUI_SCHEMA", "public")
 
 if not KEY:
@@ -76,7 +77,7 @@ cipher_suite = Fernet(KEY)
 
 
 def connect():
-    conn = psycopg.connect(host=PGHOST, dbname=PGDB, user=PGUSER, password=PGPWD)
+    conn = psycopg.connect(host=PGHOST, dbname=PGDB, user=PGUSER, password=PGPWD, port=PGPORT)
 
     with conn.cursor() as cur:
         cur.execute(f"SET search_path TO {schema};")
