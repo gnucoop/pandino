@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Tuple, List, Dict, Any
 import logging
 import pandas as pd
+import bcrypt
 
 from database_methods import (
     build_get_user_by_username_query,
@@ -42,7 +43,18 @@ from database_methods import (
     build_query_associations_by_district_query,
     build_query_associations_by_product_query,
     build_query_product_in_district_query,
-    build_query_association_details_query
+    build_query_associations_by_product_query,
+    build_query_product_in_district_query,
+    build_query_association_details_query,
+    build_create_users_associazioni_table_query,
+    build_get_farmer_by_username_query,
+    build_get_association_by_id_query,
+    build_update_association_query,
+    build_get_products_by_association_query,
+    build_add_product_query,
+    build_update_product_query,
+    build_delete_product_query,
+    build_get_all_farmers_query
 )
 
 # Generate a key for encryption and decryption
@@ -1318,6 +1330,245 @@ def get_association_details(name: str) -> List[Dict[str, Any]]:
     finally:
         conn.close()
 
+
+
+# === Farmers Panel Wrappers ===
+
+def verify_farmer_login(username: str, password_raw: str) -> Optional[dict]:
+    """
+    Verifies a farmer's login credentials using bcrypt.
+
+    :param username: The username to check.
+    :param password_raw: The raw password to check against the stored hash.
+    :return: User dictionary if valid, None otherwise.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    try:
+        query, params = build_get_farmer_by_username_query(username)
+        cursor.execute(query, params)
+        user = cursor.fetchone()
+        
+        if user:
+            # user = (id, username, password_hash_db, id_associazione)
+            stored_hash = user[2]
+            
+            # Check if stored_hash is a valid bcrypt hash
+            try:
+                # Ensure bytes
+                pwd_bytes = password_raw.encode('utf-8')
+                hash_bytes = stored_hash.encode('utf-8')
+                
+                if bcrypt.checkpw(pwd_bytes, hash_bytes):
+                    return {
+                        'id': user[0],
+                        'username': user[1],
+                        'id_associazione': user[3]
+                    }
+                else:
+                    print(f"DEBUG: Password mismatch for {username}")
+            except Exception as e:
+                print(f"DEBUG: Error checking password for user {username}: {e}")
+                # Fallback or just fail safely
+                return None
+
+    finally:
+        conn.close()
+    
+    return None
+
+def get_association_details(assoc_id) -> Optional[dict]:
+    """
+    Retrieves association details.
+
+    :param assoc_id: ID of the association.
+    :return: Association dictionary or None.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    try:
+        query, params = build_get_association_by_id_query(assoc_id)
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        
+        if row:
+            # Mapping based on DB schema (from user request)
+            # 1 id, 2 nome_associazione, 3 soci_maschi, 4 soci_femmine, 5 descrizione, 
+            # 6 distretto, 7 area_coltivata_ha, 8 sistema_irrigazione, 9 sistema_conservazione, 
+            # 10 sistema_processamento, 11 contatto_telefonico
+            return {
+                'id': row[0],
+                'nome_associazione': row[1],
+                'soci_maschi': row[2],
+                'soci_femmine': row[3],
+                'descrizione': row[4],
+                'distretto': row[5],
+                'area_coltivata_ha': row[6],
+                'sistema_irrigazione': row[7],
+                'sistema_conservazione': row[8],
+                'sistema_processamento': row[9],
+                'contatto_telefonico': row[10]
+            }
+    finally:
+        conn.close()
+        
+    return None
+
+def update_association_details(assoc_id, data) -> bool:
+    """
+    Updates association details.
+
+    :param assoc_id: ID of the association.
+    :param data: Dictionary of data to update.
+    :return: True if successful, False otherwise.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    try:
+        query, params = build_update_association_query(assoc_id, data)
+        cursor.execute(query, params)
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Error updating association {assoc_id}: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def get_association_products(assoc_id) -> List[dict]:
+    """
+    Retrieves products for an association.
+
+    :param assoc_id: ID of the association.
+    :return: List of product dictionaries.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    products = []
+    try:
+        query, params = build_get_products_by_association_query(assoc_id)
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        
+        for row in rows:
+            # 1 id, 2 cultura, 3 rendimento_estimado_kg, 4 preco_venda_estimado_kg, 5 id_associazione
+            products.append({
+                'id': row[0],
+                'cultura': row[1],
+                'rendimento_estimado_kg': row[2],
+                'preco_venda_estimado_kg': row[3],
+                'id_associazione': row[4]
+            })
+    finally:
+        conn.close()
+        
+    return products
+
+def add_association_product(assoc_id, data) -> bool:
+    """
+    Adds a product for an association.
+
+    :param assoc_id: ID of the association.
+    :param data: Dictionary of product data.
+    :return: True if successful, False otherwise.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    # Ensure correct association ID
+    data['id_associazione'] = assoc_id
+    
+    try:
+        query, params = build_add_product_query(data)
+        cursor.execute(query, params)
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Error adding product for association {assoc_id}: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def update_association_product(product_id, data) -> bool:
+    """
+    Updates a product.
+
+    :param product_id: ID of the product.
+    :param data: Dictionary of data to update.
+    :return: True if successful, False otherwise.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    try:
+        query, params = build_update_product_query(product_id, data)
+        cursor.execute(query, params)
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Error updating product {product_id}: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def delete_association_product(product_id) -> bool:
+    """
+    Deletes a product.
+
+    :param product_id: ID of the product.
+    :return: True if successful, False otherwise.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    try:
+        query, params = build_delete_product_query(product_id)
+        cursor.execute(query, params)
+        conn.commit()
+        return True
+    except Exception as e:
+        logging.error(f"Error deleting product {product_id}: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+
+
+def get_all_farmers_for_admin() -> List[dict]:
+    """
+    Retrieves all farmers with simplified association info for admin panel.
+
+    :return: List of farmer dictionaries.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    farmers = []
+    try:
+        query, params = build_get_all_farmers_query()
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        
+        for row in rows:
+            farmers.append({
+                'id': row[0],
+                'username': row[1],
+                'id_associazione': row[2],
+                'nome_associazione': row[3],
+                'distretto': row[4]
+            })
+    finally:
+        conn.close()
+        
+    return farmers
 
 def print_help():
     print("Usage: python database-pg.py <command>")
