@@ -702,7 +702,8 @@ def build_query_associations_by_district_query(district: str) -> Tuple[sql.Compo
             area_coltivata_ha,
             sistema_irrigazione,
             sistema_conservazione,
-            sistema_processamento
+            sistema_processamento,
+            contatto_telefonico
         FROM {table}
         WHERE {col_distretto} ILIKE %s
         ORDER BY nome_associazione ASC
@@ -738,6 +739,7 @@ def build_query_associations_by_product_query(product: str) -> Tuple[sql.Compose
             a.sistema_irrigazione,
             a.sistema_conservazione,
             a.sistema_processamento,
+            a.contatto_telefonico,
             p.cultura,
             p.rendimento_estimado_kg,
             p.preco_venda_estimado_kg
@@ -780,9 +782,10 @@ def build_query_product_in_district_query(product: str, district: str) -> Tuple[
             a.sistema_irrigazione,
             a.sistema_conservazione,
             a.sistema_processamento,
+            a.contatto_telefonico,
             p.cultura,
             p.rendimento_estimado_kg,
-            p.preco_venda_estimado_kg
+            p.preco_venda_estimado_kg,
         FROM {prodotti} p
         JOIN {associazioni} a
             ON p.id_associazione = a.id
@@ -819,7 +822,8 @@ def build_query_association_details_query(name: str) -> Tuple[sql.Composed, Tupl
             area_coltivata_ha,
             sistema_irrigazione,
             sistema_conservazione,
-            sistema_processamento
+            sistema_processamento,
+            contatto_telefonico
         FROM {table}
         WHERE {col_name} ILIKE %s
         ORDER BY nome_associazione ASC;
@@ -832,3 +836,178 @@ def build_query_association_details_query(name: str) -> Tuple[sql.Composed, Tupl
 
     return query, params
 
+
+# === Farmers Panel Queries ===
+
+def build_create_users_associazioni_table_query() -> Tuple[Any, Tuple]:
+    """
+    Builds a SQL query to create the 'users_associazioni' table if it doesn't exist.
+
+    :return: Tuple with SQL query and empty parameter tuple.
+    """
+    query = sql.SQL(
+        """
+        CREATE TABLE IF NOT EXISTS users_associazioni (
+            id SERIAL PRIMARY KEY,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            id_associazione INT NOT NULL,
+            
+            CONSTRAINT fk_ass_user
+                FOREIGN KEY(id_associazione)
+                REFERENCES associazioni(id)
+                ON DELETE CASCADE
+        );
+        """
+    )
+    return query, ()
+
+def build_get_farmer_by_username_query(username: str) -> Tuple[Any, Tuple]:
+    """
+    Builds a SQL query to select a farmer from 'users_associazioni' by username.
+
+    :param username: The username to search for.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        """
+        SELECT id, username, password_hash, id_associazione 
+        FROM users_associazioni 
+        WHERE username = %s
+        """
+    )
+    return query, (username,)
+
+def build_get_association_by_id_query(assoc_id: int) -> Tuple[Any, Tuple]:
+    """
+    Builds a SQL query to select association details by ID.
+
+    :param assoc_id: The ID of the association.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        """
+        SELECT * FROM associazioni WHERE id = %s
+        """
+    )
+    return query, (assoc_id,)
+
+def build_update_association_query(assoc_id: int, data: dict) -> Tuple[Any, Tuple]:
+    """
+    Builds a SQL query to update an association.
+
+    :param assoc_id: The ID of the association to update.
+    :param data: Dictionary of columns to update.
+    :return: Tuple of SQL query and parameters.
+    """
+    # Columns allowed to be updated based on user request / schema
+    allowed_columns = [
+        'nome_associazione', 'soci_maschi', 'soci_femmine', 'descrizione',
+        'distretto', 'area_coltivata_ha', 'sistema_irrigazione',
+        'sistema_conservazione', 'sistema_processamento', 'contatto_telefonico'
+    ]
+    
+    updates = []
+    params = []
+    
+    for key, value in data.items():
+        if key in allowed_columns:
+            updates.append(sql.SQL("{} = %s").format(sql.Identifier(key)))
+            params.append(value)
+            
+    if not updates:
+        # Nothing to update, return a dummy query
+        return sql.SQL("SELECT 1 WHERE 1=0"), ()
+        
+    query = sql.SQL("UPDATE associazioni SET {} WHERE id = %s").format(
+        sql.SQL(', ').join(updates)
+    )
+    params.append(assoc_id)
+    
+    return query, tuple(params)
+
+def build_get_products_by_association_query(assoc_id: int) -> Tuple[Any, Tuple]:
+    """
+    Builds a SQL query to select products for a specific association.
+
+    :param assoc_id: The ID of the association.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        """
+        SELECT * FROM prodotti WHERE id_associazione = %s
+        """
+    )
+    return query, (assoc_id,)
+
+def build_add_product_query(data: dict) -> Tuple[Any, Tuple]:
+    """
+    Builds a SQL query to insert a new product.
+
+    :param data: Dictionary containing product data.
+    :return: Tuple of SQL query and parameters.
+    """
+    columns = ['cultura', 'rendimento_estimado_kg', 'preco_venda_estimado_kg', 'id_associazione']
+    
+    query = sql.SQL("INSERT INTO prodotti ({}) VALUES ({}) RETURNING id").format(
+        sql.SQL(', ').join(map(sql.Identifier, columns)),
+        sql.SQL(', ').join(sql.Placeholder() * len(columns))
+    )
+    
+    params = tuple(data.get(c) for c in columns)
+    return query, params
+
+def build_update_product_query(product_id: int, data: dict) -> Tuple[Any, Tuple]:
+    """
+    Builds a SQL query to update a product.
+
+    :param product_id: The ID of the product to update.
+    :param data: Dictionary of columns to update.
+    :return: Tuple of SQL query and parameters.
+    """
+    allowed_columns = ['cultura', 'rendimento_estimado_kg', 'preco_venda_estimado_kg']
+    
+    updates = []
+    params = []
+    
+    for key, value in data.items():
+        if key in allowed_columns:
+            updates.append(sql.SQL("{} = %s").format(sql.Identifier(key)))
+            params.append(value)
+            
+    if not updates:
+         return sql.SQL("SELECT 1 WHERE 1=0"), ()
+
+    query = sql.SQL("UPDATE prodotti SET {} WHERE id = %s").format(
+        sql.SQL(', ').join(updates)
+    )
+    params.append(product_id)
+    
+    return query, tuple(params)
+
+def build_delete_product_query(product_id: int) -> Tuple[Any, Tuple]:
+    """
+    Builds a SQL query to delete a product.
+
+    :param product_id: The ID of the product to delete.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL("DELETE FROM prodotti WHERE id = %s")
+    return query, (product_id,)
+
+
+def build_get_all_farmers_query() -> Tuple[Any, Tuple]:
+    """
+    Builds a SQL query to select all farmers with their association name.
+
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        """
+        SELECT u.id, u.username, u.id_associazione, a.nome_associazione, a.distretto 
+        FROM users_associazioni u
+        LEFT JOIN associazioni a ON u.id_associazione = a.id
+        ORDER BY u.id
+        """
+    )
+    return query, ()

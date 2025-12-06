@@ -38,7 +38,7 @@ from retriever_tool import RetrieverTool
 from db_query_tool import DatabaseQueryTool
 from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
-from database_pg import edit_tokens, validate_api_key, get_users_for_admin, get_users_stats, get_logs_for_admin, get_logs_stats, update_user_tokens, get_user_by_id, get_all_prompts, get_prompt_by_id, add_prompt, update_prompt, delete_prompt, get_all_costs, add_cost, update_cost, delete_cost, get_cost_by_id, get_daily_stats, get_recent_activity
+from database_pg import verify_farmer_login, get_association_details, update_association_details, get_association_products, add_association_product, update_association_product, delete_association_product, edit_tokens, validate_api_key, get_users_for_admin, get_users_stats, get_logs_for_admin, get_logs_stats, update_user_tokens, get_user_by_id, get_all_prompts, get_prompt_by_id, add_prompt, update_prompt, delete_prompt, get_all_costs, add_cost, update_cost, delete_cost, get_cost_by_id, get_daily_stats, get_recent_activity, get_all_farmers_for_admin
 
 
 from dino import dino_authenticate
@@ -922,7 +922,7 @@ def farmagentchat() -> Response | tuple[Response, int]:
             - Treat the following variants as the same product:
                 - "batatareno", "batata-reno", "batata renno", "batatarenno"
                 → "batata reno"
-                - "piripiri", "piri piri", "piri–piri"
+                - "piripiri", "piri piri", "piri-piri"
                 → "piri-piri"
                 - "feijão verde", "feijao verde"
                 → "feijão verde"
@@ -950,7 +950,7 @@ def farmagentchat() -> Response | tuple[Response, int]:
                 a short, didactic explanation (still in Portuguese), based ONLY on the retrieved context.
             
             FOLLOW UPS
-            - After answering, propose 2–3 follow-up questions (in Portuguese)
+            - After answering, propose 2-3 follow-up questions (in Portuguese)
             that the user might ask to continue the exploration.
 
             LANGUAGE
@@ -1645,5 +1645,160 @@ def health():
     return jsonify(status)
 
 # Run the Flask application in debug mode if this script is executed directly
+
+
+# === Admin Farmers Management ===
+
+@app.route('/admin/farmers')
+@admin_required
+def admin_farmers():
+    farmers = get_all_farmers_for_admin()
+    return render_template('admin/farmers.html', farmers=farmers)
+
+@app.route('/admin/farmers/login_as/<int:farmer_id>')
+@admin_required
+def admin_login_as_farmer(farmer_id):
+    # Retrieve farmer details by iterating or fetching separately. 
+    # Since we have get_all_farmers_for_admin which returns list, we can use that 
+    # OR better, a direct fetch. We have build_get_farmer_by_username_query 
+    # but not by ID. Since we are admin, we can query users_associazioni directly.
+    # Actually, we already have verify_farmer_login which returns the user dict.
+    # But we don't have the password. 
+    # Let's add a small helper or just fetch from the list if not too large, 
+    # or just trust the ID since we are admin.
+    
+    # We need to set session vars: farmer_logged_in, farmer_id, farmer_username, farmer_assoc_id.
+    # Let's fetch the list (reusing existing allowed function) and find the user.
+    farmers = get_all_farmers_for_admin()
+    target_farmer = next((f for f in farmers if f['id'] == farmer_id), None)
+    
+    if target_farmer:
+        session['farmer_logged_in'] = True
+        session['farmer_id'] = target_farmer['id']
+        session['farmer_username'] = target_farmer['username']
+        session['farmer_assoc_id'] = target_farmer['id_associazione']
+        # Note: We do NOT remove admin_logged_in, so they can switch back.
+        flash(f"Login como agricultor: {target_farmer['username']}", 'success')
+        return redirect(url_for('farmers_dashboard'))
+    else:
+        flash('Farmer not found', 'danger')
+        return redirect(url_for('admin_farmers'))
+
+# === Farmers Panel Routes ===
+
+def farmer_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('farmer_logged_in'):
+            flash('Por favor, faça login para acessar o painel do agricultor', 'warning')
+            return redirect(url_for('farmers_login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/farmers/login', methods=['GET', 'POST'])
+def farmers_login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        
+        # Passing raw password to database wrapper which now handles bcrypt check
+        user = verify_farmer_login(username, password)
+        
+        if user:
+            session['farmer_logged_in'] = True
+            session['farmer_id'] = user['id']
+            session['farmer_username'] = user['username']
+            session['farmer_assoc_id'] = user['id_associazione']
+            flash('Login realizado com sucesso', 'success')
+            return redirect(url_for('farmers_dashboard'))
+        else:
+            flash('Credenciais inválidas', 'danger')
+            
+    return render_template('farmers_login.html')
+
+@app.route('/farmers/logout')
+def farmers_logout():
+    session.pop('farmer_logged_in', None)
+    session.pop('farmer_id', None)
+    session.pop('farmer_username', None)
+    session.pop('farmer_assoc_id', None)
+    flash('Logout realizado com sucesso', 'success')
+    return redirect(url_for('farmers_login'))
+
+@app.route('/farmers/dashboard')
+@farmer_required
+def farmers_dashboard():
+    assoc_id = session.get('farmer_assoc_id')
+    association = get_association_details(assoc_id)
+    products = get_association_products(assoc_id)
+    return render_template('farmers_dashboard.html', association=association, products=products)
+
+@app.route('/farmers/update_association', methods=['POST'])
+@farmer_required
+def farmers_update_association():
+    assoc_id = session.get('farmer_assoc_id')
+    data = {
+        'nome_associazione': request.form.get('nome_associazione'),
+        'soci_maschi': request.form.get('soci_maschi'),
+        'soci_femmine': request.form.get('soci_femmine'),
+        'descrizione': request.form.get('descrizione'),
+        'distretto': request.form.get('distretto'),
+        'area_coltivata_ha': request.form.get('area_coltivata_ha'),
+        'sistema_irrigazione': request.form.get('sistema_irrigazione') == 'on',
+        'sistema_conservazione': request.form.get('sistema_conservazione') == 'on',
+        'sistema_processamento': request.form.get('sistema_processamento') == 'on',
+        'contatto_telefonico': request.form.get('contatto_telefonico')
+    }
+    
+    if update_association_details(assoc_id, data):
+        flash('Detalhes da associação atualizados com sucesso', 'success')
+    else:
+        flash('Erro ao atualizar detalhes', 'danger')
+        
+    return redirect(url_for('farmers_dashboard'))
+
+@app.route('/farmers/product/add', methods=['POST'])
+@farmer_required
+def farmers_add_product():
+    assoc_id = session.get('farmer_assoc_id')
+    data = {
+        'cultura': request.form.get('cultura'),
+        'rendimento_estimado_kg': request.form.get('rendimento_estimado_kg'),
+        'preco_venda_estimado_kg': request.form.get('preco_venda_estimado_kg')
+    }
+    
+    if add_association_product(assoc_id, data):
+        flash('Produto adicionado com sucesso', 'success')
+    else:
+        flash('Erro ao adicionar produto', 'danger')
+        
+    return redirect(url_for('farmers_dashboard'))
+
+@app.route('/farmers/product/edit/<int:product_id>', methods=['POST'])
+@farmer_required
+def farmers_edit_product(product_id):
+    data = {
+        'cultura': request.form.get('cultura'),
+        'rendimento_estimado_kg': request.form.get('rendimento_estimado_kg'),
+        'preco_venda_estimado_kg': request.form.get('preco_venda_estimado_kg')
+    }
+    
+    if update_association_product(product_id, data):
+        flash('Produto atualizado com sucesso', 'success')
+    else:
+        flash('Erro ao atualizar produto', 'danger')
+        
+    return redirect(url_for('farmers_dashboard'))
+
+@app.route('/farmers/product/delete/<int:product_id>', methods=['POST'])
+@farmer_required
+def farmers_delete_product(product_id):
+    if delete_association_product(product_id):
+        flash('Produto excluído com sucesso', 'success')
+    else:
+        flash('Erro ao excluir produto', 'danger')
+        
+    return redirect(url_for('farmers_dashboard'))
+
 if __name__ == "__main__":
     app.run(debug=True)
