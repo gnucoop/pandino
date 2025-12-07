@@ -785,7 +785,7 @@ def build_query_product_in_district_query(product: str, district: str) -> Tuple[
             a.contatto_telefonico,
             p.cultura,
             p.rendimento_estimado_kg,
-            p.preco_venda_estimado_kg,
+            p.preco_venda_estimado_kg
         FROM {prodotti} p
         JOIN {associazioni} a
             ON p.id_associazione = a.id
