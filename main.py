@@ -38,7 +38,7 @@ from retriever_tool import RetrieverTool
 from db_query_tool import DatabaseQueryTool
 from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
-from database_pg import verify_farmer_login, get_association_details, update_association_details, get_association_products, add_association_product, update_association_product, delete_association_product, edit_tokens, validate_api_key, get_users_for_admin, get_users_stats, get_logs_for_admin, get_logs_stats, update_user_tokens, get_user_by_id, get_all_prompts, get_prompt_by_id, add_prompt, update_prompt, delete_prompt, get_all_costs, add_cost, update_cost, delete_cost, get_cost_by_id, get_daily_stats, get_recent_activity, get_all_farmers_for_admin
+from database_pg import verify_farmer_login, get_association_details_farm, update_association_details, get_association_products, add_association_product, update_association_product, delete_association_product, edit_tokens, validate_api_key, get_users_for_admin, get_users_stats, get_logs_for_admin, get_logs_stats, update_user_tokens, get_user_by_id, get_all_prompts, get_prompt_by_id, add_prompt, update_prompt, delete_prompt, get_all_costs, add_cost, update_cost, delete_cost, get_cost_by_id, get_daily_stats, get_recent_activity, get_all_farmers_for_admin
 
 
 from dino import dino_authenticate
@@ -1729,7 +1729,7 @@ def farmers_logout():
 @farmer_required
 def farmers_dashboard():
     assoc_id = session.get('farmer_assoc_id')
-    association = get_association_details(assoc_id)
+    association = get_association_details_farm(assoc_id)
     products = get_association_products(assoc_id)
     return render_template('farmers_dashboard.html', association=association, products=products)
 
@@ -1801,4 +1801,4 @@ def farmers_delete_product(product_id):
     return redirect(url_for('farmers_dashboard'))
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True,port=8000)
