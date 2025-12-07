@@ -1177,6 +1177,7 @@ def get_associations_by_district(district: str) -> List[Dict[str, Any]]:
                 "sistema_irrigazione": row[7],
                 "sistema_conservazione": row[8],
                 "sistema_processamento": row[9],
+                "contatto_telefonico": row[10],
             })
 
         return results
@@ -1222,9 +1223,10 @@ def get_associations_by_product(product: str) -> List[Dict[str, Any]]:
                 "sistema_irrigazione": row[7],
                 "sistema_conservazione": row[8],
                 "sistema_processamento": row[9],
-                "cultura": row[10],                     # prodotto.cultura
-                "rendimento_estimado_kg": row[11],
-                "preco_venda_estimado_kg": row[12],
+                "contatto_telefonico": row[10],
+                "cultura": row[11],                     # prodotto.cultura
+                "rendimento_estimado_kg": row[12],
+                "preco_venda_estimado_kg": row[13],
             })
 
         return results
@@ -1271,9 +1273,10 @@ def get_product_in_district(product: str, district: str) -> List[Dict[str, Any]]
                 "sistema_irrigazione": row[7],
                 "sistema_conservazione": row[8],
                 "sistema_processamento": row[9],
-                "cultura": row[10],
-                "rendimento_estimado_kg": row[11],
-                "preco_venda_estimado_kg": row[12],
+                "contatto_telefonico": row[10],
+                "cultura": row[11],
+                "rendimento_estimado_kg": row[12],
+                "preco_venda_estimado_kg": row[13],
             })
 
         return results
@@ -1319,6 +1322,7 @@ def get_association_details(name: str) -> List[Dict[str, Any]]:
                 "sistema_irrigazione": row[7],
                 "sistema_conservazione": row[8],
                 "sistema_processamento": row[9],
+                "contatto_telefonico": row[10],
             })
 
         return results
@@ -1378,7 +1382,7 @@ def verify_farmer_login(username: str, password_raw: str) -> Optional[dict]:
     
     return None
 
-def get_association_details(assoc_id) -> Optional[dict]:
+def get_association_details_farm(assoc_id) -> Optional[dict]:
     """
     Retrieves association details.
 
