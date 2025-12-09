@@ -1,4 +1,5 @@
 import psycopg
+from psycopg import sql
 import sys
 from cryptography.fernet import Fernet, InvalidToken
 import os
@@ -92,7 +93,9 @@ def connect():
     conn = psycopg.connect(host=PGHOST, dbname=PGDB, user=PGUSER, password=PGPWD, port=PGPORT)
 
     with conn.cursor() as cur:
-        cur.execute(f"SET search_path TO {schema};")
+        cur.execute(
+            sql.SQL("SET search_path TO {}").format(sql.Identifier(schema))
+        )
 
     return conn
 
@@ -1153,8 +1156,6 @@ def get_associations_by_district(district: str) -> List[Dict[str, Any]]:
     :return: List of dictionaries representing associations.
     """
 
-    from database_methods import build_query_associations_by_district_query
-
     query, params = build_query_associations_by_district_query(district)
 
     conn = connect()
@@ -1198,8 +1199,6 @@ def get_associations_by_product(product: str) -> List[Dict[str, Any]]:
     :param product: Product name (e.g., "milho", "feijao").
     :return: List of dictionaries with association + product info.
     """
-
-    from database_methods import build_query_associations_by_product_query
 
     query, params = build_query_associations_by_product_query(product)
 
@@ -1249,8 +1248,6 @@ def get_product_in_district(product: str, district: str) -> List[Dict[str, Any]]
     :return: List of dictionaries with association + product info.
     """
 
-    from database_methods import build_query_product_in_district_query
-
     query, params = build_query_product_in_district_query(product, district)
 
     conn = connect()
@@ -1297,8 +1294,6 @@ def get_association_details(name: str) -> List[Dict[str, Any]]:
     :param name: Partial or full association name (e.g., "Chipene", "chip").
     :return: List of dictionaries with full association details.
     """
-
-    from database_methods import build_query_association_details_query
 
     query, params = build_query_association_details_query(name)
 
