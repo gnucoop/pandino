@@ -18,6 +18,7 @@ from database_pg import (
     get_associations_by_product,
     get_product_in_district,
     get_association_details,
+    get_association_with_products,
 )
 
 load_dotenv()
@@ -97,8 +98,23 @@ class DatabaseQueryTool(Tool):
 
             # 4) Solo associazione
             elif association:
-                results = get_association_details(association)
-                query_type = "association_details"
+                # Step 1 — Cerca associazioni che matchano il nome
+                base_results = get_association_details(association)
+
+                # Step 2 — Arricchisci ciascuna associazione con i suoi prodotti
+                results = []
+                for assoc in base_results:
+                    assoc_id = assoc.get("id")
+                    if assoc_id is not None:
+                        enriched = get_association_with_products(assoc_id)
+                        if enriched:
+                            results.append(enriched)
+                    else:
+                        # fallback: restituiamo almeno i dati base
+                        results.append(assoc)
+
+                query_type = "association_details_with_products"
+
 
             else:
                 return {

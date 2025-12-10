@@ -1330,6 +1330,69 @@ def get_association_details(name: str) -> List[Dict[str, Any]]:
         conn.close()
 
 
+def get_association_with_products(assoc_id: int) -> Optional[dict]:
+    """
+    Returns full association details INCLUDING the list of its products.
+
+    Combines two existing queries:
+    - build_get_association_by_id_query
+    - build_get_products_by_association_query
+    """
+
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        # === 1) Fetch association details ===
+        query_assoc, params_assoc = build_get_association_by_id_query(assoc_id)
+        cursor.execute(query_assoc, params_assoc)
+        row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        association = {
+            "id": row[0],
+            "nome_associazione": row[1],
+            "soci_maschi": row[2],
+            "soci_femmine": row[3],
+            "descrizione": row[4],
+            "distretto": row[5],
+            "area_coltivata_ha": row[6],
+            "sistema_irrigazione": row[7],
+            "sistema_conservazione": row[8],
+            "sistema_processamento": row[9],
+            "contatto_telefonico": row[10],
+        }
+
+        # === 2) Fetch products for this association ===
+        query_prod, params_prod = build_get_products_by_association_query(assoc_id)
+        cursor.execute(query_prod, params_prod)
+        rows_prod = cursor.fetchall()
+
+        prodotti = [
+            {
+                "id": r[0],
+                "cultura": r[1],
+                "rendimento_estimado_kg": r[2],
+                "preco_venda_estimado_kg": r[3],
+                "id_associazione": r[4],
+            }
+            for r in rows_prod
+        ]
+
+        # === 3) Attach to final payload ===
+        association["prodotti"] = prodotti
+
+        return association
+
+    except Exception as e:
+        logging.error(f"[database_pg] Error in get_association_with_products({assoc_id}): {e}")
+        return None
+
+    finally:
+        conn.close()
+
 
 # === Farmers Panel Wrappers ===
 
