@@ -14,7 +14,18 @@ from functools import wraps
 import io
 
 # === Third-party ===
-from flask import Flask, request, Response, jsonify, abort, render_template,redirect, url_for, session, flash
+from flask import (
+    Flask, 
+    request, 
+    Response, 
+    jsonify, 
+    abort, 
+    render_template,
+    redirect, 
+    url_for, 
+    session, 
+    flash
+)
 from flask_cors import CORS
 import pandas as pd
 from pandasai import Agent
@@ -38,8 +49,37 @@ from retriever_tool import RetrieverTool
 from db_query_tool import DatabaseQueryTool
 from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
-from database_pg import verify_farmer_login, get_association_details_farm, update_association_details, get_association_products, add_association_product, update_association_product, delete_association_product, edit_tokens, validate_api_key, get_users_for_admin, get_users_stats, get_logs_for_admin, get_logs_stats, update_user_tokens, get_user_by_id, get_all_prompts, get_prompt_by_id, add_prompt, update_prompt, delete_prompt, get_all_costs, add_cost, update_cost, delete_cost, get_cost_by_id, get_daily_stats, get_recent_activity, get_all_farmers_for_admin
-
+from database_pg import (
+    verify_farmer_login, 
+    get_association_details_farm, 
+    update_association_details, 
+    get_association_products, 
+    add_association_product, 
+    update_association_product, 
+    delete_association_product, 
+    edit_tokens, 
+    validate_api_key, 
+    get_users_for_admin, 
+    get_users_stats, 
+    get_logs_for_admin, 
+    get_logs_stats, 
+    update_user_tokens, 
+    get_user_by_id, 
+    get_all_prompts, 
+    get_prompt_by_id, 
+    add_prompt, 
+    update_prompt, 
+    delete_prompt, 
+    get_all_costs, 
+    add_cost, 
+    update_cost, 
+    delete_cost, 
+    get_cost_by_id, 
+    get_daily_stats, 
+    get_recent_activity, 
+    get_all_farmers_for_admin,
+    log_token_usage
+)
 
 from dino import dino_authenticate
 from ai import (
@@ -714,10 +754,25 @@ def agentchat() -> Response | tuple[Response, int]:
         """)
 
 
+        # === MODEL AND PROVIDER NORMALIZATION ===
+
+        provider = os.getenv("COMPLETION_MODEL_PROVIDER", "Deepinfra").strip()
+        configured_model = os.getenv("COMPLETION_MODEL_AGENT_CHAT", "").strip()
+
+        if not configured_model:
+            raise ValueError("Environment variable COMPLETION_MODEL_AGENT_CHAT is not set.")
+
+        # Model used in database logs and cost accounting
+        model_clean = configured_model
+
+        # Model passed to LiteLLM (provider prefix required)
+        model_id_for_llm = f"{provider.lower()}/{configured_model}"
+
+
         # === MODEL AND TOOL INITIALIZATION ===
 
         llm = LiteLLMModel(
-            model_id=os.getenv("COMPLETION_MODEL_AGENT_CHAT"), 
+            model_id=model_id_for_llm, 
             api_key=os.getenv("DEEPINFRA_API_KEY"),
             temperature=0,
         )        
@@ -777,6 +832,38 @@ def agentchat() -> Response | tuple[Response, int]:
             language=language,
             question=user_message,
         )
+
+        # === DATABASE TOKEN USAGE LOGGING ===
+
+        try:
+            # Retrieve user_id from username
+            user = database_pg.get_user_by_username(r["username"])
+            if user and "id" in user:
+                user_id = user["id"]
+            else:
+                raise ValueError(f"User '{r['username']}' not found in DB")
+
+           
+            # Extract token usage from payload
+            token_metrics = payload.get("metrics", {}).get("token_usage", {})
+            token_input = token_metrics.get("input", 0)
+            token_output = token_metrics.get("output", 0)
+
+            # Use clean model name from earlier normalization
+            model = model_clean     
+
+            # Log into PostgreSQL
+            log_token_usage(
+                user_id=user_id,
+                token_input=token_input,
+                token_output=token_output,
+                model=model,
+                provider=provider,
+            )
+
+        except Exception as e:
+            app.logger.error(f"[agentchat] Failed to log token usage: {e}")
+
 
         # === TOKEN MANAGEMENT ===
 
@@ -956,11 +1043,25 @@ def farmagentchat() -> Response | tuple[Response, int]:
             LANGUAGE
             - Always respond in Portuguese (pt-PT or pt-PT-like).
         """)
+
+        # === MODEL AND PROVIDER NORMALIZATION ===
+
+        provider = os.getenv("COMPLETION_MODEL_PROVIDER", "Deepinfra").strip()
+        configured_model = os.getenv("COMPLETION_MODEL_AGENT_CHAT", "").strip()
+
+        if not configured_model:
+            raise ValueError("Environment variable COMPLETION_MODEL_AGENT_CHAT is not set.")
+
+        # Model used in database logs and cost accounting
+        model_clean = configured_model
+
+        # Model passed to LiteLLM (provider prefix required)
+        model_id_for_llm = f"{provider.lower()}/{configured_model}"
         
         # === MODEL & TOOLS INITIALIZATION ===
 
         llm = LiteLLMModel(
-            model_id=os.getenv("FARM_COMPLETION_MODEL") or os.getenv("COMPLETION_MODEL_AGENT_CHAT"),
+            model_id=model_id_for_llm,
             api_key=os.getenv("DEEPINFRA_API_KEY"),
             temperature=0,
         )
@@ -1033,6 +1134,37 @@ def farmagentchat() -> Response | tuple[Response, int]:
             language=language,
             question=user_message,
         )
+
+        # === DATABASE TOKEN USAGE LOGGING ===
+
+        try:
+            # Retrieve user_id from username
+            user = database_pg.get_user_by_username(r["username"])
+            if user and "id" in user:
+                user_id = user["id"]
+            else:
+                raise ValueError(f"User '{r['username']}' not found in DB")
+
+           
+            # Extract token usage from payload
+            token_metrics = payload.get("metrics", {}).get("token_usage", {})
+            token_input = token_metrics.get("input", 0)
+            token_output = token_metrics.get("output", 0)
+
+            # Use clean model name from earlier normalization
+            model = model_clean     
+
+            # Log into PostgreSQL
+            log_token_usage(
+                user_id=user_id,
+                token_input=token_input,
+                token_output=token_output,
+                model=model,
+                provider=provider,
+            )
+
+        except Exception as e:
+            app.logger.error(f"[farmagentchat] Failed to log token usage: {e}")
 
         # === TOKEN MANAGEMENT ===
         
