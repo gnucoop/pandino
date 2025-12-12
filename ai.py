@@ -42,6 +42,7 @@ class CompletionResponse:
     error: Optional[str] = None
     answer: Optional[str] = None
     vectors: Optional[list[dict]] = None
+    log_id: Optional[int] = None
 
 
 def choose_llm(
@@ -330,6 +331,8 @@ def complete_chat(
         }
     )
 
+    log_id: Optional[int] = None
+  
     try:
         llm = choose_llm(llm_type, model)
         resp = llm.invoke(messages)
@@ -341,9 +344,16 @@ def complete_chat(
         token_out = token_usage.get("completion_tokens", 0)
 
         user = get_user_by_username(req.username)
-        if user and (token_in > 0 or token_out > 0):
-            log_token_usage(
-                user_id=user.get("id"),
+        if not user:
+            raise ValueError(f"User '{req.username}' not found")
+
+        user_id = user.get("id")
+        if not isinstance(user_id, int):
+            raise TypeError(f"Invalid user_id: {user_id}")
+
+        if token_in > 0 or token_out > 0:
+            log_id = log_token_usage(
+                user_id=user_id,
                 token_input=token_in,
                 token_output=token_out,
                 model=model,
@@ -364,9 +374,16 @@ def complete_chat(
         )
 
         if is_no_info:
-            return CompletionResponse(answer=answer_text)
+            return CompletionResponse(
+                answer=answer_text,
+                log_id=log_id,
+            )
         else:
-            return CompletionResponse(answer=answer_text, vectors=vectors)
+            return CompletionResponse(
+                answer=answer_text,
+                vectors=vectors,
+                log_id=log_id,
+            )
 
     except Exception as e:
         logging.exception("Error in chat completion")
@@ -606,9 +623,16 @@ def audioFormCompilation(
         token_out = token_usage.get("completion_tokens", 0)
 
         user = get_user_by_username(username)
-        if user and (token_in > 0 or token_out > 0):
+        if not user:
+            raise ValueError(f"User '{username}' not found")
+
+        user_id = user.get("id")
+        if not isinstance(user_id, int):
+            raise TypeError(f"Invalid user_id: {user_id}")
+
+        if token_in > 0 or token_out > 0:
             log_token_usage(
-                user_id=user.get("id"),
+                user_id=user_id,
                 token_input=token_in,
                 token_output=token_out,
                 model=model,
