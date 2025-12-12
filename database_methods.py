@@ -681,6 +681,53 @@ def build_get_recent_activity_query() -> Tuple[sql.Composed, Tuple[()]]:
     return query, ()
 
 
+def build_insert_feedback_query(
+    user_email: str,
+    question: str,
+    answer: str,
+    feedback_value: str,
+    log_id: Optional[int] = None,
+    source: Optional[str] = None,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to insert a new feedback entry.
+
+    :param user_email: Username (email) of the user submitting the feedback.
+    :param question: The question being evaluated.
+    :param answer: The answer being evaluated.
+    :param feedback_value: Feedback value ('positive' or 'negative').
+    :param log_id: Optional reference to logs.id.
+    :param source: Optional source identifier (e.g. 'agentchat', 'completion').
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "INSERT INTO {table} "
+        "({col_user}, {col_question}, {col_answer}, {col_feedback}, {col_log}, {col_source}) "
+        "VALUES (%s, %s, %s, %s, %s, %s) "
+        "RETURNING {col_id}"
+    ).format(
+        table=sql.Identifier("feedback"),
+        col_user=sql.Identifier("user_email"),
+        col_question=sql.Identifier("question"),
+        col_answer=sql.Identifier("answer"),
+        col_feedback=sql.Identifier("feedback_value"),
+        col_log=sql.Identifier("log_id"),
+        col_source=sql.Identifier("source"),
+        col_id=sql.Identifier("id"),
+    )
+
+    params = (
+        user_email,
+        question,
+        answer,
+        feedback_value,
+        log_id,
+        source,
+    )
+
+    return query, params
+
+
 def build_query_associations_by_district_query(district: str) -> Tuple[sql.Composed, Tuple[str]]:
     """
     Builds a SQL query that returns all associations located in a given district.
