@@ -55,7 +55,8 @@ from database_methods import (
     build_add_product_query,
     build_update_product_query,
     build_delete_product_query,
-    build_get_all_farmers_query
+    build_get_all_farmers_query,
+    build_insert_feedback_query
 )
 
 # Generate a key for encryption and decryption
@@ -511,6 +512,59 @@ def get_prompt_from_db(title: str, version: Optional[int] = None) -> Optional[st
         return None
     finally:
         conn.close()
+
+
+def save_feedback(
+    user_email: str,
+    question: str,
+    answer: str,
+    feedback_value: str,
+    log_id: Optional[int] = None,
+    source: Optional[str] = None,
+) -> int:
+    """
+    Persists a feedback entry into the database.
+
+    :param user_email: Username (email) of the user submitting the feedback.
+    :param question: The question being evaluated.
+    :param answer: The answer being evaluated.
+    :param feedback_value: Feedback value ('positive' or 'negative').
+    :param log_id: Optional reference to logs.id.
+    :param source: Optional source identifier.
+    :return: The generated feedback ID.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_insert_feedback_query(
+            user_email=user_email,
+            question=question,
+            answer=answer,
+            feedback_value=feedback_value,
+            log_id=log_id,
+            source=source,
+        )
+
+        cursor.execute(query, params)
+
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError("Failed to retrieve feedback_id after insert")
+
+        feedback_id = row[0]
+
+        conn.commit()
+        return feedback_id
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        cursor.close()
+        conn.close()
+
 
 def get_users_for_admin():
     """
