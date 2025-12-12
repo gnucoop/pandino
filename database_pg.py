@@ -137,6 +137,16 @@ def init_db():
             version INTEGER NOT NULL,
             message TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS feedback (
+            id SERIAL PRIMARY KEY,
+            user_email TEXT NOT NULL,
+            question TEXT NOT NULL,
+            answer TEXT NOT NULL,
+            feedback_value TEXT NOT NULL CHECK (feedback_value IN ('positive', 'negative')),
+            timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            log_id INTEGER REFERENCES logs(id) ON DELETE SET NULL,
+            source TEXT
+        );
     """
     # Execute the SQL script
     try:
