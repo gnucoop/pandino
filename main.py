@@ -345,6 +345,81 @@ def validate() -> tuple[Response, int]:
         return jsonify({"response": "API key match found"}), 200
 
 
+@app.route("/feedback", methods=["POST"])
+def feedback_handler() -> Response | tuple[Response, int]:
+    """
+    Endpoint to collect user feedback on LLM-generated responses.
+
+    This endpoint allows authenticated users to submit a positive or negative
+    evaluation of a generated answer, optionally linking it to an existing log
+    entry for future analysis. Feedback is stored persistently and does not
+    interfere with token usage or response generation flows.
+    """
+    try:
+        # === INPUT VALIDATION ===
+
+        r = request.get_json()
+        if not r:
+            return jsonify({"error": "No JSON data provided"}), 400
+
+        required = ["username", "question", "answer", "feedback"]
+        missing = [k for k in required if k not in r]
+        if missing:
+            return jsonify(
+                {"error": f"Missing required keys: {', '.join(missing)}"}
+            ), 400
+
+        api_key = request.headers.get("X-API-KEY")
+        if not api_key:
+            return jsonify({"error": "Missing X-API-KEY header"}), 400
+
+        # === AUTHENTICATION ===
+
+        assert_valid_api_key(api_key, r["username"])
+
+        # === SEMANTIC VALIDATION ===
+
+        question = r["question"]
+        answer = r["answer"]
+        feedback_value = r["feedback"]
+
+        if not isinstance(question, str) or not question.strip():
+            return jsonify({"error": "Invalid 'question'"}), 400
+
+        if not isinstance(answer, str) or not answer.strip():
+            return jsonify({"error": "Invalid 'answer'"}), 400
+
+        if feedback_value not in ("positive", "negative"):
+            return jsonify({"error": "Invalid feedback value"}), 400
+
+        log_id = r.get("log_id")
+        if log_id is not None and not isinstance(log_id, int):
+            return jsonify({"error": "Invalid 'log_id': expected integer"}), 400
+
+        source = r.get("source")
+        if source is not None and not isinstance(source, str):
+            return jsonify({"error": "Invalid 'source'"}), 400
+
+        # === PERSISTENCE ===
+
+        feedback_id = database_pg.save_feedback(
+            user_email=r["username"],
+            question=question,
+            answer=answer,
+            feedback_value=feedback_value,
+            log_id=log_id,
+            source=source,
+        )
+
+        # === RESPONSE ===
+
+        return jsonify({"feedback_id": feedback_id}), 200
+
+    except Exception as e:
+        app.logger.error(f"[feedback] Unexpected error: {str(e)}")
+        return jsonify({"error": "An unexpected error occurred"}), 500
+
+
 # Define a route for the '/endchat' endpoint that accepts POST requests
 @app.route("/enddatachat", methods=["POST"])
 def endChat() -> Response | tuple[Response, int]:
