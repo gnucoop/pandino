@@ -447,17 +447,23 @@ def print_stored_keys() -> None:
             print(f"  Error decrypting key: {str(e)}")
 
 
-def log_token_usage(user_id, token_input, token_output, model, provider) -> None:
+def log_token_usage(
+    user_id: int,
+    token_input: int,
+    token_output: int,
+    model: str,
+    provider: str,
+) -> int:
     """
     Logs token usage for a user by calculating the cost based on input and output tokens,
-    and inserts a record into the token usage log in the database.
+    inserts a record into the 'logs' table, and returns the generated log ID.
 
     :param user_id: The ID of the user whose token usage is being logged.
     :param token_input: Number of input tokens used.
     :param token_output: Number of output tokens generated.
     :param model: The model used for token processing.
     :param provider: The provider of the model.
-    :return: None
+    :return: The ID of the inserted log record.
     """
     conn = connect()
     cursor = conn.cursor()
@@ -475,13 +481,28 @@ def log_token_usage(user_id, token_input, token_output, model, provider) -> None
     token_input_cost, token_output_cost = cost_row
     cost = (token_input * token_input_cost) + (token_output * token_output_cost)
 
-    # INSERT log
+    # INSERT log (RETURNING id)
     insert_query, insert_params = build_insert_token_log_query(
-        date_str, user_id, token_input, token_output, cost, model, provider
+        date_str,
+        user_id,
+        token_input,
+        token_output,
+        cost,
+        model,
+        provider,
     )
     cursor.execute(insert_query, insert_params)
+
+    log_id_row = cursor.fetchone()
+    if not log_id_row:
+        raise RuntimeError("Failed to retrieve log_id after insert")
+
+    log_id = log_id_row[0]
+
     conn.commit()
     conn.close()
+
+    return log_id
 
 
 def get_prompt_from_db(title: str, version: Optional[int] = None) -> Optional[str]:

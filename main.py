@@ -6,7 +6,7 @@ import secrets
 import tempfile
 from datetime import datetime
 from dotenv import load_dotenv
-from typing import Any, List, Union
+from typing import Any, List, Union, Optional
 import textwrap
 import logging
 import time
@@ -396,6 +396,15 @@ def feedback_handler() -> Response | tuple[Response, int]:
         if log_id is not None and not isinstance(log_id, int):
             return jsonify({"error": "Invalid 'log_id': expected integer"}), 400
 
+        if log_id is not None:
+            with database_pg.connect() as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT 1 FROM logs WHERE id = %s", (log_id,))
+                exists = cur.fetchone()
+
+            if not exists:
+                return jsonify({"error": f"log_id {log_id} does not exist"}), 400
+
         source = r.get("source")
         if source is not None and not isinstance(source, str):
             return jsonify({"error": "Invalid 'source'"}), 400
@@ -728,15 +737,15 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
             if resp.answer or resp.vectors:
                 edit_tokens(r["username"], -token_cost)
 
-            return (
-                jsonify(
-                    {
-                        "answer": resp.answer,
-                        "vectors": resp.vectors,
-                    }
-                ),
-                200,
-            )
+            response_payload = {
+                "answer": resp.answer,
+                "vectors": resp.vectors,
+            }
+
+            if resp.log_id is not None:
+                response_payload["log_id"] = resp.log_id
+
+            return jsonify(response_payload), 200
 
         elif resp is None:
             return jsonify({"error": "No response from chat completion"}), 500
@@ -746,7 +755,6 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
     except Exception as e:
         app.logger.error(f"Unexpected error in completion_handler: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
-
 
 textContentType = {"Content-Type": "text/plain"}
 
@@ -908,17 +916,20 @@ def agentchat() -> Response | tuple[Response, int]:
             question=user_message,
         )
 
+        log_id: Optional[int] = None
+
         # === DATABASE TOKEN USAGE LOGGING ===
 
         try:
             # Retrieve user_id from username
             user = database_pg.get_user_by_username(r["username"])
-            if user and "id" in user:
-                user_id = user["id"]
-            else:
+            if not user:
                 raise ValueError(f"User '{r['username']}' not found in DB")
 
-           
+            user_id = user.get("id")
+            if not isinstance(user_id, int):
+                raise TypeError(f"Invalid user_id: {user_id}")
+
             # Extract token usage from payload
             token_metrics = payload.get("metrics", {}).get("token_usage", {})
             token_input = token_metrics.get("input", 0)
@@ -928,7 +939,7 @@ def agentchat() -> Response | tuple[Response, int]:
             model = model_clean     
 
             # Log into PostgreSQL
-            log_token_usage(
+            log_id = log_token_usage(
                 user_id=user_id,
                 token_input=token_input,
                 token_output=token_output,
@@ -953,6 +964,9 @@ def agentchat() -> Response | tuple[Response, int]:
             f"vectors={len(payload.get('vectors', []))} "
             f"fu={len(payload.get('follow_ups', []))}"
         )
+
+        if log_id is not None:
+            payload["log_id"] = log_id
 
         return jsonify(payload), 200
 
@@ -1215,11 +1229,12 @@ def farmagentchat() -> Response | tuple[Response, int]:
         try:
             # Retrieve user_id from username
             user = database_pg.get_user_by_username(r["username"])
-            if user and "id" in user:
-                user_id = user["id"]
-            else:
+            if not user:
                 raise ValueError(f"User '{r['username']}' not found in DB")
 
+            user_id = user.get("id")
+            if not isinstance(user_id, int):
+                raise TypeError(f"Invalid user_id: {user_id}")
            
             # Extract token usage from payload
             token_metrics = payload.get("metrics", {}).get("token_usage", {})

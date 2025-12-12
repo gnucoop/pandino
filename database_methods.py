@@ -167,13 +167,15 @@ def build_insert_token_log_query(
     provider: str,
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
-    Builds a SQL query to insert a new usage log into the 'logs' table.
+    Builds a SQL query to insert a new usage log into the 'logs' table
+    and returns the generated log ID.
 
     :return: Tuple of SQL query and parameters.
     """
     query = sql.SQL(
         "INSERT INTO {table} ({col_date}, {col_user}, {col_in}, {col_out}, {col_cost}, {col_model}, {col_provider}) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s)"
+        "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+        "RETURNING id"
     ).format(
         table=sql.Identifier("logs"),
         col_date=sql.Identifier("date"),
