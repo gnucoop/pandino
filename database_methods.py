@@ -729,3 +729,113 @@ def build_insert_feedback_query(
 
     return query, params
 
+
+def build_get_feedback_for_admin_query(
+    source_filter: Optional[str] = None,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to retrieve feedback entries for the admin panel.
+
+    :param source_filter: Optional source to filter by.
+    :return: Tuple of SQL query and parameters.
+    """
+    base_query = """
+        SELECT f.id, f.user_email, f.question, f.answer, f.feedback_value, f.timestamp, f.log_id, f.source, l.model
+        FROM {table} f
+        LEFT JOIN {logs_table} l ON f.log_id = l.id
+    """
+
+    if source_filter:
+        base_query += " WHERE f.{col_source} = %s"
+        params = (source_filter,)
+    else:
+        params = ()
+
+    base_query += " ORDER BY f.timestamp DESC"
+
+    query = sql.SQL(base_query).format(
+        table=sql.Identifier("feedback"), 
+        logs_table=sql.Identifier("logs"),
+        col_source=sql.Identifier("source")
+    )
+
+    return query, params
+
+
+def build_get_feedback_stats_query(
+    source_filter: Optional[str] = None,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to retrieve feedback statistics.
+
+    :param source_filter: Optional source to filter by.
+    :return: Tuple of SQL query and parameters.
+    """
+
+    where_clause = sql.SQL("")
+    params = ()
+
+    if source_filter:
+        where_clause = sql.SQL("WHERE {col_source} = %s").format(
+            col_source=sql.Identifier("source")
+        )
+        params = (source_filter,)
+
+    query = sql.SQL("""
+        SELECT 
+            COUNT(*) as total,
+            COUNT(*) FILTER (WHERE {col_feedback} = 'positive') as positive_count,
+            COUNT(*) FILTER (WHERE {col_feedback} = 'negative') as negative_count
+        FROM {table}
+        {where_clause}
+    """).format(
+        table=sql.Identifier("feedback"),
+        col_feedback=sql.Identifier("feedback_value"),
+        where_clause=where_clause,
+    )
+
+    return query, params
+
+
+def build_get_feedback_sources_query() -> Tuple[sql.Composed, Tuple[()]]:
+    """
+    Builds a SQL query to retrieve distinct feedback sources.
+
+    :return: Tuple of SQL query and empty parameters.
+    """
+    query = sql.SQL("""
+        SELECT DISTINCT {col_source} FROM {table} WHERE {col_source} IS NOT NULL ORDER BY {col_source}
+    """).format(
+        table=sql.Identifier("feedback"), col_source=sql.Identifier("source")
+    )
+    return query, ()
+
+
+def build_get_feedback_model_stats_query(
+    source_filter: Optional[str] = None,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to retrieve feedback counts grouped by model.
+    """
+    base_query = """
+        SELECT l.model, COUNT(f.id) as count
+        FROM {table} f
+        LEFT JOIN {logs_table} l ON f.log_id = l.id
+    """
+    
+    params = ()
+    if source_filter:
+        base_query += " WHERE f.{col_source} = %s"
+        params = (source_filter,)
+        
+    base_query += " GROUP BY l.model ORDER BY count DESC"
+    
+    query = sql.SQL(base_query).format(
+        table=sql.Identifier("feedback"),
+        logs_table=sql.Identifier("logs"),
+        col_source=sql.Identifier("source")
+    )
+    
+    return query, params
+
+

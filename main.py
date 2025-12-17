@@ -69,7 +69,9 @@ from database_pg import (
     get_cost_by_id, 
     get_daily_stats, 
     get_recent_activity, 
-    log_token_usage
+    log_token_usage,
+    get_feedback_for_admin,
+    get_feedback_stats
 )
 
 from dino import dino_authenticate
@@ -1430,6 +1432,29 @@ def admin_logs():
         flash(f'Errore nel recupero logs: {str(e)}', 'danger')
         return render_template('admin/logs.html', logs=[], stats={})
 
+
+@app.route('/admin/feedback')
+@admin_required
+def admin_feedback():
+    try:
+        source_filter = request.args.get('source')
+        if source_filter == 'all':
+            source_filter = None
+            
+        feedbacks = get_feedback_for_admin(source_filter)
+        stats = get_feedback_stats(source_filter)
+        
+        return render_template(
+            'admin/feedback.html', 
+            feedbacks=feedbacks, 
+            stats=stats,
+            current_filter=source_filter
+        )
+    except Exception as e:
+        flash(f'Errore nel recupero feedback: {str(e)}', 'danger')
+        return render_template('admin/feedback.html', feedbacks=[], stats={})
+
+
 @app.route('/admin/users/<int:user_id>/edit', methods=['GET', 'POST'])
 @admin_required
 def admin_edit_user(user_id):
@@ -1555,4 +1580,4 @@ def health():
 
 
 if __name__ == "__main__":
-    app.run(debug=True,port=8000)
+    app.run(debug=True,port=5000)
