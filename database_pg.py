@@ -41,7 +41,11 @@ from database_methods import (
     build_get_cost_by_id_query,
     build_get_daily_stats_query,
     build_get_recent_activity_query,
-    build_insert_feedback_query
+    build_insert_feedback_query,
+    build_get_feedback_for_admin_query,
+    build_get_feedback_stats_query,
+    build_get_feedback_sources_query,
+    build_get_feedback_model_stats_query
 )
 
 # Generate a key for encryption and decryption
@@ -1213,6 +1217,98 @@ def get_recent_activity():
                     'details': details
                 })
         return activities
+    finally:
+        conn.close()
+
+
+
+def get_feedback_for_admin(source_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Retrieves feedback entries for the admin panel.
+    
+    :param source_filter: Optional source to filter by.
+    :return: List of feedback dictionaries.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    try:
+        query, params = build_get_feedback_for_admin_query(source_filter)
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        
+        feedback_list = []
+        if rows:
+            for row in rows:
+                feedback_list.append({
+                    'id': row[0],
+                    'user_email': row[1],
+                    'question': row[2],
+                    'answer': row[3],
+                    'feedback_value': row[4],
+                    'timestamp': row[5],
+                    'log_id': row[6],
+                    'source': row[7],
+                    'model': row[8]
+                })
+        return feedback_list
+    except Exception as e:
+        logging.exception(f"Error retrieving feedback: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def get_feedback_stats(source_filter: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Retrieves feedback statistics and list of sources.
+    
+    :param source_filter: Optional source to filter by.
+    :return: Dictionary containing stats and sources.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+    
+    stats = {
+        'total': 0,
+        'positive_count': 0,
+        'negative_count': 0,
+        'sources': [],
+        'models': []
+    }
+
+    try:
+        # Get counts
+        query_stats, params_stats = build_get_feedback_stats_query(source_filter)
+        cursor.execute(query_stats, params_stats)
+        row = cursor.fetchone()
+        
+        cursor.execute(query_stats, params_stats)
+        row = cursor.fetchone()
+        
+        if row:
+            stats['total'] = row[0]
+            stats['positive_count'] = row[1]
+            stats['negative_count'] = row[2]
+        
+        # Get sources
+        query_sources, _ = build_get_feedback_sources_query()
+        cursor.execute(query_sources)
+        rows_sources = cursor.fetchall()
+        if rows_sources:
+            stats['sources'] = [r[0] for r in rows_sources]
+            
+        # Get model stats
+        query_models, params_models = build_get_feedback_model_stats_query(source_filter)
+        cursor.execute(query_models, params_models)
+        rows_models = cursor.fetchall()
+        if rows_models:
+            stats['models'] = [{'name': r[0] or 'Unknown', 'count': r[1]} for r in rows_models]
+            
+        return stats
+    except Exception as e:
+        logging.exception(f"Error retrieving feedback stats: {e}")
+        return stats
     finally:
         conn.close()
 
