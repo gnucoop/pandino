@@ -4,7 +4,7 @@ import base64
 import math
 import secrets
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from typing import Any, List, Union, Optional
 import textwrap
@@ -1432,24 +1432,63 @@ def admin_dashboard():
 @admin_required
 def admin_users():
     try:
-        users = get_users_for_admin()
-        return render_template('admin/users.html', users=users)
+        page = request.args.get('page', 1, type=int)
+        users_data = get_users_for_admin(page=page, limit=50)
+        users = users_data['users']
+        pagination = {
+            'page': users_data['page'],
+            'total_pages': users_data['total_pages'],
+            'total_count': users_data['total_count']
+        }
+        return render_template('admin/users.html', users=users, pagination=pagination)
         
     except Exception as e:
         flash(f'Errore nel recupero utenti: {str(e)}', 'danger')
-        return render_template('admin/users.html', users=[])
+        return render_template('admin/users.html', users=[], pagination={'page': 1, 'total_pages': 1})
 
 @app.route('/admin/logs')
 @admin_required
 def admin_logs():
     try:
-        logs = get_logs_for_admin(limit=100)
-        stats = get_logs_stats()
-        return render_template('admin/logs.html', logs=logs, stats=stats)
+        # Get query parameters
+        page = request.args.get('page', 1, type=int)
+        
+        # Date filter
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        # Calculate default dates if not provided (for charts)
+        if not start_date or not end_date:
+            default_end = datetime.now()
+            default_start = default_end - timedelta(days=7)
+            chart_start = default_start.strftime("%Y-%m-%d")
+            chart_end = default_end.strftime("%Y-%m-%d")
+        else:
+            chart_start = start_date
+            chart_end = end_date
+            
+        logs_data = get_logs_for_admin(page=page, limit=50, start_date=chart_start, end_date=chart_end)
+        logs = logs_data['logs']
+        pagination = {
+            'page': logs_data['page'],
+            'total_pages': logs_data['total_pages'],
+            'total_count': logs_data['total_count']
+        }
+        
+        stats = get_logs_stats(start_date=chart_start, end_date=chart_end)
+        
+        return render_template(
+            'admin/logs.html', 
+            logs=logs, 
+            stats=stats,
+            pagination=pagination,
+            current_start_date=chart_start,
+            current_end_date=chart_end
+        )
         
     except Exception as e:
         flash(f'Errore nel recupero logs: {str(e)}', 'danger')
-        return render_template('admin/logs.html', logs=[], stats={})
+        return render_template('admin/logs.html', logs=[], stats={}, pagination={'page':1, 'total_pages':1}, current_start_date='', current_end_date='')
 
 
 @app.route('/admin/feedback')
@@ -1460,18 +1499,44 @@ def admin_feedback():
         if source_filter == 'all':
             source_filter = None
             
-        feedbacks = get_feedback_for_admin(source_filter)
-        stats = get_feedback_stats(source_filter)
+        page = request.args.get('page', 1, type=int)
+        
+        # Date filter
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        
+        # Calculate default dates if not provided
+        if not start_date or not end_date:
+            default_end = datetime.now()
+            default_start = default_end - timedelta(days=30) # Default to last 30 days for feedback
+            chart_start = default_start.strftime("%Y-%m-%d")
+            chart_end = default_end.strftime("%Y-%m-%d")
+        else:
+            chart_start = start_date
+            chart_end = end_date
+            
+        feedback_data = get_feedback_for_admin(source_filter, page=page, limit=20, start_date=chart_start, end_date=chart_end)
+        feedbacks = feedback_data['feedbacks']
+        pagination = {
+            'page': feedback_data['page'],
+            'total_pages': feedback_data['total_pages'],
+            'total_count': feedback_data['total_count']
+        }
+        
+        stats = get_feedback_stats(source_filter, start_date=chart_start, end_date=chart_end)
         
         return render_template(
             'admin/feedback.html', 
             feedbacks=feedbacks, 
             stats=stats,
-            current_filter=source_filter
+            current_filter=source_filter,
+            pagination=pagination,
+            current_start_date=chart_start,
+            current_end_date=chart_end
         )
     except Exception as e:
         flash(f'Errore nel recupero feedback: {str(e)}', 'danger')
-        return render_template('admin/feedback.html', feedbacks=[], stats={})
+        return render_template('admin/feedback.html', feedbacks=[], stats={}, pagination={'page':1, 'total_pages':1}, current_start_date='', current_end_date='')
 
 
 @app.route('/admin/users/<int:user_id>/edit', methods=['GET', 'POST'])
@@ -1599,4 +1664,4 @@ def health():
 
 
 if __name__ == "__main__":
-    app.run(debug=True,port=8000)
+    app.run(debug=True,port=5000)

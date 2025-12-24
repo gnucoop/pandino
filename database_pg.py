@@ -45,7 +45,10 @@ from database_methods import (
     build_get_feedback_for_admin_query,
     build_get_feedback_stats_query,
     build_get_feedback_sources_query,
-    build_get_feedback_model_stats_query
+    build_get_feedback_model_stats_query,
+    build_get_total_feedback_count_query,
+    build_get_total_logs_count_query,
+    build_get_total_users_count_query
 )
 
 # Generate a key for encryption and decryption
@@ -576,20 +579,31 @@ def save_feedback(
         conn.close()
 
 
-def get_users_for_admin():
+def get_users_for_admin(page=1, limit=50):
     """
     Retrieves users from the database and returns them as a list of dictionaries
-    for use in the admin panel.
+    for use in the admin panel with pagination.
 
-    :return: List of user dictionaries with decrypted API keys
+    :param page: Page number (1-based)
+    :param limit: Maximum number of users per page
+    :return: Dictionary with user list and pagination info
     """
     conn = connect()
     cursor = conn.cursor()
 
+    offset = (page - 1) * limit
+
     try:
-        query, params = build_list_users_query()
+        # Get users
+        query, params = build_list_users_query(limit, offset)
         cursor.execute(query, params)
         users_raw = cursor.fetchall()
+        
+        # Get total count
+        query_count, params_count = build_get_total_users_count_query()
+        cursor.execute(query_count, params_count)
+        total_count = cursor.fetchone()[0]
+        
     finally:
         conn.close()
 
@@ -656,8 +670,15 @@ def get_users_for_admin():
                 'is_active': is_active,
                 'created_at': formatted_date
             })
+            
+    total_pages = (total_count + limit - 1) // limit
     
-    return users
+    return {
+        'users': users,
+        'page': page,
+        'total_pages': total_pages,
+        'total_count': total_count
+    }
 
 
 def get_users_stats():
@@ -690,20 +711,32 @@ def get_users_stats():
         'total_tokens': total_tokens
     }
 
-def get_logs_for_admin(limit=100):
+def get_logs_for_admin(page=1, limit=50, start_date=None, end_date=None):
     """
-    Retrieves logs from the database for the admin panel.
+    Retrieves logs from the database for the admin panel with pagination.
     
-    :param limit: Maximum number of logs to retrieve
-    :return: List of log dictionaries
+    :param page: Page number (1-based)
+    :param limit: Maximum number of logs per page
+    :param start_date: Optional start date filter
+    :param end_date: Optional end date filter
+    :return: Dictionary with logs list and pagination info
     """
     conn = connect()
     cursor = conn.cursor()
     
+    offset = (page - 1) * limit
+    
     try:
-        query, params = build_get_logs_for_admin_query(limit)
+        # Get logs
+        query, params = build_get_logs_for_admin_query(limit, offset, start_date, end_date)
         cursor.execute(query, params)
         logs_raw = cursor.fetchall()
+        
+        # Get total count
+        query_count, params_count = build_get_total_logs_count_query(start_date, end_date)
+        cursor.execute(query_count, params_count)
+        total_count = cursor.fetchone()[0]
+        
     finally:
         conn.close()
     
@@ -727,8 +760,15 @@ def get_logs_for_admin(limit=100):
                 'model': model or 'N/A',
                 'provider': provider or 'N/A'
             })
+            
+    total_pages = (total_count + limit - 1) // limit
     
-    return logs
+    return {
+        'logs': logs,
+        'page': page,
+        'total_pages': total_pages,
+        'total_count': total_count
+    }
 
 def update_user_tokens(user_id, new_tokens):
     """
@@ -760,10 +800,12 @@ def update_user_tokens(user_id, new_tokens):
     finally:
         conn.close()
 
-def get_logs_stats():
+def get_logs_stats(start_date=None, end_date=None):
     """
     Get statistics about logs for charts and dashboard.
     
+    :param start_date: Optional start date for stats
+    :param end_date: Optional end date for stats
     :return: Dictionary with log statistics
     """
     conn = connect()
@@ -771,17 +813,17 @@ def get_logs_stats():
     
     try:
         # Total tokens input/output
-        query, params = build_get_total_log_stats_query()
+        query, params = build_get_total_log_stats_query(start_date, end_date)
         cursor.execute(query, params)
         totals = cursor.fetchone()
         
-        # Tokens by day (last 7 days)
-        query, params = build_get_daily_log_stats_query()
+        # Tokens by day (filtered by date range)
+        query, params = build_get_daily_log_stats_query(start_date, end_date)
         cursor.execute(query, params)
         daily_stats = cursor.fetchall()
         
         # Top users by token usage
-        query, params = build_get_top_users_by_token_usage_query()
+        query, params = build_get_top_users_by_token_usage_query(start_date, end_date)
         cursor.execute(query, params)
         top_users = cursor.fetchall()
         
@@ -1222,20 +1264,32 @@ def get_recent_activity():
 
 
 
-def get_feedback_for_admin(source_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+def get_feedback_for_admin(source_filter: Optional[str] = None, page=1, limit=50, start_date=None, end_date=None) -> Dict[str, Any]:
     """
-    Retrieves feedback entries for the admin panel.
+    Retrieves feedback entries for the admin panel with pagination.
     
     :param source_filter: Optional source to filter by.
-    :return: List of feedback dictionaries.
+    :param page: Page number (1-based)
+    :param limit: Maximum number of entries per page
+    :param start_date: Optional start date filter
+    :param end_date: Optional end date filter
+    :return: Dictionary with feedback list and pagination info.
     """
     conn = connect()
     cursor = conn.cursor()
     
+    offset = (page - 1) * limit
+    
     try:
-        query, params = build_get_feedback_for_admin_query(source_filter)
+        # Get feedback
+        query, params = build_get_feedback_for_admin_query(limit, offset, source_filter, start_date, end_date)
         cursor.execute(query, params)
         rows = cursor.fetchall()
+        
+        # Get total count
+        query_count, params_count = build_get_total_feedback_count_query(source_filter, start_date, end_date)
+        cursor.execute(query_count, params_count)
+        total_count = cursor.fetchone()[0]
         
         feedback_list = []
         if rows:
@@ -1251,19 +1305,34 @@ def get_feedback_for_admin(source_filter: Optional[str] = None) -> List[Dict[str
                     'source': row[7],
                     'model': row[8]
                 })
-        return feedback_list
+                
+        total_pages = (total_count + limit - 1) // limit
+        
+        return {
+            'feedbacks': feedback_list,
+            'page': page,
+            'total_pages': total_pages,
+            'total_count': total_count
+        }
     except Exception as e:
         logging.exception(f"Error retrieving feedback: {e}")
-        return []
+        return {
+            'feedbacks': [],
+            'page': 1,
+            'total_pages': 1,
+            'total_count': 0
+        }
     finally:
         conn.close()
 
 
-def get_feedback_stats(source_filter: Optional[str] = None) -> Dict[str, Any]:
+def get_feedback_stats(source_filter: Optional[str] = None, start_date=None, end_date=None) -> Dict[str, Any]:
     """
     Retrieves feedback statistics and list of sources.
     
     :param source_filter: Optional source to filter by.
+    :param start_date: Optional start date filter
+    :param end_date: Optional end date filter
     :return: Dictionary containing stats and sources.
     """
     conn = connect()
@@ -1279,10 +1348,7 @@ def get_feedback_stats(source_filter: Optional[str] = None) -> Dict[str, Any]:
 
     try:
         # Get counts
-        query_stats, params_stats = build_get_feedback_stats_query(source_filter)
-        cursor.execute(query_stats, params_stats)
-        row = cursor.fetchone()
-        
+        query_stats, params_stats = build_get_feedback_stats_query(source_filter, start_date, end_date)
         cursor.execute(query_stats, params_stats)
         row = cursor.fetchone()
         
@@ -1291,7 +1357,7 @@ def get_feedback_stats(source_filter: Optional[str] = None) -> Dict[str, Any]:
             stats['positive_count'] = row[1]
             stats['negative_count'] = row[2]
         
-        # Get sources
+        # Get sources (always get all sources for the filter dropdown)
         query_sources, _ = build_get_feedback_sources_query()
         cursor.execute(query_sources)
         rows_sources = cursor.fetchall()
@@ -1299,7 +1365,7 @@ def get_feedback_stats(source_filter: Optional[str] = None) -> Dict[str, Any]:
             stats['sources'] = [r[0] for r in rows_sources]
             
         # Get model stats
-        query_models, params_models = build_get_feedback_model_stats_query(source_filter)
+        query_models, params_models = build_get_feedback_model_stats_query(source_filter, start_date, end_date)
         cursor.execute(query_models, params_models)
         rows_models = cursor.fetchall()
         if rows_models:

@@ -7,17 +7,35 @@
     <h1 class="h2">User Feedback</h1>
 
     <!-- Filter -->
+    <!-- Filter -->
     <div class="btn-toolbar mb-2 mb-md-0">
-        <form action="{{ url_for('admin_feedback') }}" method="get" class="d-flex align-items-center">
-            <label class="me-2">Source:</label>
-            <select name="source" class="form-select form-select-sm" onchange="this.form.submit()">
-                <option value="all" {% if not current_filter %}selected{% endif %}>All Sources</option>
-                {% if stats and stats.sources %}
-                {% for source in stats.sources %}
-                <option value="{{ source }}" {% if current_filter==source %}selected{% endif %}>{{ source }}</option>
-                {% endfor %}
-                {% endif %}
-            </select>
+        <form action="{{ url_for('admin_feedback') }}" method="get" class="d-flex align-items-center gap-2">
+            <!-- Source Filter -->
+            <div class="d-flex align-items-center">
+                <label class="me-2 small">Source:</label>
+                <select name="source" class="form-select form-select-sm" onchange="this.form.submit()">
+                    <option value="all" {% if not current_filter %}selected{% endif %}>All</option>
+                    {% if stats and stats.sources %}
+                    {% for source in stats.sources %}
+                    <option value="{{ source }}" {% if current_filter==source %}selected{% endif %}>{{ source }}
+                    </option>
+                    {% endfor %}
+                    {% endif %}
+                </select>
+            </div>
+
+            <div class="vr mx-2"></div>
+
+            <!-- Date Filter -->
+            <div class="input-group input-group-sm">
+                <span class="input-group-text">Start</span>
+                <input type="date" class="form-control" name="start_date" value="{{ current_start_date }}">
+            </div>
+            <div class="input-group input-group-sm">
+                <span class="input-group-text">End</span>
+                <input type="date" class="form-control" name="end_date" value="{{ current_end_date }}">
+            </div>
+            <button type="submit" class="btn btn-sm btn-primary">Filter</button>
         </form>
     </div>
 </div>
@@ -172,6 +190,30 @@
                 {% else %}
                 <div class="text-center py-5">
                     <p class="text-muted">No feedback found matching your criteria.</p>
+                </div>
+                {% endif %}
+
+                <!-- Pagination -->
+                {% if pagination and pagination.total_pages > 1 %}
+                <div class="p-3 border-top">
+                    <nav aria-label="Feedback navigation">
+                        <ul class="pagination justify-content-center mb-0">
+                            <li class="page-item {{ 'disabled' if pagination.page == 1 else '' }}">
+                                <a class="page-link"
+                                    href="{{ url_for('admin_feedback', page=pagination.page-1, source=current_filter, start_date=current_start_date, end_date=current_end_date) }}">Previous</a>
+                            </li>
+
+                            <li class="page-item disabled">
+                                <span class="page-link">Page {{ pagination.page }} of {{ pagination.total_pages
+                                    }}</span>
+                            </li>
+
+                            <li class="page-item {{ 'disabled' if pagination.page == pagination.total_pages else '' }}">
+                                <a class="page-link"
+                                    href="{{ url_for('admin_feedback', page=pagination.page+1, source=current_filter, start_date=current_start_date, end_date=current_end_date) }}">Next</a>
+                            </li>
+                        </ul>
+                    </nav>
                 </div>
                 {% endif %}
             </div>

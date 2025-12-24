@@ -82,14 +82,16 @@ def build_edit_tokens_query(
     return query, params
 
 
-def build_list_users_query() -> Tuple[sql.Composed, Tuple[()]]:
+def build_list_users_query(limit: int, offset: int = 0) -> Tuple[sql.Composed, Tuple[int, int]]:
     """
-    Builds a SQL query to retrieve all users with selected columns from the 'users' table.
+    Builds a SQL query to retrieve users with selected columns from the 'users' table with pagination.
 
-    :return: Tuple with SQL query and empty parameter tuple.
+    :param limit: Maximum number of users to retrieve.
+    :param offset: Number of users to skip.
+    :return: Tuple with SQL query and parameters.
     """
     query = sql.SQL(
-        "SELECT {id}, {username}, {api_key}, {date_valid_until}, {tokens} FROM {table}"
+        "SELECT {id}, {username}, {api_key}, {date_valid_until}, {tokens} FROM {table} ORDER BY {id} ASC LIMIT %s OFFSET %s"
     ).format(
         id=sql.Identifier("id"),
         username=sql.Identifier("username"),
@@ -97,6 +99,18 @@ def build_list_users_query() -> Tuple[sql.Composed, Tuple[()]]:
         date_valid_until=sql.Identifier("date_valid_until"),
         tokens=sql.Identifier("tokens"),
         table=sql.Identifier("users"),
+    )
+    return query, (limit, offset)
+
+
+def build_get_total_users_count_query() -> Tuple[sql.Composed, Tuple[()]]:
+    """
+    Builds a SQL query to count total users for pagination.
+
+    :return: Tuple with SQL query and empty parameter tuple.
+    """
+    query = sql.SQL("SELECT COUNT(*) FROM {table}").format(
+        table=sql.Identifier("users")
     )
     return query, ()
 
@@ -215,25 +229,60 @@ def build_get_total_tokens_query() -> Tuple[sql.Composed, Tuple[()]]:
     return query, ()
 
 
-def build_get_logs_for_admin_query(limit: int) -> Tuple[sql.Composed, Tuple[int]]:
+def build_get_logs_for_admin_query(limit: int, offset: int = 0, start_date: Optional[str] = None, end_date: Optional[str] = None) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
-    Builds a SQL query to retrieve logs for the admin panel.
+    Builds a SQL query to retrieve logs for the admin panel with pagination and date filtering.
 
     :param limit: Maximum number of logs to retrieve.
+    :param offset: Number of logs to skip.
+    :param start_date: Start date string (YYYY-MM-DD).
+    :param end_date: End date string (YYYY-MM-DD).
     :return: Tuple with SQL query and parameters.
     """
+    where_clause = sql.SQL("")
+    params: List[Any] = [limit, offset]
+    
+    if start_date and end_date:
+        where_clause = sql.SQL("WHERE l.date::timestamp >= %s::timestamp AND l.date::timestamp <= %s::timestamp")
+        # Prepend date params because LIMIT/OFFSET are at the end
+        params = [start_date, end_date + ' 23:59:59', limit, offset]
+
     query = sql.SQL("""
         SELECT l.id, l.user_id, u.username, l.date, l.token_input,
                l.token_output, l.cost, l.model, l.provider
         FROM {logs} l
         LEFT JOIN {users} u ON l.user_id = u.id
+        {where_clause}
         ORDER BY l.date DESC
-        LIMIT %s
+        LIMIT %s OFFSET %s
     """).format(
         logs=sql.Identifier("logs"),
-        users=sql.Identifier("users")
+        users=sql.Identifier("users"),
+        where_clause=where_clause
     )
-    return query, (limit,)
+    return query, tuple(params)
+
+
+def build_get_total_logs_count_query(start_date: Optional[str] = None, end_date: Optional[str] = None) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to count total logs for pagination with date filtering.
+
+    :param start_date: Start date string (YYYY-MM-DD).
+    :param end_date: End date string (YYYY-MM-DD).
+    :return: Tuple with SQL query and parameter tuple.
+    """
+    where_clause = sql.SQL("")
+    params: Tuple[Any, ...] = ()
+
+    if start_date and end_date:
+        where_clause = sql.SQL("WHERE date::timestamp >= %s::timestamp AND date::timestamp <= %s::timestamp")
+        params = (start_date, end_date + ' 23:59:59')
+
+    query = sql.SQL("SELECT COUNT(*) FROM {table} {where_clause}").format(
+        table=sql.Identifier("logs"),
+        where_clause=where_clause
+    )
+    return query, params
 
 
 def build_update_user_tokens_query(user_id: int, new_tokens: int, date_valid_until: Any) -> Tuple[sql.Composed, Tuple[Any, ...]]:
@@ -256,12 +305,21 @@ def build_update_user_tokens_query(user_id: int, new_tokens: int, date_valid_unt
     return query, (new_tokens, date_valid_until, user_id)
 
 
-def build_get_total_log_stats_query() -> Tuple[sql.Composed, Tuple[()]]:
+def build_get_total_log_stats_query(start_date: Optional[str] = None, end_date: Optional[str] = None) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
-    Builds a SQL query to get total log statistics.
+    Builds a SQL query to get total log statistics with optional date filtering.
 
-    :return: Tuple with SQL query and empty parameter tuple.
+    :param start_date: Start date string (YYYY-MM-DD).
+    :param end_date: End date string (YYYY-MM-DD).
+    :return: Tuple with SQL query and parameter tuple.
     """
+    where_clause = sql.SQL("")
+    params: Tuple[Any, ...] = ()
+
+    if start_date and end_date:
+        where_clause = sql.SQL("WHERE date::timestamp >= %s::timestamp AND date::timestamp <= %s::timestamp")
+        params = (start_date, end_date + ' 23:59:59')
+
     query = sql.SQL("""
         SELECT
             COALESCE(SUM({token_input}), 0) as total_input,
@@ -269,58 +327,87 @@ def build_get_total_log_stats_query() -> Tuple[sql.Composed, Tuple[()]]:
             COALESCE(SUM({cost}), 0.0) as total_cost,
             COUNT(*) as total_requests
         FROM {logs}
+        {where_clause}
     """).format(
         token_input=sql.Identifier("token_input"),
         token_output=sql.Identifier("token_output"),
         cost=sql.Identifier("cost"),
-        logs=sql.Identifier("logs")
+        logs=sql.Identifier("logs"),
+        where_clause=where_clause
     )
-    return query, ()
+    return query, params
 
 
-def build_get_daily_log_stats_query() -> Tuple[sql.Composed, Tuple[()]]:
+def build_get_daily_log_stats_query(
+    start_date: Optional[str] = None, end_date: Optional[str] = None
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
-    Builds a SQL query to get daily log statistics for the last 7 days.
+    Builds a SQL query to get daily log statistics for a specific date range.
+    If no dates provided, defaults to last 7 days.
 
-    :return: Tuple with SQL query and empty parameter tuple.
+    :param start_date: Start date string (YYYY-MM-DD).
+    :param end_date: End date string (YYYY-MM-DD).
+    :return: Tuple with SQL query and parameter tuple.
     """
+    
+    if start_date and end_date:
+        # User defined range
+        where_clause = sql.SQL("WHERE date::timestamp >= %s::timestamp AND date::timestamp <= %s::timestamp")
+        params = (start_date, end_date + ' 23:59:59') # Include full end day
+    else:
+        # Default last 7 days
+        where_clause = sql.SQL("WHERE date::timestamp >= CURRENT_DATE - INTERVAL '7 days'")
+        params = ()
+
     query = sql.SQL("""
         SELECT
             DATE(date::timestamp) as day,
             SUM({token_input}) as input_tokens,
             SUM({token_output}) as output_tokens
         FROM {logs}
-        WHERE date::timestamp >= CURRENT_DATE - INTERVAL '7 days'
+        {where_clause}
         GROUP BY DATE(date::timestamp)
         ORDER BY day
     """).format(
         token_input=sql.Identifier("token_input"),
         token_output=sql.Identifier("token_output"),
-        logs=sql.Identifier("logs")
+        logs=sql.Identifier("logs"),
+        where_clause=where_clause
     )
-    return query, ()
+    return query, params
 
 
-def build_get_top_users_by_token_usage_query() -> Tuple[sql.Composed, Tuple[()]]:
+def build_get_top_users_by_token_usage_query(start_date: Optional[str] = None, end_date: Optional[str] = None) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
-    Builds a SQL query to get top 5 users by token usage.
+    Builds a SQL query to get top 5 users by token usage with optional date filtering.
 
-    :return: Tuple with SQL query and empty parameter tuple.
+    :param start_date: Start date string (YYYY-MM-DD).
+    :param end_date: End date string (YYYY-MM-DD).
+    :return: Tuple with SQL query and parameter tuple.
     """
+    where_clause = sql.SQL("")
+    params: Tuple[Any, ...] = ()
+
+    if start_date and end_date:
+        where_clause = sql.SQL("WHERE l.date::timestamp >= %s::timestamp AND l.date::timestamp <= %s::timestamp")
+        params = (start_date, end_date + ' 23:59:59')
+
     query = sql.SQL("""
         SELECT
             u.username,
             SUM(l.token_input + l.token_output) as total_tokens
         FROM {logs} l
         LEFT JOIN {users} u ON l.user_id = u.id
+        {where_clause}
         GROUP BY u.username
         ORDER BY total_tokens DESC
         LIMIT 5
     """).format(
         logs=sql.Identifier("logs"),
-        users=sql.Identifier("users")
+        users=sql.Identifier("users"),
+        where_clause=where_clause
     )
-    return query, ()
+    return query, params
 
 
 def build_get_user_by_id_query(user_id: int) -> Tuple[sql.Composed, Tuple[int]]:
@@ -731,12 +818,20 @@ def build_insert_feedback_query(
 
 
 def build_get_feedback_for_admin_query(
+    limit: int, 
+    offset: int = 0, 
     source_filter: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
-    Builds a SQL query to retrieve feedback entries for the admin panel.
+    Builds a SQL query to retrieve feedback entries for the admin panel with pagination.
 
+    :param limit: Maximum number of entries.
+    :param offset: Offset number.
     :param source_filter: Optional source to filter by.
+    :param start_date: Start date string (YYYY-MM-DD).
+    :param end_date: End date string (YYYY-MM-DD).
     :return: Tuple of SQL query and parameters.
     """
     base_query = """
@@ -745,13 +840,23 @@ def build_get_feedback_for_admin_query(
         LEFT JOIN {logs_table} l ON f.log_id = l.id
     """
 
-    if source_filter:
-        base_query += " WHERE f.{col_source} = %s"
-        params = (source_filter,)
-    else:
-        params = ()
+    conditions = []
+    params: List[Any] = []
 
-    base_query += " ORDER BY f.timestamp DESC"
+    if source_filter:
+        conditions.append("f.{col_source} = %s")
+        params.append(source_filter)
+        
+    if start_date and end_date:
+        conditions.append("f.timestamp::timestamp >= %s::timestamp AND f.timestamp::timestamp <= %s::timestamp")
+        params.append(start_date)
+        params.append(end_date + ' 23:59:59')
+
+    if conditions:
+        base_query += " WHERE " + " AND ".join(conditions)
+
+    base_query += " ORDER BY f.timestamp DESC LIMIT %s OFFSET %s"
+    params.extend([limit, offset])
 
     query = sql.SQL(base_query).format(
         table=sql.Identifier("feedback"), 
@@ -759,11 +864,46 @@ def build_get_feedback_for_admin_query(
         col_source=sql.Identifier("source")
     )
 
-    return query, params
+    return query, tuple(params)
+
+
+def build_get_total_feedback_count_query(
+    source_filter: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to count total feedback entries.
+    """
+    base_query = "SELECT COUNT(*) FROM {table} f"
+    
+    conditions = []
+    params: List[Any] = []
+
+    if source_filter:
+        conditions.append("f.{col_source} = %s")
+        params.append(source_filter)
+        
+    if start_date and end_date:
+        conditions.append("f.timestamp::timestamp >= %s::timestamp AND f.timestamp::timestamp <= %s::timestamp")
+        params.append(start_date)
+        params.append(end_date + ' 23:59:59')
+
+    if conditions:
+        base_query += " WHERE " + " AND ".join(conditions)
+
+    query = sql.SQL(base_query).format(
+        table=sql.Identifier("feedback"),
+        col_source=sql.Identifier("source")
+    )
+
+    return query, tuple(params)
 
 
 def build_get_feedback_stats_query(
     source_filter: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to retrieve feedback statistics.
@@ -773,13 +913,20 @@ def build_get_feedback_stats_query(
     """
 
     where_clause = sql.SQL("")
-    params = ()
+    conditions = []
+    params: List[Any] = []
 
     if source_filter:
-        where_clause = sql.SQL("WHERE {col_source} = %s").format(
-            col_source=sql.Identifier("source")
-        )
-        params = (source_filter,)
+        conditions.append(sql.SQL("{col_source} = %s").format(col_source=sql.Identifier("source")))
+        params.append(source_filter)
+        
+    if start_date and end_date:
+        conditions.append(sql.SQL("timestamp::timestamp >= %s::timestamp AND timestamp::timestamp <= %s::timestamp"))
+        params.append(start_date)
+        params.append(end_date + ' 23:59:59')
+
+    if conditions:
+        where_clause = sql.SQL("WHERE ") + sql.SQL(" AND ").join(conditions)
 
     query = sql.SQL("""
         SELECT 
@@ -794,7 +941,7 @@ def build_get_feedback_stats_query(
         where_clause=where_clause,
     )
 
-    return query, params
+    return query, tuple(params)
 
 
 def build_get_feedback_sources_query() -> Tuple[sql.Composed, Tuple[()]]:
@@ -813,6 +960,8 @@ def build_get_feedback_sources_query() -> Tuple[sql.Composed, Tuple[()]]:
 
 def build_get_feedback_model_stats_query(
     source_filter: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to retrieve feedback counts grouped by model.
@@ -823,10 +972,20 @@ def build_get_feedback_model_stats_query(
         LEFT JOIN {logs_table} l ON f.log_id = l.id
     """
     
-    params = ()
+    conditions = []
+    params: List[Any] = []
+    
     if source_filter:
-        base_query += " WHERE f.{col_source} = %s"
-        params = (source_filter,)
+        conditions.append("f.{col_source} = %s")
+        params.append(source_filter)
+        
+    if start_date and end_date:
+        conditions.append("f.timestamp::timestamp >= %s::timestamp AND f.timestamp::timestamp <= %s::timestamp")
+        params.append(start_date)
+        params.append(end_date + ' 23:59:59')
+        
+    if conditions:
+        base_query += " WHERE " + " AND ".join(conditions)
         
     base_query += " GROUP BY l.model ORDER BY count DESC"
     
@@ -836,6 +995,6 @@ def build_get_feedback_model_stats_query(
         col_source=sql.Identifier("source")
     )
     
-    return query, params
+    return query, tuple(params)
 
 
