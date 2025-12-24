@@ -123,6 +123,7 @@ AUDIO_MODEL = os.environ.get("AUDIO_MODEL")
 AUDIO_PROVIDER = os.environ.get("AUDIO_PROVIDER")
 COMPLETION_MODEL = os.environ.get("COMPLETION_MODEL")
 COMPLETION_MODEL_PROVIDER = os.environ.get("COMPLETION_MODEL_PROVIDER")
+COMPLETION_MODEL_AGENT_CHAT = os.environ.get("COMPLETION_MODEL_AGENT_CHAT")
 COMPLETION_EMBEDDING_MODEL = os.environ.get("COMPLETION_EMBEDDING_MODEL")
 COMPLETION_EMBEDDING_MODEL_PROVIDER = os.environ.get(
     "COMPLETION_EMBEDDING_MODEL_PROVIDER"
@@ -846,9 +847,26 @@ def agentchat() -> Response | tuple[Response, int]:
 
         # === MODEL AND TOOL INITIALIZATION ===
 
+        # Determine the API key based on the provider
+        provider_env_var_map = {
+            "Deepinfra": "DEEPINFRA_API_KEY",
+            "Mistral": "MISTRAL_API_KEY",
+            "Google": "GOOGLE_API_KEY",
+            "OpenAI": "OPENAI_API_KEY",
+            "Anthropic": "ANTHROPIC_API_KEY",
+            "Groq": "GROQ_API_KEY",
+        }
+        
+        # Default fallback to standard naming convention {PROVIDER}_API_KEY
+        env_var_name = provider_env_var_map.get(provider, f"{provider.upper()}_API_KEY")
+        provider_api_key = os.getenv(env_var_name)
+        
+        # If specific key not found, try fallback to DEEPINFRA if provider is Deepinfra (redundant but safe) 
+        # or logging a warning could be useful, but for now we follow the pattern.
+
         llm = LiteLLMModel(
             model_id=model_id_for_llm, 
-            api_key=os.getenv("DEEPINFRA_API_KEY"),
+            api_key=provider_api_key,
             temperature=0,
         )        
         
@@ -1351,6 +1369,7 @@ def admin_dashboard():
         "AUDIO_PROVIDER": AUDIO_PROVIDER,
         "COMPLETION_MODEL": COMPLETION_MODEL,
         "COMPLETION_MODEL_PROVIDER": COMPLETION_MODEL_PROVIDER,
+        "COMPLETION_MODEL_AGENT_CHAT": COMPLETION_MODEL_AGENT_CHAT, 
         "COMPLETION_EMBEDDING_MODEL": COMPLETION_EMBEDDING_MODEL,
         "COMPLETION_EMBEDDING_MODEL_PROVIDER": COMPLETION_EMBEDDING_MODEL_PROVIDER,
         "WHISPER_MODEL": WHISPER_MODEL,
@@ -1580,4 +1599,4 @@ def health():
 
 
 if __name__ == "__main__":
-    app.run(debug=True,port=5000)
+    app.run(debug=True,port=8000)
