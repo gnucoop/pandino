@@ -5,6 +5,7 @@ import pandas as pd
 
 from datachat.engine_interface import DataChatEngine
 from datachat.pandasai_engine import PandasAIEngine
+from datachat.smolagents_engine import SmolagentsEngine
 
 
 def create_engine(
@@ -30,6 +31,14 @@ def create_engine(
             llm=llm,
             data=data,
             open_charts=open_charts,
+        )
+
+    if normalized == "smolagents":
+        return SmolagentsEngine(
+            api_key=api_key,
+            user_name=user_name,
+            llm=llm,
+            data=data,
         )
 
     raise ValueError(f"Unsupported engine_type: {engine_type!r}")

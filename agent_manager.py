@@ -1,3 +1,4 @@
+import os
 from datachat.engine_factory import create_engine
 from datachat.engine_interface import DataChatEngine
 
@@ -20,8 +21,10 @@ def createAgent(api_key, data, llm, user_name, open_charts=False) -> DataChatEng
     if activeEngines.get(key):
         return activeEngines.get(key)
 
+    engine_type = os.getenv("DATACHAT_ENGINE", "pandasai")
+    
     engine = create_engine(
-        engine_type="pandasai",
+        engine_type= engine_type,
         api_key=key,
         user_name=user_name,
         llm=llm,
