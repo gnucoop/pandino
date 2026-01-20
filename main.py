@@ -1,7 +1,7 @@
 # === Built-in ===
 import os
+os.environ["MPLBACKEND"] = "Agg"
 import base64
-import math
 import secrets
 import tempfile
 from datetime import datetime, timedelta
@@ -44,8 +44,10 @@ import psutil
 
 # === Local modules ===
 from agent_manager import getAgent, createAgent, deleteAgent
-from file_manager import isImageFilePath, fileToBase64
 from retriever_tool import RetrieverTool
+from datachat.output_normalizer import normalize_datachat_response
+from datachat.dataset_loader import load_csv_to_dataframe
+from datachat.bootstrap import build_bootstrap_question
 from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
 from database_pg import (
@@ -176,19 +178,7 @@ def assert_valid_api_key(api_key: str, user_email: str) -> None:
             abort(403, description="API key expired")
         else:
             abort(403, description="Invalid API key")
-
-
-# Recursively replace NaN with None in dictionaries or lists.
-def replace_nan(data: Any) -> Any:
-    if isinstance(data, dict):
-        return {k: replace_nan(v) for k, v in data.items()}
-    elif isinstance(data, list):
-        return [replace_nan(item) for item in data]
-    elif isinstance(data, float) and math.isnan(data):
-        return None
-    else:
-        return data
-
+            
 
 # Define a route for the '/edittokens' endpoint that accepts POST requests
 @app.route("/edittokens", methods=["POST"])
@@ -502,9 +492,11 @@ def startChat() -> Response | tuple[Response, int]:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
     # Read the data from the provided CSV file
-    data = pd.read_csv(io.StringIO(request_file.stream.read().decode('utf-8')), sep=",")
+    data = load_csv_to_dataframe(request_file)
+    
     # Initialize the language model based on the provided type
     llm = choose_llm(llm_type, model_name)
+    
     # Initialize the agent with the data and configuration
     try:
         agent = createAgent(api_key, data, llm, user_name)
@@ -515,23 +507,7 @@ def startChat() -> Response | tuple[Response, int]:
         agentResponse: dict[str, Any] = {"Agent active": str(agent.conversation_id)}
 
         # Language-aware prompt generation
-        language_instruction = (
-            f"Please answer using the official language of the country corresponding to the following ISO 3166-1 alpha-3 code: {lang}. "
-            f"If you can't match the language, please answer in English."
-        )
-        
-        default_startchat_prompt = textwrap.dedent("""\
-            This is a pandas dataframe: {data}
-            Try to understand the nature of the data and suggest me what kind of analysis should I ask for.
-            Explain in details your answers and make any suggestions about possible questions that I could ask.
-            Do not suggest any python code.
-            Please reply in a readable HTML format, with no asterisks and adding a line break after each paragraph.
-        """)
-        
-        base_prompt_template = load_prompt("start_chat_system", default_text=default_startchat_prompt)
-        base_prompt = render_prompt(base_prompt_template, data=data)
-        
-        question = f"{language_instruction}\n\n{base_prompt}"
+        question = build_bootstrap_question(data, lang)
         
         logging.info(f"Invoking startdatachat agent with language={lang}, user={user_email}")
         
@@ -596,40 +572,11 @@ def dataChat() -> Response | tuple[Response, int]:
     response = agent.chat(chat)
     # explanation = agent.explain()
 
-    # Convert the response to a DataFrame if it's a list
-    if isinstance(response, list):
-        try:
-            response = pd.DataFrame(response)
-        except Exception as e:
-            return (
-                jsonify({"error": f"Failed to convert list to DataFrame: {str(e)}"}),
-                500,
-            )
+    try:
+        response_dict = normalize_datachat_response(response)
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
 
-    # Convert the response to a dictionary
-    if isinstance(response, pd.DataFrame):
-        response_dict = {
-            "type": "dataframe",
-            "value": replace_nan(response.to_dict(orient="records")),
-        }
-    elif isinstance(response, dict):
-        response_dict = replace_nan(response)
-        response_dict.update({"type": "dict"})
-    else:
-        response_dict = {"type": type(response).__name__, "value": str(response)}
-        if response_dict and response_dict["value"]:
-            # Handle string type response with plot
-            if response_dict["type"] == "string" and "plot" in response_dict:
-                plot_path = response_dict.get("plot")
-                if plot_path and os.path.exists(plot_path):
-                    response_dict["type"] = "text_and_image"
-                    response_dict["image"] = fileToBase64(plot_path)
-                    # Remove the plot path from the response
-                    del response_dict["plot"]
-            # Convert image file path in value to a base64 serialized file
-            elif isImageFilePath(response_dict["value"]):
-                response_dict["type"] = "image"
-                response_dict["value"] = fileToBase64(response_dict["value"])
 
     # Spends User's tokens
     edit_tokens(user_email, -int(DATACHAT_TOKEN_COST))
