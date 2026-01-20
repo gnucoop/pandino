@@ -1,14 +1,13 @@
-from datachat.pandasai_engine import PandasAIEngine
-from flask import jsonify
-import os
-import shutil
+from datachat.engine_factory import create_engine
+from datachat.engine_interface import DataChatEngine
+
 
 # Dictionary of active agents associated to an Api Key
-activeEngines: dict[str, PandasAIEngine] = {}
+activeEngines: dict[str, DataChatEngine] = {}
 
 
 # Retrieves an active agent associated with an Api Key
-def getAgent(api_key) -> PandasAIEngine | None:
+def getAgent(api_key) -> DataChatEngine | None:
     if not api_key:
         return None
     return activeEngines.get(str(api_key))
@@ -16,12 +15,13 @@ def getAgent(api_key) -> PandasAIEngine | None:
 
 
 # Retrieves an active agents or creates a new one, adding it to the activeAgents dictionary.
-def createAgent(api_key, data, llm, user_name, open_charts=False) -> PandasAIEngine | None:
+def createAgent(api_key, data, llm, user_name, open_charts=False) -> DataChatEngine | None:
     key = str(api_key)
     if activeEngines.get(key):
         return activeEngines.get(key)
 
-    engine = PandasAIEngine(
+    engine = create_engine(
+        engine_type="pandasai",
         api_key=key,
         user_name=user_name,
         llm=llm,
@@ -33,7 +33,7 @@ def createAgent(api_key, data, llm, user_name, open_charts=False) -> PandasAIEng
 
 
 # Deletes an agent from active agents.
-def deleteAgent(api_key, user_name) -> PandasAIEngine | None:
+def deleteAgent(api_key, user_name) -> DataChatEngine | None:
     key = str(api_key)
     engine = activeEngines.get(key)
     if not api_key or not engine or not user_name:
