@@ -28,7 +28,6 @@ from flask import (
 )
 from flask_cors import CORS
 import pandas as pd
-from pandasai import Agent
 from smolagents import CodeAgent
 from smolagents.models import LiteLLMModel
 import matplotlib
@@ -47,7 +46,6 @@ from agent_manager import getAgent, createAgent, deleteAgent
 from retriever_tool import RetrieverTool
 from datachat.output_normalizer import normalize_datachat_response
 from datachat.dataset_loader import load_csv_to_dataframe
-from datachat.bootstrap import build_bootstrap_question
 from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
 from database_pg import (
@@ -437,11 +435,12 @@ def endChat() -> Response | tuple[Response, int]:
     if not user_email:
         return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
 
-    deletedAgent = deleteAgent(api_key, user_name)
-    if deletedAgent != None and deletedAgent.conversation_id:
-        return jsonify({"Agent deleted succesfully": deletedAgent.conversation_id})
+    deletedEngine = deleteAgent(api_key, user_name)
+    if deletedEngine is not None:
+        return jsonify({"Agent deleted succesfully": "active"})
     else:
         return jsonify({"Agent was not active for this key": api_key})
+
 
 
 # Define a route for the '/startchat' endpoint that accepts POST requests
@@ -499,21 +498,19 @@ def startChat() -> Response | tuple[Response, int]:
     
     # Initialize the agent with the data and configuration
     try:
-        agent = createAgent(api_key, data, llm, user_name)
+        engine = createAgent(api_key, data, llm, user_name)
 
-        if agent is None:
+        if engine is None:
             return jsonify({"error": "Agent creation failed"}), 500
 
-        agentResponse: dict[str, Any] = {"Agent active": str(agent.conversation_id)}
+        agentResponse: dict[str, Any] = {"Agent active": "active"}
 
         # Language-aware prompt generation
-        question = build_bootstrap_question(data, lang)
-        
-        logging.info(f"Invoking startdatachat agent with language={lang}, user={user_email}")
-        
-        suggestionsResponse = llm.invoke(question)
-        if suggestionsResponse and suggestionsResponse.content is not None:
-            agentResponse.update({"suggested_questions": suggestionsResponse.content})
+        logging.info(f"Invoking startdatachat engine bootstrap with language={lang}, user={user_email}")
+
+        bootstrap = engine.bootstrap(lang)
+        if bootstrap.suggested_questions_html is not None:
+            agentResponse["suggested_questions"] = bootstrap.suggested_questions_html
 
         # Spends User's tokens
         edit_tokens(user_email, -int(DATACHAT_TOKEN_COST))
@@ -544,7 +541,8 @@ def dataChat() -> Response | tuple[Response, int]:
         return jsonify({"error": "Missing JSON body"}), 400
 
     chat = request.json.get("chat")
-    agent: Agent | None = getAgent(api_key)
+    
+    engine = getAgent(api_key)
 
     # Check if the Chat parameter is present
     if not chat:
@@ -555,7 +553,7 @@ def dataChat() -> Response | tuple[Response, int]:
         return jsonify({"error": "Missing User email"}), 400
 
     # Check if the Agent is active
-    if not agent:
+    if not engine:
         return jsonify({"error": "Agent not active for this Api Key"}), 400
 
     # Checks if the User's tokens are enough for this operation
@@ -569,14 +567,12 @@ def dataChat() -> Response | tuple[Response, int]:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
     # Perform the chat operation and get the response and explanation
-    response = agent.chat(chat)
-    # explanation = agent.explain()
+    response = engine.chat(chat)
 
     try:
         response_dict = normalize_datachat_response(response)
     except RuntimeError as e:
         return jsonify({"error": str(e)}), 500
-
 
     # Spends User's tokens
     edit_tokens(user_email, -int(DATACHAT_TOKEN_COST))
