@@ -22,6 +22,57 @@ def normalize_datachat_response(response: Any) -> dict[str, Any]:
     Normalize PandasAI / pandas outputs into the exact response_dict structure
     currently returned by /datachat (AS-IS).
     """
+    
+    # --- Contract mode (new engines) ---
+    if isinstance(response, dict) and "kind" in response:
+        kind = str(response.get("kind") or "").strip().lower()
+
+        if kind == "text":
+            text = response.get("text", "")
+            # Per restare AS-IS, trattiamo come stringa
+            return {"type": "str", "value": str(text)}
+
+        if kind == "error":
+            message = response.get("message", "")
+            return {"type": "str", "value": str(message)}
+
+        if kind == "image_path":
+            path = response.get("path")
+            if isinstance(path, str) and isImageFilePath(path):
+                return {"type": "image", "value": fileToBase64(path)}
+            # fallback conservativo
+            return {"type": "str", "value": str(path)}
+
+        if kind == "table":
+            data = response.get("data")
+            # accettiamo DataFrame o records
+            if isinstance(data, pd.DataFrame):
+                return {
+                    "type": "dataframe",
+                    "value": replace_nan(data.to_dict(orient="records")),
+                }
+            if isinstance(data, list):
+                try:
+                    df = pd.DataFrame(data)
+                    return {
+                        "type": "dataframe",
+                        "value": replace_nan(df.to_dict(orient="records")),
+                    }
+                except Exception as e:
+                    raise RuntimeError(f"Failed to convert list to DataFrame: {str(e)}") from e
+
+            if isinstance(data, dict):
+                # caso raro: tabella già serializzata
+                return {"type": "dict", **replace_nan(data)}
+
+            return {"type": "str", "value": str(data)}
+
+        # kind sconosciuto: fallback conservativo
+        return {"type": "dict", **replace_nan(response)}
+
+
+    # --- (old version) ---
+
     # 1) list -> DataFrame (tentativo)
     if isinstance(response, list):
         try:
