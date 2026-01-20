@@ -1,61 +1,49 @@
-from pandasai import Agent
+from datachat.pandasai_engine import PandasAIEngine
 from flask import jsonify
 import os
 import shutil
 
 # Dictionary of active agents associated to an Api Key
-activeAgents = {}
+activeEngines: dict[str, PandasAIEngine] = {}
 
 
 # Retrieves an active agent associated with an Api Key
-def getAgent(api_key) -> Agent | None:
+def getAgent(api_key) -> PandasAIEngine | None:
     if not api_key:
         return None
-    else:
-        return activeAgents.get(api_key)
+    return activeEngines.get(str(api_key))
+
 
 
 # Retrieves an active agents or creates a new one, adding it to the activeAgents dictionary.
-def createAgent(api_key, data, llm, user_name, open_charts=False) -> Agent | None:
-    string_api_key = str(api_key)
-    print(f"Creating Agent: {string_api_key}")
-    if activeAgents.get(string_api_key):
-        print("Retrieving Agent...")
-        return activeAgents.get(string_api_key)
-    else:
-        print("Generating new Agent...")
-        agentConfig = {
-            "llm": llm,
-            "open_charts": open_charts,
-            "save_charts": True,
-            "save_charts_path": f"exports/charts/{user_name}",
-            "custom_whitelisted_dependencies": ["tabulate"]
-        }
-        agent = Agent(data, config=agentConfig)
-        activeAgents.update({string_api_key: agent})
-        return agent
+def createAgent(api_key, data, llm, user_name, open_charts=False) -> PandasAIEngine | None:
+    key = str(api_key)
+    if activeEngines.get(key):
+        return activeEngines.get(key)
+
+    engine = PandasAIEngine(
+        api_key=key,
+        user_name=user_name,
+        llm=llm,
+        data=data,
+        open_charts=open_charts,
+    )
+    activeEngines[key] = engine
+    return engine
 
 
 # Deletes an agent from active agents.
-def deleteAgent(api_key, user_name) -> Agent | None:
-    string_api_key = str(api_key)
-    agent = activeAgents.get(string_api_key)
-    if not api_key or not agent or not user_name:
-        return
-    elif agent:
-        folderPath = f"exports/charts/{user_name}"
-        if os.path.exists(folderPath):
-            shutil.rmtree(folderPath, ignore_errors=True)
-        else:
-            print("Path does not exist")
-        return activeAgents.pop(string_api_key)
+def deleteAgent(api_key, user_name) -> PandasAIEngine | None:
+    key = str(api_key)
+    engine = activeEngines.get(key)
+    if not api_key or not engine or not user_name:
+        return None
+
+    engine.close()
+    return activeEngines.pop(key)
 
 
 # Lists all active agents
 def listAgents():
-    def agentConvId(agent: Agent):
-        return agent.conversation_id
+    return {k: "engine_active" for k in activeEngines.keys()}
 
-    activeAgentsMap = {k: agentConvId(v) for k, v in activeAgents.items()}
-    print("Listing Agents...")
-    return activeAgentsMap
