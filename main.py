@@ -46,6 +46,7 @@ from agent_manager import getAgent, createAgent, deleteAgent
 from retriever_tool import RetrieverTool
 from datachat.output_normalizer import normalize_datachat_response
 from datachat.dataset_loader import load_csv_to_dataframe
+from datachat.engine_output_adapter import adapt_engine_output
 from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
 from database_pg import (
@@ -568,6 +569,7 @@ def dataChat() -> Response | tuple[Response, int]:
 
     # Perform the chat operation and get the response and explanation
     response = engine.chat(chat)
+    response = adapt_engine_output(response)
 
     try:
         response_dict = normalize_datachat_response(response)
