@@ -8,6 +8,7 @@ import pandas as pd
 from smolagents import CodeAgent, LiteLLMModel
 from datachat.bootstrap import build_bootstrap_question
 from datachat.engine_interface import DataChatEngine, EngineBootstrapResult
+from datachat.tools.sample_rows_tool import SampleRowsTool
 from llm.litellm_factory import build_litellm_model
 
 
@@ -51,10 +52,10 @@ class SmolagentsEngine(DataChatEngine):
         self._model = model
         
         self._agent = CodeAgent(
-            tools=[],
+            tools=[SampleRowsTool(self.data)],
             model=model,
             max_steps=2,
-            additional_authorized_imports=[],
+            additional_authorized_imports=["json"],
         )
 
 
@@ -118,9 +119,21 @@ class SmolagentsEngine(DataChatEngine):
             "- If the user asks for a plot or a table, you MAY return a structured table "
             "as described below, or describe what would be shown.\n"
             "- Keep answers concise and concrete.\n\n"
+            "TOOLS:\n"
+            "- You have access to a tool named 'sample_rows'.\n"
+            "- To call it, use: sample_rows(n=<int>, columns=[\"col1\",\"col2\",...]).\n"
+            "- If the user asks to see example rows / a preview / 'show me N rows' / a small table preview, "
+            "you MUST call 'sample_rows' and use its output as the table data.\n"
+            "- Do NOT invent rows. Do NOT fabricate values.\n"
+            "- If the user asks for a table that would require filtering/aggregation beyond a preview, "
+            "do NOT fabricate data; answer in text and explain that only sample previews are available for tables right now.\n"
+            "- After calling the tool (if needed), you MUST return the final answer as JSON using final_answer(...).\n\n"
+            "- When using the output of a tool, you MUST serialize it using json.dumps(...) before passing it to final_answer.\n\n"
+            "- NEVER use str(...) to serialize tool outputs.\n\n"
             "OUTPUT FORMAT (MANDATORY):\n"
             "- You MUST respond by calling <code>final_answer(...)</code>.\n"
             "- The argument of final_answer MUST be a JSON string.\n"
+            "- The JSON string MUST start with '{' and end with '}'.\n"
             "- Return ONLY this code block, nothing else.\n\n"
             "- All string values MUST be valid JSON strings (escape inner quotes using \\\" ).\n\n"
             "Valid JSON schemas:\n"
