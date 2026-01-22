@@ -2,10 +2,11 @@ import os
 import json
 from dataclasses import dataclass, field
 from typing import Any
+import logging
 
 import pandas as pd
-from smolagents import CodeAgent
-
+from smolagents import CodeAgent, LiteLLMModel
+from datachat.bootstrap import build_bootstrap_question
 from datachat.engine_interface import DataChatEngine, EngineBootstrapResult
 from llm.litellm_factory import build_litellm_model
 
@@ -23,6 +24,7 @@ class SmolagentsEngine(DataChatEngine):
     data: pd.DataFrame
 
     _agent: CodeAgent | None = field(default=None, init=False, repr=False)
+    _model: LiteLLMModel | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         
@@ -30,6 +32,7 @@ class SmolagentsEngine(DataChatEngine):
         configured_model = os.getenv("DATACHAT_MODEL", "").strip()
 
         if not configured_model:
+            self._model = None
             self._agent = None
             return
 
@@ -41,9 +44,12 @@ class SmolagentsEngine(DataChatEngine):
             )
         except Exception:
             # Conservative: do not crash engine creation. We'll return a user-facing error in chat().
+            self._model = None
             self._agent = None
             return
 
+        self._model = model
+        
         self._agent = CodeAgent(
             tools=[],
             model=model,
@@ -51,11 +57,40 @@ class SmolagentsEngine(DataChatEngine):
             additional_authorized_imports=[],
         )
 
-        
 
     def bootstrap(self, lang: str) -> EngineBootstrapResult:
-        # For now: no real bootstrap. We keep it explicit and safe.
-        return EngineBootstrapResult(suggested_questions_html=None)
+        """
+        1:1 con pandasai bootstrap:
+        - usa build_bootstrap_question(data, lang)
+        - chiama il model e restituisce HTML (o comunque testo) come suggested_questions_html
+        """
+        question = build_bootstrap_question(self.data, lang)
+
+        if self._model is None:
+            logging.error("[datachat][smolagents][bootstrap] model is not configured")
+            return EngineBootstrapResult(suggested_questions_html=None)
+
+        try:
+            msg = [{"role": "user", "content": question}]
+            out = self._model(msg)
+
+            if isinstance(out, str):
+                content = out
+            else:
+                content = getattr(out, "content", None)
+                if content is None:
+                    content = str(out)
+
+            html = str(content).strip()
+            if not html:
+                logging.error("[datachat][smolagents][bootstrap] empty content")
+                return EngineBootstrapResult(suggested_questions_html=None)
+
+            return EngineBootstrapResult(suggested_questions_html=html)
+
+        except Exception as e:
+            logging.exception(f"[datachat][smolagents][bootstrap] model call failed: {e}")
+            return EngineBootstrapResult(suggested_questions_html=None)
 
     def chat(self, message: str) -> Any:
         if self._agent is None:
