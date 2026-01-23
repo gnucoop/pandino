@@ -9,6 +9,9 @@ from smolagents import CodeAgent, LiteLLMModel
 from datachat.bootstrap import build_bootstrap_question
 from datachat.engine_interface import DataChatEngine, EngineBootstrapResult
 from datachat.tools.sample_rows_tool import SampleRowsTool
+from datachat.tools.top_rows_tool import TopRowsTool
+from datachat.tools.filter_rows_tool import FilterRowsTool
+from datachat.tools.aggregate_tool import AggregateTool
 from llm.litellm_factory import build_litellm_model
 
 
@@ -52,7 +55,12 @@ class SmolagentsEngine(DataChatEngine):
         self._model = model
         
         self._agent = CodeAgent(
-            tools=[SampleRowsTool(self.data)],
+            tools=[
+                SampleRowsTool(self.data), 
+                TopRowsTool(self.data),
+                FilterRowsTool(self.data),
+                AggregateTool(self.data),
+            ],
             model=model,
             max_steps=2,
             additional_authorized_imports=["json"],
@@ -120,15 +128,50 @@ class SmolagentsEngine(DataChatEngine):
             "as described below, or describe what would be shown.\n"
             "- Keep answers concise and concrete.\n\n"
             "TOOLS:\n"
-            "- You have access to a tool named 'sample_rows'.\n"
-            "- To call it, use: sample_rows(n=<int>, columns=[\"col1\",\"col2\",...]).\n"
-            "- If the user asks to see example rows / a preview / 'show me N rows' / a small table preview, "
-            "you MUST call 'sample_rows' and use its output as the table data.\n"
+            "- You have access to three tools: 'sample_rows', 'top_rows', and 'filter_rows'.\n\n"
+
+            "1) sample_rows\n"
+            "- Use it for simple previews / examples.\n"
+            "- Call: sample_rows(n=<int>, columns=[\"col1\",\"col2\",...]).\n"
+            "- Use when the user asks: 'show me N rows', 'preview', 'example rows', 'first rows'.\n\n"
+
+            "2) top_rows\n"
+            "- Use it ONLY when the user asks for ordering/ranking such as: "
+            "'top', 'highest', 'lowest', 'best', 'worst', 'most', 'least', "
+            "'righe con X più alto/più basso'.\n"
+            "- Call: top_rows(sort_by=\"<column>\", n=<int>, ascending=<bool>, columns=[...]).\n"
+            "- Example: top_rows(sort_by=\"Rate visita\", n=5, ascending=False, "
+            "columns=[\"Nome e Cognome\",\"Rate visita\"]).\n\n"
+
+            "3) filter_rows\n"
+            "- Use it when the user asks for rows where a column equals a value, e.g.: "
+            "\"Problemi = 'Lavoro'\", \"MIgrante = True\", \"case_code = 'XYZ'\".\n"
+            "- Call: filter_rows(where_col=\"<column>\", value=\"<value>\", n=<int>, columns=[...]).\n"
+            "- Example: filter_rows(where_col=\"Problemi\", value=\"Lavoro\", n=5, "
+            "columns=[\"Nome e Cognome\",\"Problemi\",\"Rate visita\"]).\n"
+            "- IMPORTANT: for filter requests you MUST use filter_rows (do NOT filter previews manually).\n\n"
+
+            "4) aggregate\n"
+            "- Use it ONLY when the user asks for summaries/aggregations, such as:\n"
+            "  * counts (\"quanti\", \"conteggio\", \"numero di\")\n"
+            "  * averages/means (\"media\")\n"
+            "  * sums (\"somma\", \"totale\")\n"
+            "  * group-by summaries (\"per ogni\", \"raggruppa per\")\n"
+            "- Call: aggregate(group_by=[\"<col>\", ...], op=\"count|mean|sum\", metric=\"<col or null>\", n=<int>, ascending=<bool>). \n"
+            "- Rules:\n"
+            "  * For op=\"count\": metric MUST be null.\n"
+            "  * For op=\"mean\" or op=\"sum\": metric MUST be a numeric column.\n"
+            "  * group_by can be empty/null only if the user asks for a single overall number.\n"
+            "- Examples:\n"
+            "  * \"Quanti casi per Problemi?\" -> aggregate(group_by=[\"Problemi\"], op=\"count\", metric=null, n=10, ascending=False)\n"
+            "  * \"Media Rate visita per Problemi\" -> aggregate(group_by=[\"Problemi\"], op=\"mean\", metric=\"Rate visita\", n=10, ascending=False)\n\n"
+
+            "GENERAL TOOL RULES:\n"
             "- Do NOT invent rows. Do NOT fabricate values.\n"
-            "- If the user asks for a table that would require filtering/aggregation beyond a preview, "
-            "do NOT fabricate data; answer in text and explain that only sample previews are available for tables right now.\n"
-            "- After calling the tool (if needed), you MUST return the final answer as JSON using final_answer(...).\n\n"
-            "- When using the output of a tool, you MUST serialize it using json.dumps(...) before passing it to final_answer.\n\n"
+            "- If the user requests a table that requires operations NOT supported by these tools, "
+            "answer in text explaining the limitation.\n"
+            "- After calling a tool, you MUST return the final answer using final_answer(...).\n"
+            "- When using tool outputs, serialize using json.dumps(...).\n"
             "- NEVER use str(...) to serialize tool outputs.\n\n"
             "OUTPUT FORMAT (MANDATORY):\n"
             "- You MUST respond by calling <code>final_answer(...)</code>.\n"
@@ -166,6 +209,44 @@ class SmolagentsEngine(DataChatEngine):
 
         raw = str(out).strip()
 
+
+        def _unwrap_nested_table(obj: dict[str, Any]) -> dict[str, Any]:
+            """
+            Fix common LLM mistake:
+            {"kind":"table","data": {"kind":"table","data":[...]}}
+            -> {"kind":"table","data":[...]}
+            """
+            try:
+                kind = str(obj.get("kind") or "").strip().lower()
+                if kind != "table":
+                    return obj
+
+                data = obj.get("data")
+
+                # Case A: data is already correct
+                if isinstance(data, list):
+                    return obj
+
+                # Case B: data is a nested payload dict
+                if isinstance(data, dict):
+                    nested_kind = str(data.get("kind") or "").strip().lower()
+                    nested_data = data.get("data")
+
+                    # {"data": {"kind":"table","data":[...]}}
+                    if nested_kind == "table" and isinstance(nested_data, list):
+                        obj["data"] = nested_data
+                        return obj
+
+                    # {"data": {"data":[...]}}  (no nested kind)
+                    if isinstance(nested_data, list):
+                        obj["data"] = nested_data
+                        return obj
+
+                return obj
+            except Exception:
+                return obj
+
+
         def _parse_kind_payload(s: str) -> dict[str, Any] | None:
             try:
                 obj = json.loads(s)
@@ -178,7 +259,7 @@ class SmolagentsEngine(DataChatEngine):
         # 1) Tentativo diretto
         parsed = _parse_kind_payload(raw)
         if parsed is not None:
-            return parsed
+            return _unwrap_nested_table(parsed)
 
         # 2) Se è una stringa JSON "annidata" (es. "\"{...}\""), un json.loads in più la sblocca
         try:
@@ -186,7 +267,7 @@ class SmolagentsEngine(DataChatEngine):
             if isinstance(unwrapped, str):
                 parsed = _parse_kind_payload(unwrapped)
                 if parsed is not None:
-                    return parsed
+                    return _unwrap_nested_table(parsed)
         except Exception:
             pass
 
@@ -197,7 +278,7 @@ class SmolagentsEngine(DataChatEngine):
             candidate = raw[start : end + 1]
             parsed = _parse_kind_payload(candidate)
             if parsed is not None:
-                return parsed
+                return _unwrap_nested_table(parsed)
 
         # 4) Ultimo fallback: testo
         return {"kind": "text", "text": raw, "format": "plain"}
