@@ -12,8 +12,10 @@ from datachat.tools.sample_rows_tool import SampleRowsTool
 from datachat.tools.top_rows_tool import TopRowsTool
 from datachat.tools.filter_rows_tool import FilterRowsTool
 from datachat.tools.aggregate_tool import AggregateTool
+from datachat.tools.plot_tool import PlotTool
 from llm.litellm_factory import build_litellm_model
 
+plots_dir = os.getenv("DATACHAT_PLOTS_DIR", "/tmp/datachat_plots")
 
 @dataclass
 class SmolagentsEngine(DataChatEngine):
@@ -60,6 +62,7 @@ class SmolagentsEngine(DataChatEngine):
                 TopRowsTool(self.data),
                 FilterRowsTool(self.data),
                 AggregateTool(self.data),
+                PlotTool(self.data, output_dir=plots_dir),
             ],
             model=model,
             max_steps=2,
@@ -128,7 +131,7 @@ class SmolagentsEngine(DataChatEngine):
             "as described below, or describe what would be shown.\n"
             "- Keep answers concise and concrete.\n\n"
             "TOOLS:\n"
-            "- You have access to three tools: 'sample_rows', 'top_rows', and 'filter_rows'.\n\n"
+            "- You have access to five tools: 'sample_rows', 'top_rows', 'filter_rows', 'aggregate', and 'plot'.\n\n"
 
             "1) sample_rows\n"
             "- Use it for simple previews / examples.\n"
@@ -166,13 +169,29 @@ class SmolagentsEngine(DataChatEngine):
             "  * \"Quanti casi per Problemi?\" -> aggregate(group_by=[\"Problemi\"], op=\"count\", metric=null, n=10, ascending=False)\n"
             "  * \"Media Rate visita per Problemi\" -> aggregate(group_by=[\"Problemi\"], op=\"mean\", metric=\"Rate visita\", n=10, ascending=False)\n\n"
 
+            "5) plot\n"
+            "- Use it ONLY when the user asks for a chart/graph/plot/istogramma.\n"
+            "- Supported kinds: 'hist', 'bar', 'line'.\n"
+            "- Call: plot(kind=\"bar|hist|line\", x=\"<column>\", y=\"<column or null>\", agg=\"mean|sum\", n=<int>, bins=<int>, title=\"<optional>\").\n"
+            "- Canonical examples:\n"
+            "  * Histogram (distribution): plot(kind=\"hist\", x=\"Rate visita\", bins=20, title=\"Distribuzione Rate visita\")\n"
+            "  * Bar counts by category: plot(kind=\"bar\", x=\"Problemi\", y=null, n=20, title=\"Casi per Problemi\")\n"
+            "- IMPORTANT:\n"
+            "  * If the user asks for a plot, you MUST call plot(...) at least once BEFORE answering.\n" 
+            "  * If plot(...) returns {\"kind\":\"error\",...}, you MUST return THAT EXACT JSON as final_answer(json.dumps(result)). Do NOT rewrite it as text.\n" 
+            "  * Always serialize tool outputs with json.dumps(...). NEVER use str(...).\n" 
+            "  * For hist: x must be numeric.\n"
+            "  * For bar with y=null: it returns counts by x.\n"
+            "  * For line: x and y should be numeric.\n\n"
+
             "GENERAL TOOL RULES:\n"
             "- Do NOT invent rows. Do NOT fabricate values.\n"
-            "- If the user requests a table that requires operations NOT supported by these tools, "
+            "- If the user requests a table/chart that requires operations NOT supported by these tools, "
             "answer in text explaining the limitation.\n"
             "- After calling a tool, you MUST return the final answer using final_answer(...).\n"
             "- When using tool outputs, serialize using json.dumps(...).\n"
             "- NEVER use str(...) to serialize tool outputs.\n\n"
+
             "OUTPUT FORMAT (MANDATORY):\n"
             "- You MUST respond by calling <code>final_answer(...)</code>.\n"
             "- The argument of final_answer MUST be a JSON string.\n"
@@ -183,7 +202,10 @@ class SmolagentsEngine(DataChatEngine):
             "1) Text:\n"
             "<code>final_answer('{\"kind\":\"text\",\"text\":\"...\",\"format\":\"plain\"}')</code>\n"
             "2) Table (small result only):\n"
-            "<code>final_answer('{\"kind\":\"table\",\"data\":[{\"col1\":\"value1\",\"col2\":\"value2\"}]}')</code>\n\n"
+            "<code>final_answer('{\"kind\":\"table\",\"data\":[{\"col1\":\"value1\",\"col2\":\"value2\"}]}')</code>\n"
+            "3) Image:\n"
+            "<code>final_answer('{\"kind\":\"image_path\",\"path\":\"/tmp/.../plot_x.png\"}')</code>\n\n"
+
             "TABLE RULES (MANDATORY):\n"
             "- 'data' MUST be a JSON array of objects (list of dicts).\n"
             "- Use at most 5 rows and at most 10 columns.\n"
