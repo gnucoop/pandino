@@ -23,6 +23,65 @@ def _to_json_scalar(v: Any) -> Any:
     return str(v)
 
 
+def _coerce_filter_value(df: pd.DataFrame, col: str, raw: Any) -> Any:
+    """
+    Try to coerce the raw value coming from the LLM into the column's "natural" type.
+    This fixes common issues like value="true" (string) vs column boolean True.
+    """
+    if raw is None:
+        return None
+
+    # If it's already not a string, keep it
+    if not isinstance(raw, str):
+        return raw
+
+    s = raw.strip()
+
+    # Bool coercion
+    s_low = s.lower()
+    if s_low in {"true", "false"}:
+        # If the column is bool dtype, coerce confidently
+        if pd.api.types.is_bool_dtype(df[col]):
+            return s_low == "true"
+
+        # Heuristic: if the column contains actual bools, coerce
+        non_null = df[col].dropna()
+        if not non_null.empty and non_null.map(lambda x: isinstance(x, bool)).any():
+            return s_low == "true"
+
+        # otherwise leave it as original string
+        return raw
+
+    # Numeric coercion if column is numeric
+    if pd.api.types.is_numeric_dtype(df[col]):
+        num = pd.to_numeric(pd.Series([s]), errors="coerce").iloc[0]
+        if pd.notna(num):
+            # if it's an integer-like float, keep as float anyway (json-safe)
+            return float(num) if isinstance(num, (float, int)) else num
+
+    return raw
+
+
+def _eq_mask(series: pd.Series, value: Any) -> pd.Series:
+    """
+    Build an equality mask in a type-aware way.
+    """
+    # If value is bool, compare to bool series where possible
+    if isinstance(value, bool):
+        if pd.api.types.is_bool_dtype(series):
+            return series.fillna(False) == value
+        # handle "True"/"False" strings stored in column
+        return series.astype(str).str.strip().str.lower() == ("true" if value else "false")
+
+    # If value is numeric, compare after numeric coercion
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        ser_num = pd.to_numeric(series, errors="coerce")
+        return ser_num == float(value)
+
+    # Default: string compare (case-insensitive, trimmed)
+    return series.astype(str).str.strip().str.lower() == str(value).strip().lower()
+
+
 class FilterRowsTool(Tool):
     """
     Smolagents tool: filter rows on a bound DataFrame.
@@ -42,6 +101,11 @@ class FilterRowsTool(Tool):
         "where_col": {
             "type": "string",
             "description": "Column name to filter on.",
+        },
+        "op": {
+            "type": "string",
+            "description": "Filter operation: 'eq' (default), 'lt', 'lte', 'gt', 'gte'.",
+            "nullable": True,
         },
         "value": {
             "type": "string",
@@ -68,6 +132,7 @@ class FilterRowsTool(Tool):
         self,
         where_col: str,
         value: str,
+        op: Optional[str] = None,
         n: Optional[int] = 5,
         columns: Optional[list[str]] = None,
     ) -> dict[str, Any]:
@@ -90,9 +155,47 @@ class FilterRowsTool(Tool):
             else:
                 df_view = df[list(df.columns)[:10]]  # keep small by default
 
-            # Equality filter (string compare, safe)
-            series = df[where_col].astype(str)
-            mask = series == str(value)
+            # Normalize operation
+            op_clean = (op or "eq").strip().lower()
+
+            allowed_ops = {"eq", "lt", "lte", "gt", "gte"}
+            if op_clean not in allowed_ops:
+                return {
+                    "kind": "error",
+                    "message": f"Invalid filter operation: {op_clean}",
+                    "code": "INVALID_FILTER_OP",
+                }
+
+            series = df[where_col]
+
+            # Numeric comparisons
+            if op_clean in {"lt", "lte", "gt", "gte"}:
+                # Ensure column is numeric
+                series_num = pd.to_numeric(series, errors="coerce")
+
+                try:
+                    value_num = float(value)
+                except Exception:
+                    return {
+                        "kind": "error",
+                        "message": f"Value '{value}' is not numeric and cannot be used with '{op_clean}'.",
+                        "code": "NON_NUMERIC_VALUE",
+                    }
+
+                if op_clean == "lt":
+                    mask = series_num < value_num
+                elif op_clean == "lte":
+                    mask = series_num <= value_num
+                elif op_clean == "gt":
+                    mask = series_num > value_num
+                else:  # gte
+                    mask = series_num >= value_num
+
+            else:
+                # Equality filter (existing, type-aware)
+                value_coerced = _coerce_filter_value(df, where_col, value)
+                mask = _eq_mask(series, value_coerced)
+            
             filtered = df_view[mask].head(n_int)
 
             records = filtered.to_dict(orient="records")

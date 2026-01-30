@@ -4,7 +4,7 @@ Each function returns a composable SQL object (psycopg.sql) and its parameters.
 """
 
 from psycopg import sql
-from typing import Tuple, Any, Optional
+from typing import Tuple, Any, Optional, List
 
 
 def build_get_user_by_username_query(username: str) -> Tuple[sql.Composed, Tuple[str]]:
