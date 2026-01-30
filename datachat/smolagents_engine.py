@@ -49,7 +49,7 @@ class SmolagentsEngine(DataChatEngine):
                 temperature=0.0,
             )
         except Exception:
-            # Conservative: do not crash engine creation. We'll return a user-facing error in chat().
+            
             self._model = None
             self._agent = None
             return
@@ -147,12 +147,21 @@ class SmolagentsEngine(DataChatEngine):
             "columns=[\"Nome e Cognome\",\"Rate visita\"]).\n\n"
 
             "3) filter_rows\n"
-            "- Use it when the user asks for rows where a column equals a value, e.g.: "
-            "\"Problemi = 'Lavoro'\", \"MIgrante = True\", \"case_code = 'XYZ'\".\n"
-            "- Call: filter_rows(where_col=\"<column>\", value=\"<value>\", n=<int>, columns=[...]).\n"
-            "- Example: filter_rows(where_col=\"Problemi\", value=\"Lavoro\", n=5, "
-            "columns=[\"Nome e Cognome\",\"Problemi\",\"Rate visita\"]).\n"
-            "- IMPORTANT: for filter requests you MUST use filter_rows (do NOT filter previews manually).\n\n"
+            "- Use it when the user asks for rows matching a condition on a column.\n"
+            "- Supported operations:\n"
+            "  * eq  → equals (default)\n"
+            "  * lt  → less than\n"
+            "  * lte → less than or equal\n"
+            "  * gt  → greater than\n"
+            "  * gte → greater than or equal\n"
+            "- Call: filter_rows(where_col=\"<column>\", value=\"<value>\", op=\"eq|lt|lte|gt|gte\", n=<int>, columns=[...]).\n"
+            "- Examples:\n"
+            "  * Equality: filter_rows(where_col=\"Problemi\", value=\"Lavoro\", n=5)\n"
+            "  * Boolean: filter_rows(where_col=\"MIgrante\", value=\"true\", n=10)\n"
+            "  * Numeric: filter_rows(where_col=\"Rate visita\", value=\"4\", op=\"lt\", n=10)\n"
+            "- IMPORTANT:\n"
+            "  * Use op=\"lt|lte|gt|gte\" ONLY with numeric columns.\n"
+            "  * For filter requests you MUST use filter_rows (do NOT filter previews manually).\n\n"
 
             "4) aggregate\n"
             "- Use it ONLY when the user asks for summaries/aggregations, such as:\n"
@@ -160,14 +169,14 @@ class SmolagentsEngine(DataChatEngine):
             "  * averages/means (\"media\")\n"
             "  * sums (\"somma\", \"totale\")\n"
             "  * group-by summaries (\"per ogni\", \"raggruppa per\")\n"
-            "- Call: aggregate(group_by=[\"<col>\", ...], op=\"count|mean|sum\", metric=\"<col or null>\", n=<int>, ascending=<bool>). \n"
+            "- Call: aggregate(group_by=\"<column>\", op=\"count|mean|sum|min|max\", metric=\"<column or null>\", n=<int>, ascending=<bool>). \n"
             "- Rules:\n"
             "  * For op=\"count\": metric MUST be null.\n"
             "  * For op=\"mean\" or op=\"sum\": metric MUST be a numeric column.\n"
-            "  * group_by can be empty/null only if the user asks for a single overall number.\n"
+            "  * group_by MUST be a single column name string (NOT a list, NOT null).\n"
             "- Examples:\n"
-            "  * \"Quanti casi per Problemi?\" -> aggregate(group_by=[\"Problemi\"], op=\"count\", metric=null, n=10, ascending=False)\n"
-            "  * \"Media Rate visita per Problemi\" -> aggregate(group_by=[\"Problemi\"], op=\"mean\", metric=\"Rate visita\", n=10, ascending=False)\n\n"
+            "  * \"Quanti casi per Problemi?\" -> aggregate(group_by=\"Problemi\", op=\"count\", metric=null, n=10, ascending=False)\n"
+            "  * \"Media Rate visita per Problemi\" -> aggregate(group_by=\"Problemi\", op=\"mean\", metric=\"Rate visita\", n=10, ascending=False)\n\n"
 
             "5) plot\n"
             "- Use it ONLY when the user asks for a chart/graph/plot/istogramma.\n"
@@ -189,6 +198,8 @@ class SmolagentsEngine(DataChatEngine):
             "- If the user requests a table/chart that requires operations NOT supported by these tools, "
             "answer in text explaining the limitation.\n"
             "- After calling a tool, you MUST return the final answer using final_answer(...).\n"
+            "- IMPORTANT: All tools already return a FINAL payload dict with a 'kind' key (e.g. {'kind':'table',...}).\n"
+            "- Therefore, after any tool call you MUST do: <code>import json\nresult = tool_call(...)\nfinal_answer(json.dumps(result))</code> and NOTHING ELSE. Do NOT wrap the tool result inside another JSON object.\n"
             "- When using tool outputs, serialize using json.dumps(...).\n"
             "- NEVER use str(...) to serialize tool outputs.\n\n"
 

@@ -93,7 +93,16 @@ class AggregateTool(Tool):
         try:
             df = self._df
 
-            group_by_clean = (group_by or "").strip()
+            # --- group_by hardening: sometimes the LLM passes ["col"] instead of "col" ---
+            if isinstance(group_by, list):
+                gb_list = [str(x).strip() for x in group_by if str(x).strip()]
+                if not gb_list:
+                    group_by_clean = ""
+                else:
+                    group_by_clean = gb_list[0]
+            else:
+                group_by_clean = (group_by or "").strip()
+
             op_clean = (op or "").strip().lower()
             metric_clean = (metric or "").strip() if metric is not None else None
 
