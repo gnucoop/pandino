@@ -86,14 +86,17 @@ class FilterRowsTool(Tool):
     """
     Smolagents tool: filter rows on a bound DataFrame.
 
-    MVP: supports only equality filter (op='eq').
+    MVP+: supports:
+    - eq (default) for strings/bools/numbers (type-aware)
+    - lt/lte/gt/gte for numeric comparisons
+    - optional second condition (AND) via where_col2/op2/value2
     """
 
     name = "filter_rows"
     description = (
-        "Filter rows in the dataset by a simple condition and return a small table. "
-        "Use this when the user asks for rows where a column equals a value "
-        "(e.g., Problemi = 'Lavoro')."
+        "Filter rows in the dataset by simple conditions and return a small table. "
+        "Use this when the user asks for rows matching a condition "
+        "(e.g., Problemi = 'Lavoro', Rate visita < 4)."
     )
     output_type = "object"
 
@@ -109,8 +112,26 @@ class FilterRowsTool(Tool):
         },
         "value": {
             "type": "string",
-            "description": "Value to match (equality).",
+            "description": "Value to match.",
         },
+
+        # NEW: optional second condition (AND)
+        "where_col2": {
+            "type": "string",
+            "description": "Optional second column to filter on (AND).",
+            "nullable": True,
+        },
+        "op2": {
+            "type": "string",
+            "description": "Optional second operation: 'eq' (default), 'lt', 'lte', 'gt', 'gte'.",
+            "nullable": True,
+        },
+        "value2": {
+            "type": "string",
+            "description": "Optional second value to match (AND).",
+            "nullable": True,
+        },
+
         "n": {
             "type": "integer",
             "description": "Max number of rows to return (max 20).",
@@ -133,6 +154,9 @@ class FilterRowsTool(Tool):
         where_col: str,
         value: str,
         op: Optional[str] = None,
+        where_col2: Optional[str] = None,
+        value2: Optional[str] = None,
+        op2: Optional[str] = None,
         n: Optional[int] = 5,
         columns: Optional[list[str]] = None,
     ) -> dict[str, Any]:
@@ -155,10 +179,12 @@ class FilterRowsTool(Tool):
             else:
                 df_view = df[list(df.columns)[:10]]  # keep small by default
 
-            # Normalize operation
-            op_clean = (op or "eq").strip().lower()
-
             allowed_ops = {"eq", "lt", "lte", "gt", "gte"}
+
+            # -----------------------------
+            # Build mask #1
+            # -----------------------------
+            op_clean = (op or "eq").strip().lower()
             if op_clean not in allowed_ops:
                 return {
                     "kind": "error",
@@ -166,13 +192,10 @@ class FilterRowsTool(Tool):
                     "code": "INVALID_FILTER_OP",
                 }
 
-            series = df[where_col]
+            series1 = df[where_col]
 
-            # Numeric comparisons
             if op_clean in {"lt", "lte", "gt", "gte"}:
-                # Ensure column is numeric
-                series_num = pd.to_numeric(series, errors="coerce")
-
+                series1_num = pd.to_numeric(series1, errors="coerce")
                 try:
                     value_num = float(value)
                 except Exception:
@@ -183,20 +206,67 @@ class FilterRowsTool(Tool):
                     }
 
                 if op_clean == "lt":
-                    mask = series_num < value_num
+                    mask1 = series1_num < value_num
                 elif op_clean == "lte":
-                    mask = series_num <= value_num
+                    mask1 = series1_num <= value_num
                 elif op_clean == "gt":
-                    mask = series_num > value_num
+                    mask1 = series1_num > value_num
                 else:  # gte
-                    mask = series_num >= value_num
-
+                    mask1 = series1_num >= value_num
             else:
-                # Equality filter (existing, type-aware)
                 value_coerced = _coerce_filter_value(df, where_col, value)
-                mask = _eq_mask(series, value_coerced)
-            
-            filtered = df_view[mask].head(n_int)
+                mask1 = _eq_mask(series1, value_coerced)
+
+            # -----------------------------
+            # Optional mask #2 (AND)
+            # -----------------------------
+            mask_final = mask1
+            where_col2_clean = (where_col2 or "").strip()
+
+            if where_col2_clean and value2 is not None:
+                if where_col2_clean not in df.columns:
+                    return {
+                        "kind": "error",
+                        "message": f"Invalid where_col2 column: {where_col2_clean}",
+                        "code": "INVALID_FILTER_COLUMN_2",
+                    }
+
+                op2_clean = (op2 or "eq").strip().lower()
+                if op2_clean not in allowed_ops:
+                    return {
+                        "kind": "error",
+                        "message": f"Invalid filter operation (op2): {op2_clean}",
+                        "code": "INVALID_FILTER_OP_2",
+                    }
+
+                series2 = df[where_col2_clean]
+
+                if op2_clean in {"lt", "lte", "gt", "gte"}:
+                    series2_num = pd.to_numeric(series2, errors="coerce")
+                    try:
+                        value2_num = float(str(value2))
+                    except Exception:
+                        return {
+                            "kind": "error",
+                            "message": f"Value2 '{value2}' is not numeric and cannot be used with '{op2_clean}'.",
+                            "code": "NON_NUMERIC_VALUE_2",
+                        }
+
+                    if op2_clean == "lt":
+                        mask2 = series2_num < value2_num
+                    elif op2_clean == "lte":
+                        mask2 = series2_num <= value2_num
+                    elif op2_clean == "gt":
+                        mask2 = series2_num > value2_num
+                    else:  # gte
+                        mask2 = series2_num >= value2_num
+                else:
+                    value2_coerced = _coerce_filter_value(df, where_col2_clean, value2)
+                    mask2 = _eq_mask(series2, value2_coerced)
+
+                mask_final = mask_final & mask2
+
+            filtered = df_view[mask_final].head(n_int)
 
             records = filtered.to_dict(orient="records")
 
@@ -209,12 +279,17 @@ class FilterRowsTool(Tool):
             safe_records = replace_nan(safe_records)
 
             logging.info(
-                "[datachat][filter_rows_tool] where_col=%s value=%s n=%s rows=%s",
+                "[datachat][filter_rows_tool] where_col=%s op=%s value=%s where_col2=%s op2=%s value2=%s n=%s rows=%s",
                 where_col,
+                op_clean,
                 value,
+                where_col2_clean or None,
+                (op2 or "eq") if (where_col2_clean and value2 is not None) else None,
+                value2 if (where_col2_clean and value2 is not None) else None,
                 n_int,
                 len(safe_records),
             )
+
             return {"kind": "table", "data": safe_records}
 
         except Exception as e:
