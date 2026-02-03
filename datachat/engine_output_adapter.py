@@ -43,7 +43,6 @@ def _try_parse_contract_payload(s: str) -> dict[str, Any] | None:
             pass
 
     # Conservative extraction: take substring between first { and last }
-    # (helps if the model returns extra wrapper text)
     start = s.find("{")
     end = s.rfind("}")
     if start != -1 and end != -1 and end > start:
@@ -74,18 +73,39 @@ def adapt_engine_output(raw_output: Any) -> Any:
     """
     Adapter between engine-specific raw outputs and DataChat internal contract outputs.
 
-    - PandasAIEngine (legacy): may return arbitrary python objects -> keep as-is.
-    - SmolagentsEngine (contract): may return dict with "kind" OR a string that contains
-      a JSON contract payload (sometimes escaped). In that case, parse and return dict.
+    - If it is already a contract dict (has 'kind'), return it.
+    - If it's a string containing a contract payload, parse it and return dict.
+    - Otherwise: coerce common non-contract outputs into the contract:
+        * list[dict] -> {"kind":"table","data":[...]}
+        * str -> {"kind":"text","text":"...","format":"plain"}
+        * list[str|int|float|bool|None] -> table with single column 'value'
     """
-    # Already contract dict
+    # 1) Already contract dict
     if isinstance(raw_output, dict) and "kind" in raw_output:
         return raw_output
 
-    # Contract JSON carried as string (common with LLM outputs)
+    # 2) Contract JSON carried as string (common with LLM outputs)
     if isinstance(raw_output, str):
         parsed = _try_parse_contract_payload(raw_output)
         if parsed is not None:
             return parsed
+        # Plain string -> contract text
+        return {"kind": "text", "text": raw_output, "format": "plain"}
 
+    # 3) Common legacy/tool shape: list of dicts -> contract table
+    if isinstance(raw_output, list):
+        if all(isinstance(item, dict) for item in raw_output):
+            return {"kind": "table", "data": raw_output}
+
+        # list of scalars -> table with one column
+        if all(
+            (item is None) or isinstance(item, (str, int, float, bool))
+            for item in raw_output
+        ):
+            return {"kind": "table", "data": [{"value": v} for v in raw_output]}
+
+        # unknown list content -> fallback text
+        return {"kind": "text", "text": str(raw_output), "format": "plain"}
+
+    # 4) Anything else: keep as-is (or optionally coerce to text)
     return raw_output

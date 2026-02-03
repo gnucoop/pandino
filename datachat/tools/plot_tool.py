@@ -1,4 +1,3 @@
-
 import os
 import uuid
 import logging
@@ -21,6 +20,9 @@ class PlotTool(Tool):
     - bar: counts by x (if y is empty) OR mean(y) by x (if y is provided)
     - hist: histogram of a numeric column x
     - line: line plot of y vs x (tries numeric conversion; sorts by x)
+    - pie: composition chart as a derived view of:
+        * count by category (y is empty)
+        * sum(y) by category (y is provided, agg must be 'sum')
 
     Returns:
       {"kind":"image_path","path":"...png"} on success
@@ -30,7 +32,7 @@ class PlotTool(Tool):
     name = "plot"
     description = (
         "Generate a plot from the dataset and return an image path. "
-        "Use for chart requests (bar/line/hist)."
+        "Use for chart requests (bar/line/hist/pie)."
     )
     output_type = "object"
 
@@ -38,7 +40,7 @@ class PlotTool(Tool):
     inputs: ClassVar[dict[str, Any]] = {
         "kind": {
             "type": "string",
-            "description": "Plot kind: one of 'bar', 'line', 'hist'.",
+            "description": "Plot kind: one of 'bar', 'line', 'hist', 'pie'.",
         },
         "x": {
             "type": "string",
@@ -46,17 +48,17 @@ class PlotTool(Tool):
         },
         "y": {
             "type": "string",
-            "description": "Y column name (used for line; optional for bar).",
+            "description": "Y column name (used for line; optional for bar; optional for pie).",
             "nullable": True,
         },
         "agg": {
             "type": "string",
-            "description": "Aggregation for bar when y is provided: 'mean' (default) or 'sum'.",
+            "description": "Aggregation for bar when y is provided: 'mean' (default) or 'sum'. For pie with y, only 'sum' is allowed.",
             "nullable": True,
         },
         "n": {
             "type": "integer",
-            "description": "Max number of categories for bar (max 50).",
+            "description": "Max number of categories for bar/pie (max 50).",
             "nullable": True,
         },
         "bins": {
@@ -95,10 +97,10 @@ class PlotTool(Tool):
             y_clean = (y or "").strip() if y is not None else None
             agg_clean = (agg or "mean").strip().lower() if agg is not None else "mean"
 
-            if kind_clean not in {"bar", "line", "hist"}:
+            if kind_clean not in {"bar", "line", "hist", "pie"}:
                 return {
                     "kind": "error",
-                    "message": f"Invalid plot kind: {kind_clean}. Allowed: bar, line, hist.",
+                    "message": f"Invalid plot kind: {kind_clean}. Allowed: bar, line, hist, pie.",
                     "code": "INVALID_KIND",
                 }
 
@@ -136,6 +138,24 @@ class PlotTool(Tool):
                         "message": f"Invalid agg: {agg_clean}. Allowed: mean, sum.",
                         "code": "INVALID_AGG",
                     }
+
+            if kind_clean == "pie":
+                if y_clean:
+                    if y_clean not in df.columns:
+                        return {
+                            "kind": "error",
+                            "message": f"Invalid y column: {y_clean}",
+                            "code": "INVALID_Y",
+                        }
+                    if agg_clean not in {"sum"}:
+                        return {
+                            "kind": "error",
+                            "message": f"Invalid agg for pie: {agg_clean}. Allowed: sum.",
+                            "code": "INVALID_AGG",
+                        }
+                else:
+                    # y is None/empty => pie is counts by category; agg is ignored
+                    pass
 
             n_int = int(n) if n is not None else 20
             n_int = max(1, min(n_int, 50))
@@ -227,6 +247,57 @@ class PlotTool(Tool):
                 plt.plot(x_arr, y_arr)
                 plt.xlabel(x_clean)
                 plt.ylabel(y_clean)
+
+            elif kind_clean == "pie":
+                if not y_clean:
+                    # composition as counts by category (agg ignored)
+                    counts = (
+                        df.groupby(x_clean, dropna=False)
+                        .size()
+                        .sort_values(ascending=False)
+                        .head(n_int)
+                    )
+                    labels = [str(v) for v in counts.index.tolist()]
+                    values = counts.values.tolist()
+
+                    if not values or sum(values) == 0:
+                        return {
+                            "kind": "error",
+                            "message": f"Column '{x_clean}' has no values to compute pie counts.",
+                            "code": "EMPTY_RESULT",
+                        }
+
+                    plt.pie(values, labels=labels, autopct="%1.1f%%")
+                else:
+                    # composition as sum(y) by category
+                    y_num = pd.to_numeric(df[y_clean], errors="coerce")
+                    tmp = pd.DataFrame({x_clean: df[x_clean], y_clean: y_num}).dropna(subset=[y_clean])
+
+                    if tmp.empty or tmp[y_clean].notna().sum() == 0:
+                        return {
+                            "kind": "error",
+                            "message": f"Column '{y_clean}' has no numeric values for pie sum.",
+                            "code": "NO_NUMERIC_DATA",
+                        }
+
+                    sums = (
+                        tmp.groupby(x_clean, dropna=False)[y_clean]
+                        .sum()
+                        .sort_values(ascending=False)
+                        .head(n_int)
+                    )
+
+                    labels = [str(v) for v in sums.index.tolist()]
+                    values = sums.values.tolist()
+
+                    if not values or sum(values) == 0:
+                        return {
+                            "kind": "error",
+                            "message": f"Sum of '{y_clean}' by '{x_clean}' is empty or zero.",
+                            "code": "EMPTY_RESULT",
+                        }
+
+                    plt.pie(values, labels=labels, autopct="%1.1f%%")
 
             if title:
                 plt.title(str(title))

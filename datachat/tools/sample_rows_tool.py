@@ -26,7 +26,7 @@ class SampleRowsTool(Tool):
         "n": {
             "type": "integer",
             "description": "Number of rows to return (max 20).",
-            "nullable": True, 
+            "nullable": True,
         },
         "columns": {
             "type": "array",
@@ -42,7 +42,7 @@ class SampleRowsTool(Tool):
         super().__init__()
         self._df = df  # bound dataframe
 
-    def forward(self, n: int = 5, columns: list[str] | None = None) -> list[dict[str, Any]]:
+    def forward(self, n: int = 5, columns: list[str] | None = None) -> dict[str, Any]:
         try:
             n_int = max(1, min(int(n or 5), 20))
 
@@ -59,14 +59,17 @@ class SampleRowsTool(Tool):
 
             sample = df.head(n_int)
             records = sample.to_dict(orient="records")
+            records = replace_nan(records)
 
             logging.info(
                 "[datachat][sample_rows_tool] returning n=%s cols=%s",
                 n_int,
                 len(sample.columns),
             )
-            return replace_nan(records)
+
+            # CONTRACT: tool returns a final payload dict with 'kind'
+            return {"kind": "table", "data": records}
 
         except Exception as e:
             logging.exception("[datachat][sample_rows_tool] failed")
-            return []
+            return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}
