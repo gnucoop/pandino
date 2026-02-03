@@ -13,6 +13,7 @@ from datachat.tools.top_rows_tool import TopRowsTool
 from datachat.tools.filter_rows_tool import FilterRowsTool
 from datachat.tools.aggregate_tool import AggregateTool
 from datachat.tools.plot_tool import PlotTool
+from datachat.tools.trend_tool import TrendTool
 from llm.litellm_factory import build_litellm_model
 
 plots_dir = os.getenv("DATACHAT_PLOTS_DIR", "/tmp/datachat_plots")
@@ -63,6 +64,7 @@ class SmolagentsEngine(DataChatEngine):
                 FilterRowsTool(self.data),
                 AggregateTool(self.data),
                 PlotTool(self.data, output_dir=plots_dir),
+                TrendTool(self.data)
             ],
             model=model,
             max_steps=2,
@@ -131,7 +133,7 @@ class SmolagentsEngine(DataChatEngine):
             "as described below, or describe what would be shown.\n"
             "- Keep answers concise and concrete.\n\n"
             "TOOLS:\n"
-            "- You have access to five tools: 'sample_rows', 'top_rows', 'filter_rows', 'aggregate', and 'plot'.\n\n"
+            "- You have access to six tools: 'sample_rows', 'top_rows', 'filter_rows', 'aggregate', 'plot', and 'trend'.\n\n"
 
             "1) sample_rows\n"
             "- Use it for simple previews / examples.\n"
@@ -196,11 +198,42 @@ class SmolagentsEngine(DataChatEngine):
             "  * For hist: x must be numeric.\n"
             "  * For bar with y=null: it returns counts by x.\n"
             "  * For line: x and y should be numeric.\n\n"
+            
+            "6) trend\n"
+            "- Use it ONLY when the user asks for trends over time, time buckets, or evolution across days/weeks/months.\n"
+            "- Typical user intents: 'nel tempo', 'per mese', 'per settimana', 'ogni giorno', "
+            "'da settembre a dicembre 2025', 'andamento', 'evoluzione'.\n"
+            "- Supported frequencies (STOP HERE): day | week | month.\n"
+            "- Output period is a STABLE string:\n"
+            "  * day   -> YYYY-MM-DD\n"
+            "  * week  -> YYYY-Www  (ISO week)\n"
+            "  * month -> YYYY-MM\n"
+            " - Note on weeks:\n"
+            "   * Weeks are bucketed using pandas weekly resampling and labeled using ISO week format (YYYY-Www).\", "
+            "- Call: trend(date_col=\"<date column>\", freq=\"day|week|month\", "
+            "op=\"count|mean|sum\", metric=\"<numeric column or null>\", "
+            "start=\"YYYY-MM-DD or null\", end=\"YYYY-MM-DD or null\", "
+            "n=<int>, ascending=<bool>). \n"
+            "- Rules:\n"
+            "  * date_col MUST be a date/datetime column (or a column that can be parsed as dates).\n"
+            "  * op='count' -> metric MUST be null.\n"
+            "  * op='mean' or op='sum' -> metric MUST be a numeric column.\n"
+            "  * start/end are optional; use them when the user mentions a specific range.\n"
+            "  * ascending=True shows older periods first (default). Use ascending=False only if user asks for 'most recent'.\n"
+            "- Examples:\n"
+            "  * \"Quante visite per mese?\" -> trend(date_col=\"created_at\", freq=\"month\", op=\"count\", metric=null, start=null, end=null, n=24, ascending=True)\n"
+            "  * \"Da 2025-09-01 a 2025-12-31 quante visite per settimana?\" -> "
+            "trend(date_col=\"created_at\", freq=\"week\", op=\"count\", metric=null, start=\"2025-09-01\", end=\"2025-12-31\", n=20, ascending=True)\n"
+            "  * \"Media Rate visita per mese\" -> trend(date_col=\"created_at\", freq=\"month\", op=\"mean\", metric=\"Rate visita\", start=null, end=null, n=24, ascending=True)\n"
+            "- IMPORTANT:\n"
+            "  * If the user asks for a trend, you MUST call trend(...) at least once BEFORE answering.\n"
+            "  * Always serialize tool outputs with json.dumps(...). NEVER use str(...).\n\n"
 
             "GENERAL TOOL RULES:\n"
             "- Do NOT invent rows. Do NOT fabricate values.\n"
             "- If the user requests a table/chart that requires operations NOT supported by these tools, "
             "answer in text explaining the limitation.\n"
+            "- If the user asks 'what can you do' or 'what analyses are possible', answer with kind='text' and describe ONLY these tool-backed capabilities.\n"
             "- After calling a tool, you MUST return the final answer using final_answer(...).\n"
             "- IMPORTANT: All tools already return a FINAL payload dict with a 'kind' key (e.g. {'kind':'table',...}).\n"
             "- Therefore, after any tool call you MUST do: <code>import json\nresult = tool_call(...)\nfinal_answer(json.dumps(result))</code> and NOTHING ELSE. Do NOT wrap the tool result inside another JSON object.\n"
@@ -223,7 +256,7 @@ class SmolagentsEngine(DataChatEngine):
 
             "TABLE RULES (MANDATORY):\n"
             "- 'data' MUST be a JSON array of objects (list of dicts).\n"
-            "- Use at most 5 rows and at most 10 columns.\n"
+            "- Use at most 50 rows and at most 10 columns.\n"
             "- All cell values MUST be JSON scalars only: string, number, boolean, or null.\n"
             "- NEVER include '{' or '}' characters inside any string cell value.\n"
             "- If a value is structured (object/array/JSON), convert it to a flat string like "
