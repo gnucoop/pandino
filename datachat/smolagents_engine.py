@@ -14,6 +14,7 @@ from datachat.tools.top_rows_tool import TopRowsTool
 from datachat.tools.filter_rows_tool import FilterRowsTool
 from datachat.tools.aggregate_tool import AggregateTool
 from datachat.tools.describe_tool import DescribeTool
+from datachat.tools.missing_values_tool import MissingValuesTool
 from datachat.tools.plot_tool import PlotTool
 from datachat.tools.trend_tool import TrendTool
 from llm.litellm_factory import build_litellm_model
@@ -63,6 +64,7 @@ class SmolagentsEngine(DataChatEngine):
         self._agent = CodeAgent(
             tools=[
                 DescribeTool(self.data),
+                MissingValuesTool(self.data),
                 SampleRowsTool(self.data), 
                 TopRowsTool(self.data),
                 FilterRowsTool(self.data),
@@ -136,24 +138,29 @@ class SmolagentsEngine(DataChatEngine):
             - Keep answers concise and concrete.
 
             TOOLS:
-            - You have access to seven tools: 'describe', 'sample_rows', 'top_rows', 'filter_rows', 'aggregate', 'plot', and 'trend'.
+            - You have access to eight tools: 'describe', 'missing_values', 'sample_rows', 'top_rows', 'filter_rows', 'aggregate', 'plot', and 'trend'.
 
             1) describe
             - Use it for a general overview or descriptive statistics of the dataset.
             - Call: describe(columns=["col1","col2",...], n=<int>).
             - Use when the user asks: 'riassumimi il dataset', 'statistiche descrittive', 'overview', 'summary'.
 
-            2) sample_rows
+            2) missing_values
+            - Use it to count missing/null values per column.
+            - Call: missing_values(columns=["col1","col2",...], n=<int>).
+            - Use when the user asks: 'valori mancanti', 'missing values', 'quanti null'.
+
+            3) sample_rows
             - Use it for simple previews / examples.
             - Call: sample_rows(n=<int>, columns=["col1","col2",...]).
             - Use when the user asks: 'show me N rows', 'preview', 'example rows', 'first rows'.
 
-            3) top_rows
+            4) top_rows
             - Use it ONLY when the user asks for ordering/ranking such as: 'top', 'highest', 'lowest', 'best', 'worst', 'most', 'least', 'righe con X più alto/più basso'.
             - Call: top_rows(sort_by="<column>", n=<int>, ascending=<bool>, columns=[...]).
             - Example: top_rows(sort_by="Rate visita", n=5, ascending=False, columns=["Nome e Cognome","Rate visita"]).
 
-            4) filter_rows
+            5) filter_rows
             - Use it when the user asks for rows matching a condition on a column.
             - Supported operations:
             * eq  → equals (default)
@@ -171,7 +178,7 @@ class SmolagentsEngine(DataChatEngine):
             * Use op="lt|lte|gt|gte" ONLY with numeric columns.
             * For filter requests you MUST use filter_rows (do NOT filter previews manually).
 
-            5) aggregate
+            6) aggregate
             - Use it ONLY when the user asks for summaries/aggregations, such as:
             * counts ("quanti", "conteggio", "numero di")
             * averages/means ("media")
@@ -186,7 +193,7 @@ class SmolagentsEngine(DataChatEngine):
             * "Quanti casi per Problemi?" -> aggregate(group_by="Problemi", op="count", metric=null, n=10, ascending=False)
             * "Media Rate visita per Problemi" -> aggregate(group_by="Problemi", op="mean", metric="Rate visita", n=10, ascending=False)
 
-            6) plot
+            7) plot
             - Use it ONLY when the user asks for a chart/graph/plot/istogramma.
             - Supported kinds: 'hist', 'bar', 'line', 'pie'.
             - Call: plot(kind="bar|hist|line|pie", x="<column>", y="<column or null>", agg="mean|sum", n=<int>, bins=<int>, title="<optional>").
@@ -224,7 +231,7 @@ class SmolagentsEngine(DataChatEngine):
             * For bar with y=null: it returns counts by x.
             * For line: x and y should be numeric.
 
-            7) trend
+            8) trend
             - Use it ONLY when the user asks for trends over time, time buckets, or evolution across days/weeks/months.
             - Typical user intents: 'nel tempo', 'per mese', 'per settimana', 'ogni giorno', 'da settembre a dicembre 2025', 'andamento', 'evoluzione'.
             - Supported frequencies (STOP HERE): day | week | month.
