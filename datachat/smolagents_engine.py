@@ -16,6 +16,7 @@ from datachat.tools.aggregate_tool import AggregateTool
 from datachat.tools.describe_tool import DescribeTool
 from datachat.tools.missing_values_tool import MissingValuesTool
 from datachat.tools.unique_values_tool import UniqueValuesTool
+from datachat.tools.correlation_tool import CorrelationTool
 from datachat.tools.plot_tool import PlotTool
 from datachat.tools.trend_tool import TrendTool
 from llm.litellm_factory import build_litellm_model
@@ -67,6 +68,7 @@ class SmolagentsEngine(DataChatEngine):
                 DescribeTool(self.data),
                 MissingValuesTool(self.data),
                 UniqueValuesTool(self.data),
+                CorrelationTool(self.data),
                 SampleRowsTool(self.data), 
                 TopRowsTool(self.data),
                 FilterRowsTool(self.data),
@@ -140,7 +142,7 @@ class SmolagentsEngine(DataChatEngine):
             - Keep answers concise and concrete.
 
             TOOLS:
-            - You have access to nine tools: 'describe', 'missing_values', 'unique_values', 'sample_rows', 'top_rows', 'filter_rows', 'aggregate', 'plot', and 'trend'.
+            - You have access to ten tools: 'describe', 'missing_values', 'unique_values', 'correlation', 'sample_rows', 'top_rows', 'filter_rows', 'aggregate', 'plot', and 'trend'.
 
             1) describe
             - Use it for a general overview or descriptive statistics of the dataset.
@@ -157,17 +159,22 @@ class SmolagentsEngine(DataChatEngine):
             - Call: unique_values(column="<col>", n=<int>).
             - Use when the user asks: 'valori unici', 'categorie', 'quali valori ha'.
 
-            4) sample_rows
+            4) correlation
+            - Use it to measure correlation between two numeric columns.
+            - Call: correlation(col_x="<col>", col_y="<col>", method="pearson").
+            - Use when the user asks: 'c'è correlazione', 'relazione tra X e Y', 'correlation between'.
+
+            5) sample_rows
             - Use it for simple previews / examples.
             - Call: sample_rows(n=<int>, columns=["col1","col2",...]).
             - Use when the user asks: 'show me N rows', 'preview', 'example rows', 'first rows'.
 
-            5) top_rows
+            6) top_rows
             - Use it ONLY when the user asks for ordering/ranking such as: 'top', 'highest', 'lowest', 'best', 'worst', 'most', 'least', 'righe con X più alto/più basso'.
             - Call: top_rows(sort_by="<column>", n=<int>, ascending=<bool>, columns=[...]).
             - Example: top_rows(sort_by="Rate visita", n=5, ascending=False, columns=["Nome e Cognome","Rate visita"]).
 
-            6) filter_rows
+            7) filter_rows
             - Use it when the user asks for rows matching a condition on a column.
             - Supported operations:
             * eq  → equals (default)
@@ -185,7 +192,7 @@ class SmolagentsEngine(DataChatEngine):
             * Use op="lt|lte|gt|gte" ONLY with numeric columns.
             * For filter requests you MUST use filter_rows (do NOT filter previews manually).
 
-            7) aggregate
+            8) aggregate
             - Use it ONLY when the user asks for summaries/aggregations, such as:
             * counts ("quanti", "conteggio", "numero di")
             * averages/means ("media")
@@ -200,7 +207,7 @@ class SmolagentsEngine(DataChatEngine):
             * "Quanti casi per Problemi?" -> aggregate(group_by="Problemi", op="count", metric=null, n=10, ascending=False)
             * "Media Rate visita per Problemi" -> aggregate(group_by="Problemi", op="mean", metric="Rate visita", n=10, ascending=False)
 
-            8) plot
+            9) plot
             - Use it ONLY when the user asks for a chart/graph/plot/istogramma.
             - Supported kinds: 'hist', 'bar', 'line', 'pie'.
             - Call: plot(kind="bar|hist|line|pie", x="<column>", y="<column or null>", agg="mean|sum", n=<int>, bins=<int>, title="<optional>").
@@ -238,7 +245,7 @@ class SmolagentsEngine(DataChatEngine):
             * For bar with y=null: it returns counts by x.
             * For line: x and y should be numeric.
 
-            9) trend
+            10) trend
             - Use it ONLY when the user asks for trends over time, time buckets, or evolution across days/weeks/months.
             - Typical user intents: 'nel tempo', 'per mese', 'per settimana', 'ogni giorno', 'da settembre a dicembre 2025', 'andamento', 'evoluzione'.
             - Supported frequencies (STOP HERE): day | week | month.
