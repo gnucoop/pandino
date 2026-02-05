@@ -1,6 +1,9 @@
 import os
 import json
 import textwrap
+import re
+import shutil
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 import logging
@@ -38,8 +41,16 @@ class SmolagentsEngine(DataChatEngine):
 
     _agent: CodeAgent | None = field(default=None, init=False, repr=False)
     _model: LiteLLMModel | None = field(default=None, init=False, repr=False)
+    _plots_dir: str | None = field(default=None, init=False, repr=False)
+    _user_plots_dir: str | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
+        # Create a per-user/per-session plots directory for safe cleanup.
+        safe_user = re.sub(r"[^A-Za-z0-9._-]+", "_", str(self.user_name or "user")).strip("_")
+        session_id = uuid.uuid4().hex
+        base_dir = os.getenv("DATACHAT_PLOTS_DIR", "/tmp/datachat_plots")
+        self._user_plots_dir = os.path.join(base_dir, safe_user)
+        self._plots_dir = os.path.join(self._user_plots_dir, session_id)
         
         provider = os.getenv("DATACHAT_PROVIDER", "Deepinfra").strip()
         configured_model = os.getenv("DATACHAT_MODEL", "").strip()
@@ -73,7 +84,7 @@ class SmolagentsEngine(DataChatEngine):
                 TopRowsTool(self.data),
                 FilterRowsTool(self.data),
                 AggregateTool(self.data),
-                PlotTool(self.data, output_dir=plots_dir),
+                PlotTool(self.data, output_dir=self._plots_dir or plots_dir),
                 TrendTool(self.data)
             ],
             model=model,
@@ -404,4 +415,14 @@ class SmolagentsEngine(DataChatEngine):
 
 
     def close(self) -> None:
+        # Remove only the session plots directory; keep user dir unless empty.
+        if self._plots_dir and os.path.exists(self._plots_dir):
+            shutil.rmtree(self._plots_dir, ignore_errors=True)
+
+        if self._user_plots_dir and os.path.isdir(self._user_plots_dir):
+            try:
+                if not os.listdir(self._user_plots_dir):
+                    os.rmdir(self._user_plots_dir)
+            except Exception:
+                pass
         return
