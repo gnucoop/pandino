@@ -13,7 +13,7 @@ def build_language_instruction(lang: str) -> str:
     )
 
 
-def build_start_prompt(data: pd.DataFrame) -> str:
+def build_start_prompt(data: pd.DataFrame, *, prompt_version: int | None = None) -> str:
     default_startchat_prompt = textwrap.dedent("""\
         This is a pandas dataframe: {data}
         Try to understand the nature of the data and suggest me what kind of analysis should I ask for.
@@ -25,12 +25,13 @@ def build_start_prompt(data: pd.DataFrame) -> str:
     base_prompt_template = load_prompt(
         "start_chat_system",
         default_text=default_startchat_prompt,
+        version=prompt_version
     )
 
     return render_prompt(base_prompt_template, data=data)
 
 
-def build_bootstrap_question(data: pd.DataFrame, lang: str) -> str:
+def build_bootstrap_question(data: pd.DataFrame, lang: str, *, prompt_version: int | None = None) -> str:
     language_instruction = build_language_instruction(lang)
-    base_prompt = build_start_prompt(data)
+    base_prompt = build_start_prompt(data, prompt_version=prompt_version)
     return f"{language_instruction}\n\n{base_prompt}"

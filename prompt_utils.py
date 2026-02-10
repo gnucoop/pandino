@@ -4,7 +4,11 @@ from typing import Optional
 from database_pg import get_prompt_from_db
 
 
-def load_prompt(title: str, default_text: str = "", fallback_env_var: Optional[str] = None) -> str:
+def load_prompt(
+    title: str, 
+    default_text: str = "", 
+    fallback_env_var: Optional[str] = None,
+    version: Optional[int] = None) -> str:
     """
     Retrieve a prompt message using a multi-step fallback strategy.
 
@@ -14,7 +18,7 @@ def load_prompt(title: str, default_text: str = "", fallback_env_var: Optional[s
     3. Environment variable (if specified)
     4. Empty string if all fail
     """
-    prompt = get_prompt_from_db(title)
+    prompt = get_prompt_from_db(title, version=version)
     if prompt:
         return prompt
 
