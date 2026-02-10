@@ -30,7 +30,8 @@ class PandasAIEngine(DataChatEngine):
         self._agent = Agent(self.data, config=agent_config)
 
     def bootstrap(self, lang: str) -> EngineBootstrapResult:
-        question = build_bootstrap_question(self.data, lang)
+        # PandasAI must keep legacy bootstrap prompt to avoid regressions
+        question = build_bootstrap_question(self.data, lang, prompt_version=1)
         resp = self.llm.invoke(question)
         html = getattr(resp, "content", None) if resp else None
         return EngineBootstrapResult(suggested_questions_html=html)
