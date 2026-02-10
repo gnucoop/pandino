@@ -192,8 +192,27 @@ def normalize_datachat_response(response: Any) -> dict[str, Any]:
                 response_dict["image"] = fileToBase64(plot_path)
                 del response_dict["plot"]
 
-        elif isinstance(response_dict.get("value"), str) and isImageFilePath(response_dict["value"]):
-            response_dict["type"] = "image"
-            response_dict["value"] = fileToBase64(response_dict["value"])
+        elif isinstance(response_dict.get("value"), str):
+            v = response_dict["value"].strip()
+
+            # rimuove eventuali quote esterne: "'...png'" o "\"...png\""
+            if (v.startswith("'") and v.endswith("'")) or (v.startswith('"') and v.endswith('"')):
+                v = v[1:-1].strip()
+
+            # 1) path così com’è
+            if isImageFilePath(v):
+                response_dict["type"] = "image"
+                response_dict["value"] = fileToBase64(v)
+
+            else:
+                # 2) path assoluto (risolve problemi di cwd)
+                abs_path = os.path.abspath(v)
+                if isImageFilePath(abs_path):
+                    response_dict["type"] = "image"
+                    response_dict["value"] = fileToBase64(abs_path)
+                else:
+                    # niente conversione: resta stringa
+                    response_dict["type"] = "str"
+                    response_dict["value"] = v
 
     return response_dict
