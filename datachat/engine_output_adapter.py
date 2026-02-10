@@ -86,11 +86,19 @@ def adapt_engine_output(raw_output: Any) -> Any:
 
     # 2) Contract JSON carried as string (common with LLM outputs)
     if isinstance(raw_output, str):
-        parsed = _try_parse_contract_payload(raw_output)
+        s = raw_output.strip()
+
+        parsed = _try_parse_contract_payload(s)
         if parsed is not None:
             return parsed
+
+        # NEW: if it looks like an image filepath, return image_path contract
+        s_low = s.lower()
+        if s_low.endswith((".png", ".jpg", ".jpeg", ".bmp", ".gif")):
+            return {"kind": "image_path", "path": s}
+
         # Plain string -> contract text
-        return {"kind": "text", "text": raw_output, "format": "plain"}
+        return {"kind": "text", "text": s, "format": "plain"}
 
     # 3) Common legacy/tool shape: list of dicts -> contract table
     if isinstance(raw_output, list):
