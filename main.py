@@ -569,6 +569,64 @@ def dataChat() -> Response | tuple[Response, int]:
 
     # Perform the chat operation and get the response and explanation
     response = engine.chat(chat)
+    response_kind = response.get("kind") if isinstance(response, dict) else None
+
+    trace = None
+    if hasattr(engine, "get_last_trace"):
+        try:
+            trace = engine.get_last_trace()  # type: ignore[attr-defined]
+        except Exception as e:
+            app.logger.warning(f"[datachat] Failed to read engine trace: {e}")
+
+    trace_payload: Optional[dict[str, Any]] = None
+    if isinstance(trace, dict) and trace.get("run_result") is not None:
+        try:
+            trace_payload = serialize_runresult(trace["run_result"])
+            if isinstance(trace_payload.get("metrics"), dict):
+                trace_payload["metrics"]["duration_ms"] = trace.get("duration_ms")
+        except Exception as e:
+            app.logger.error(f"[datachat] Failed to serialize trace: {e}")
+
+    if trace_payload is not None:
+        try:
+            log_runresult(
+                trace["run_result"],
+                user=user_email,
+                namespace="datachat",
+                language="N/A",
+                question=str(chat),
+                extra={
+                    "channel": "datachat",
+                    "response_kind": response_kind,
+                },
+            )
+        except Exception as e:
+            app.logger.error(f"[datachat] Structured logging failed: {e}")
+
+        try:
+            user = database_pg.get_user_by_username(user_email)
+            if not user:
+                raise ValueError(f"User '{user_email}' not found in DB")
+
+            user_id = user.get("id")
+            if not isinstance(user_id, int):
+                raise TypeError(f"Invalid user_id: {user_id}")
+
+            token_metrics = trace_payload.get("metrics", {}).get("token_usage", {})
+            token_input = token_metrics.get("input") or 0
+            token_output = token_metrics.get("output") or 0
+
+            log_id = log_token_usage(
+                user_id=user_id,
+                token_input=token_input,
+                token_output=token_output,
+                model=DATACHAT_MODEL,
+                provider=DATACHAT_PROVIDER,
+            )
+            app.logger.info(f"[datachat] token usage logged log_id={log_id}")
+        except Exception as e:
+            app.logger.error(f"[datachat] Failed to log token usage: {e}")
+
     response = adapt_engine_output(response)
 
     try:

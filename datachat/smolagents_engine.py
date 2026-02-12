@@ -5,6 +5,7 @@ import ast
 import re
 import shutil
 import uuid
+import time
 from dataclasses import dataclass, field
 from typing import Any
 import logging
@@ -44,6 +45,8 @@ class SmolagentsEngine(DataChatEngine):
     _model: LiteLLMModel | None = field(default=None, init=False, repr=False)
     _plots_dir: str | None = field(default=None, init=False, repr=False)
     _user_plots_dir: str | None = field(default=None, init=False, repr=False)
+    _last_run_result: Any | None = field(default=None, init=False, repr=False)
+    _last_run_duration_ms: float | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         # Create a per-user/per-session plots directory for safe cleanup.
@@ -130,6 +133,8 @@ class SmolagentsEngine(DataChatEngine):
 
     def chat(self, message: str) -> Any:
         if self._agent is None:
+            self._last_run_result = None
+            self._last_run_duration_ms = None
             return {
                 "kind": "error",
                 "message": (
@@ -331,12 +336,17 @@ class SmolagentsEngine(DataChatEngine):
         context = render_prompt(context_template, columns=cols)
 
         try:
+            started = time.time()
             run_result = self._agent.run(
                 context + "\n\nUser question: " + str(message),
                 reset=False,
                 return_full_result=True,
             )
+            self._last_run_result = run_result
+            self._last_run_duration_ms = round((time.time() - started) * 1000, 2)
         except Exception as e:
+            self._last_run_result = None
+            self._last_run_duration_ms = None
             return {
                 "kind": "error",
                 "message": f"SmolagentsEngine failed to run: {e}",
@@ -444,6 +454,13 @@ class SmolagentsEngine(DataChatEngine):
             "format": "plain",
         }
 
+    def get_last_trace(self) -> dict[str, Any] | None:
+        if self._last_run_result is None:
+            return None
+        return {
+            "run_result": self._last_run_result,
+            "duration_ms": self._last_run_duration_ms,
+        }
 
 
     def close(self) -> None:
