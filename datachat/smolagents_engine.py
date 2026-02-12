@@ -1,6 +1,7 @@
 import os
 import json
 import textwrap
+import ast
 import re
 import shutil
 import uuid
@@ -88,7 +89,7 @@ class SmolagentsEngine(DataChatEngine):
                 TrendTool(self.data)
             ],
             model=model,
-            max_steps=2,
+            max_steps=5,
             additional_authorized_imports=["json"],
         )
 
@@ -329,7 +330,11 @@ class SmolagentsEngine(DataChatEngine):
         context = render_prompt(context_template, columns=cols)
 
         try:
-            out = self._agent.run(context + "\n\nUser question: " + str(message), reset=False)
+            run_result = self._agent.run(
+                context + "\n\nUser question: " + str(message),
+                reset=False,
+                return_full_result=True,
+            )
         except Exception as e:
             return {
                 "kind": "error",
@@ -337,7 +342,7 @@ class SmolagentsEngine(DataChatEngine):
                 "code": "RUN_FAILED",
             }
 
-        raw = str(out).strip()
+        out = getattr(run_result, "output", None)
 
 
         def _unwrap_nested_table(obj: dict[str, Any]) -> dict[str, Any]:
@@ -377,41 +382,67 @@ class SmolagentsEngine(DataChatEngine):
                 return obj
 
 
-        def _parse_kind_payload(s: str) -> dict[str, Any] | None:
-            try:
-                obj = json.loads(s)
-                if isinstance(obj, dict) and "kind" in obj:
-                    return obj
-            except Exception:
-                return None
+        def _parse_kind_payload_obj(obj: Any) -> dict[str, Any] | None:
+            if isinstance(obj, dict) and "kind" in obj:
+                return obj
             return None
 
-        # 1) Tentativo diretto
-        parsed = _parse_kind_payload(raw)
+        def _parse_kind_payload_str(s: str) -> dict[str, Any] | None:
+            s = s.strip()
+            if not s:
+                return None
+
+            # A) strict JSON
+            try:
+                obj = json.loads(s)
+                parsed = _parse_kind_payload_obj(obj)
+                if parsed:
+                    return parsed
+
+                # JSON string inside JSON
+                if isinstance(obj, str):
+                    obj2 = json.loads(obj)
+                    parsed2 = _parse_kind_payload_obj(obj2)
+                    if parsed2:
+                        return parsed2
+            except Exception:
+                pass
+
+            # B) extract {...}
+            start = s.find("{")
+            end = s.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                candidate = s[start : end + 1].strip()
+
+                try:
+                    obj = json.loads(candidate)
+                    parsed = _parse_kind_payload_obj(obj)
+                    if parsed:
+                        return parsed
+                except Exception:
+                    pass
+
+            return None
+
+        # 1) Prefer structured output (dict)
+        parsed = _parse_kind_payload_obj(out)
         if parsed is not None:
             return _unwrap_nested_table(parsed)
 
-        # 2) Se è una stringa JSON "annidata" (es. "\"{...}\""), un json.loads in più la sblocca
-        try:
-            unwrapped = json.loads(raw)
-            if isinstance(unwrapped, str):
-                parsed = _parse_kind_payload(unwrapped)
-                if parsed is not None:
-                    return _unwrap_nested_table(parsed)
-        except Exception:
-            pass
-
-        # 3) Estrazione conservativa tra prima { e ultima } (per output tipo final_answer('...'))
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            candidate = raw[start : end + 1]
-            parsed = _parse_kind_payload(candidate)
+        # 2) If string, parse it
+        if isinstance(out, str):
+            parsed = _parse_kind_payload_str(out)
             if parsed is not None:
                 return _unwrap_nested_table(parsed)
 
-        # 4) Ultimo fallback: testo
-        return {"kind": "text", "text": raw, "format": "plain"}
+        # 3) Last fallback: plain text (avoid leaking RunResult(...))
+        safe_text = out.strip() if isinstance(out, str) else ""
+        return {
+            "kind": "text",
+            "text": safe_text or "Nessun output valido prodotto dall'agente.",
+            "format": "plain",
+        }
+
 
 
     def close(self) -> None:
