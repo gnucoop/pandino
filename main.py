@@ -572,6 +572,7 @@ def dataChat() -> Response | tuple[Response, int]:
     response_kind = response.get("kind") if isinstance(response, dict) else None
 
     trace = None
+    log_id: Optional[int] = None
     if hasattr(engine, "get_last_trace"):
         try:
             trace = engine.get_last_trace()  # type: ignore[attr-defined]
@@ -637,7 +638,14 @@ def dataChat() -> Response | tuple[Response, int]:
     # Spends User's tokens
     edit_tokens(user_email, -int(DATACHAT_TOKEN_COST))
 
-    return jsonify({"response": response_dict, "explanation": None})
+    response_payload: dict[str, Any] = {
+        "response": response_dict,
+        "explanation": None,
+    }
+    if log_id is not None:
+        response_payload["log_id"] = log_id
+
+    return jsonify(response_payload)
 
 
 # Define a route for the /datachat endpoint
