@@ -17,6 +17,7 @@ from datachat.engine_interface import DataChatEngine, EngineBootstrapResult
 from datachat.tools.sample_rows_tool import SampleRowsTool
 from datachat.tools.top_rows_tool import TopRowsTool
 from datachat.tools.filter_rows_tool import FilterRowsTool
+from datachat.tools.row_count_tool import RowCountTool
 from datachat.tools.aggregate_tool import AggregateTool
 from datachat.tools.describe_tool import DescribeTool
 from datachat.tools.missing_values_tool import MissingValuesTool
@@ -87,6 +88,7 @@ class SmolagentsEngine(DataChatEngine):
                 SampleRowsTool(self.data), 
                 TopRowsTool(self.data),
                 FilterRowsTool(self.data),
+                RowCountTool(self.data),
                 AggregateTool(self.data),
                 PlotTool(self.data, output_dir=self._plots_dir or plots_dir),
                 TrendTool(self.data)

@@ -134,7 +134,12 @@ class FilterRowsTool(Tool):
 
         "n": {
             "type": "integer",
-            "description": "Max number of rows to return (max 20).",
+            "description": "Max number of rows to return (max 50).",
+            "nullable": True,
+        },
+        "offset": {
+            "type": "integer",
+            "description": "Optional offset for pagination (default 0).",
             "nullable": True,
         },
         "columns": {
@@ -159,6 +164,7 @@ class FilterRowsTool(Tool):
         op2: Optional[str] = None,
         n: Optional[int] = 5,
         columns: Optional[list[str]] = None,
+        offset: Optional[int] = None,
     ) -> dict[str, Any]:
         try:
             df = self._df
@@ -170,7 +176,8 @@ class FilterRowsTool(Tool):
                     "code": "INVALID_FILTER_COLUMN",
                 }
 
-            n_int = max(1, min(int(n or 5), 20))
+            n_int = max(1, min(int(n or 5), 50))
+            offset_int = max(0, int(offset or 0))
 
             # Choose columns
             if columns:
@@ -266,7 +273,10 @@ class FilterRowsTool(Tool):
 
                 mask_final = mask_final & mask2
 
-            filtered = df_view[mask_final].head(n_int)
+            filtered_all = df_view[mask_final]
+            total_matches = int(mask_final.sum())
+
+            filtered = filtered_all.iloc[offset_int : offset_int + n_int]
 
             records = filtered.to_dict(orient="records")
 
@@ -290,7 +300,15 @@ class FilterRowsTool(Tool):
                 len(safe_records),
             )
 
-            return {"kind": "table", "data": safe_records}
+            return {
+                "kind": "table",
+                "data": safe_records,
+                "meta": {
+                    "offset": offset_int,
+                    "returned": len(safe_records),
+                    "total_matches": total_matches,
+                },
+            }
 
         except Exception as e:
             logging.exception("[datachat][filter_rows_tool] failed")
