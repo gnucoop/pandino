@@ -112,11 +112,24 @@ def normalize_datachat_response(response: Any) -> dict[str, Any]:
         kind = str(response.get("kind") or "").strip().lower()
 
         if kind == "text":
-            text = response.get("text", "")
+            # Be tolerant with common LLM variants: content/message -> text
+            text = response.get("text")
+            if text is None:
+                text = response.get("content")
+            if text is None:
+                text = response.get("message")
+            if text is None:
+                text = ""
             return {"type": "str", "value": str(text)}
 
         if kind == "error":
-            message = response.get("message", "")
+            message = response.get("message")
+            if message is None:
+                message = response.get("text")
+            if message is None:
+                message = response.get("content")
+            if message is None:
+                message = ""
             return {"type": "str", "value": str(message)}
 
         if kind == "image_path":
