@@ -5,6 +5,7 @@ import re
 import shutil
 import uuid
 import time
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -27,6 +28,7 @@ from llm.litellm_factory import build_litellm_model
 from prompt_utils import load_prompt, render_prompt
 
 plots_dir = os.getenv("DATACHAT_PLOTS_DIR", "/tmp/datachat_plots")
+runtime_logger = logging.getLogger("datachat.runtime")
 
 @dataclass
 class SmolagentsEngine(DataChatEngine):
@@ -46,6 +48,9 @@ class SmolagentsEngine(DataChatEngine):
     _user_plots_dir: str | None = field(default=None, init=False, repr=False)
     _last_run_result: Any | None = field(default=None, init=False, repr=False)
     _last_run_duration_ms: float | None = field(default=None, init=False, repr=False)
+    _configured_model: str = field(default="", init=False, repr=False)
+    _provider: str = field(default="", init=False, repr=False)
+    _max_steps: int = field(default=12, init=False, repr=False)
 
     def __post_init__(self) -> None:
         # Create a per-user/per-session plots directory for safe cleanup.
@@ -57,10 +62,28 @@ class SmolagentsEngine(DataChatEngine):
         
         provider = os.getenv("DATACHAT_PROVIDER", "Deepinfra").strip()
         configured_model = os.getenv("DATACHAT_MODEL", "").strip()
+        self._provider = provider
+        self._configured_model = configured_model
+        try:
+            self._max_steps = max(1, int(os.getenv("DATACHAT_MAX_STEPS", "12")))
+        except ValueError:
+            self._max_steps = 12
+
+        runtime_logger.info(
+            "engine_init engine=smolagents user=%s provider=%s model=%s max_steps=%s",
+            self.user_name,
+            provider,
+            configured_model or "missing",
+            self._max_steps,
+        )
 
         if not configured_model:
             self._model = None
             self._agent = None
+            runtime_logger.info(
+                "engine_init_result engine=smolagents user=%s status=error error_code=MISSING_CONFIG",
+                self.user_name,
+            )
             return
 
         try:
@@ -73,6 +96,10 @@ class SmolagentsEngine(DataChatEngine):
             
             self._model = None
             self._agent = None
+            runtime_logger.info(
+                "engine_init_result engine=smolagents user=%s status=error error_code=MISSING_CONFIG",
+                self.user_name,
+            )
             return
 
         self._model = model
@@ -92,8 +119,13 @@ class SmolagentsEngine(DataChatEngine):
                 TrendTool(self.data)
             ],
             model=model,
-            max_steps=5,
+            max_steps=self._max_steps,
             additional_authorized_imports=["json"],
+        )
+
+        runtime_logger.info(
+            "engine_init_result engine=smolagents user=%s status=ok",
+            self.user_name,
         )
 
 
@@ -107,10 +139,21 @@ class SmolagentsEngine(DataChatEngine):
         html = get_static_bootstrap_html(lang)
         return EngineBootstrapResult(suggested_questions_html=html)
 
-    def chat(self, message: str) -> Any:
+    def chat(self, message: str, request_id: str | None = None) -> Any:
+        runtime_logger.info(
+            "chat_start request_id=%s engine=smolagents user=%s message_len=%s",
+            request_id or "n/a",
+            self.user_name,
+            len(str(message or "")),
+        )
         if self._agent is None:
             self._last_run_result = None
             self._last_run_duration_ms = None
+            runtime_logger.info(
+                "chat_error request_id=%s engine=smolagents user=%s error_code=MISSING_CONFIG",
+                request_id or "n/a",
+                self.user_name,
+            )
             return {
                 "kind": "error",
                 "message": (
@@ -197,6 +240,12 @@ class SmolagentsEngine(DataChatEngine):
         except Exception as e:
             self._last_run_result = None
             self._last_run_duration_ms = None
+            runtime_logger.info(
+                "chat_error request_id=%s engine=smolagents user=%s error_code=RUN_FAILED error_message_short=%s",
+                request_id or "n/a",
+                self.user_name,
+                str(e)[:160],
+            )
             return {
                 "kind": "error",
                 "message": f"SmolagentsEngine failed to run: {e}",
@@ -288,21 +337,45 @@ class SmolagentsEngine(DataChatEngine):
         # 1) Prefer structured output (dict)
         parsed = _parse_kind_payload_obj(out)
         if parsed is not None:
-            return _unwrap_nested_table(parsed)
+            result_payload = _unwrap_nested_table(parsed)
+            runtime_logger.info(
+                "chat_end request_id=%s engine=smolagents user=%s duration_ms=%s response_kind=%s",
+                request_id or "n/a",
+                self.user_name,
+                self._last_run_duration_ms,
+                result_payload.get("kind"),
+            )
+            return result_payload
 
         # 2) If string, parse it
         if isinstance(out, str):
             parsed = _parse_kind_payload_str(out)
             if parsed is not None:
-                return _unwrap_nested_table(parsed)
+                result_payload = _unwrap_nested_table(parsed)
+                runtime_logger.info(
+                    "chat_end request_id=%s engine=smolagents user=%s duration_ms=%s response_kind=%s",
+                    request_id or "n/a",
+                    self.user_name,
+                    self._last_run_duration_ms,
+                    result_payload.get("kind"),
+                )
+                return result_payload
 
         # 3) Last fallback: plain text (avoid leaking RunResult(...))
         safe_text = out.strip() if isinstance(out, str) else ""
-        return {
+        result_payload = {
             "kind": "text",
             "text": safe_text or "Nessun output valido prodotto dall'agente.",
             "format": "plain",
         }
+        runtime_logger.info(
+            "chat_end request_id=%s engine=smolagents user=%s duration_ms=%s response_kind=%s",
+            request_id or "n/a",
+            self.user_name,
+            self._last_run_duration_ms,
+            result_payload.get("kind"),
+        )
+        return result_payload
 
     def get_last_trace(self) -> dict[str, Any] | None:
         if self._last_run_result is None:
@@ -315,13 +388,29 @@ class SmolagentsEngine(DataChatEngine):
 
     def close(self) -> None:
         # Remove only the session plots directory; keep user dir unless empty.
-        if self._plots_dir and os.path.exists(self._plots_dir):
-            shutil.rmtree(self._plots_dir, ignore_errors=True)
+        plots_dir_removed = False
+        user_dir_removed = False
+        cleanup_error = ""
+        try:
+            if self._plots_dir and os.path.exists(self._plots_dir):
+                shutil.rmtree(self._plots_dir, ignore_errors=True)
+                plots_dir_removed = not os.path.exists(self._plots_dir)
 
-        if self._user_plots_dir and os.path.isdir(self._user_plots_dir):
-            try:
-                if not os.listdir(self._user_plots_dir):
-                    os.rmdir(self._user_plots_dir)
-            except Exception:
-                pass
+            if self._user_plots_dir and os.path.isdir(self._user_plots_dir):
+                try:
+                    if not os.listdir(self._user_plots_dir):
+                        os.rmdir(self._user_plots_dir)
+                        user_dir_removed = not os.path.exists(self._user_plots_dir)
+                except Exception as e:
+                    cleanup_error = str(e)[:160]
+        except Exception as e:
+            cleanup_error = str(e)[:160]
+
+        runtime_logger.info(
+            "cleanup_result engine=smolagents user=%s plots_dir_removed=%s user_dir_removed=%s cleanup_error=%s",
+            self.user_name,
+            plots_dir_removed,
+            user_dir_removed,
+            cleanup_error or "none",
+        )
         return

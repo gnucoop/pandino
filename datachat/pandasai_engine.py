@@ -36,7 +36,7 @@ class PandasAIEngine(DataChatEngine):
         html = getattr(resp, "content", None) if resp else None
         return EngineBootstrapResult(suggested_questions_html=html)
 
-    def chat(self, message: str) -> Any:
+    def chat(self, message: str, request_id: str | None = None) -> Any:
         return self._agent.chat(message)
 
     def close(self) -> None:

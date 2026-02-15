@@ -108,6 +108,30 @@ app.secret_key = secret_key
 # Configure the agent run logger
 setup_agent_logger()
 
+
+def setup_datachat_runtime_logger() -> logging.Logger:
+    """
+    Configure runtime logger for DataChat observability on terminal.
+    Keeps existing structured/file logging untouched.
+    """
+    logger = logging.getLogger("datachat.runtime")
+    logger.setLevel(getattr(logging, os.getenv("DATACHAT_LOG_LEVEL", "INFO").upper(), logging.INFO))
+    logger.propagate = False
+
+    if not any(getattr(h, "_datachat_runtime", False) for h in logger.handlers):
+        handler = logging.StreamHandler()
+        handler._datachat_runtime = True  # type: ignore[attr-defined]
+        handler.setLevel(logger.level)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+        )
+        logger.addHandler(handler)
+
+    return logger
+
+
+DATACHAT_RUNTIME_LOGGER = setup_datachat_runtime_logger()
+
 # Verify Matplotlib backend
 print(f"Matplotlib backend: {matplotlib.get_backend()}")
 
@@ -135,6 +159,10 @@ VISION_MODEL = os.environ.get("VISION_MODEL")
 DEEPINFRA_API_KEY = os.environ.get("DEEPINFRA_API_KEY")
 STRIPE_KEY = os.environ.get("STRIPE_SK_KEY")
 DATACHAT_TOKEN_COST = int(os.environ.get("DATACHAT_TOKEN_COST", "1"))
+DATACHAT_MAX_STEPS = int(os.environ.get("DATACHAT_MAX_STEPS", "12"))
+DATACHAT_RATE_LIMIT_PER_MIN = int(os.environ.get("DATACHAT_RATE_LIMIT_PER_MIN", "0"))
+DATACHAT_SESSION_TTL_MIN = int(os.environ.get("DATACHAT_SESSION_TTL_MIN", "60"))
+DATACHAT_LOG_LEVEL = os.environ.get("DATACHAT_LOG_LEVEL", "INFO")
 COMPLETION_TOKEN_COST = os.environ.get("COMPLETION_TOKEN_COST")
 PROMPT_TOKEN_COST = os.environ.get("PROMPT_TOKEN_COST")
 AUDIO_FORM_TOKEN_COST = os.environ.get("AUDIO_FORM_TOKEN_COST")
@@ -527,34 +555,82 @@ def startChat() -> Response | tuple[Response, int]:
 # Define a route for the /datachat endpoint
 @app.route("/datachat", methods=["POST"])
 def dataChat() -> Response | tuple[Response, int]:
+    request_id = secrets.token_hex(4)
+    request_started = time.time()
 
     api_key = request.headers.get("X-API-KEY")
     user_email = request.headers.get("X-USER-EMAIL")
 
     if not api_key:
+        DATACHAT_RUNTIME_LOGGER.info(
+            "datachat_request_end request_id=%s status=error http_status=400 duration_ms_total=%.2f error_code=MISSING_API_KEY",
+            request_id,
+            (time.time() - request_started) * 1000,
+        )
         return jsonify({"error": "Missing X-API-KEY header"}), 400
     if not user_email:
+        DATACHAT_RUNTIME_LOGGER.info(
+            "datachat_request_end request_id=%s status=error http_status=400 duration_ms_total=%.2f error_code=MISSING_USER_EMAIL",
+            request_id,
+            (time.time() - request_started) * 1000,
+        )
         return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
 
     assert_valid_api_key(api_key, user_email)
 
     if not request.json:
+        DATACHAT_RUNTIME_LOGGER.info(
+            "datachat_request_end request_id=%s status=error http_status=400 duration_ms_total=%.2f error_code=MISSING_JSON_BODY user=%s",
+            request_id,
+            (time.time() - request_started) * 1000,
+            user_email,
+        )
         return jsonify({"error": "Missing JSON body"}), 400
 
     chat = request.json.get("chat")
     
     engine = getAgent(api_key)
+    engine_name = engine.__class__.__name__ if engine is not None else "none"
+
+    DATACHAT_RUNTIME_LOGGER.info(
+        "datachat_request_start request_id=%s user=%s engine=%s message_len=%s",
+        request_id,
+        user_email,
+        engine_name,
+        len(str(chat or "")),
+    )
 
     # Check if the Chat parameter is present
     if not chat:
+        DATACHAT_RUNTIME_LOGGER.info(
+            "datachat_request_end request_id=%s status=error http_status=400 duration_ms_total=%.2f user=%s engine=%s error_code=MISSING_CHAT",
+            request_id,
+            (time.time() - request_started) * 1000,
+            user_email,
+            engine_name,
+        )
         return jsonify({"error": "Missing Chat string"}), 400
 
     # Check if user email is present
     if not user_email:
+        DATACHAT_RUNTIME_LOGGER.info(
+            "datachat_request_end request_id=%s status=error http_status=400 duration_ms_total=%.2f user=%s engine=%s error_code=MISSING_USER_EMAIL",
+            request_id,
+            (time.time() - request_started) * 1000,
+            user_email,
+            engine_name,
+        )
         return jsonify({"error": "Missing User email"}), 400
 
     # Check if the Agent is active
     if not engine:
+        DATACHAT_RUNTIME_LOGGER.info(
+            "datachat_request_end request_id=%s status=error http_status=400 duration_ms_total=%.2f user=%s engine=%s error_code=AGENT_NOT_ACTIVE",
+            request_id,
+            (time.time() - request_started) * 1000,
+            user_email,
+            engine_name,
+        )
         return jsonify({"error": "Agent not active for this Api Key"}), 400
 
     # Checks if the User's tokens are enough for this operation
@@ -562,17 +638,42 @@ def dataChat() -> Response | tuple[Response, int]:
     user_tokens = database_pg.get_user_tokens(user_email)
 
     if user_tokens is None:
+        DATACHAT_RUNTIME_LOGGER.info(
+            "datachat_request_end request_id=%s status=error http_status=500 duration_ms_total=%.2f user=%s engine=%s error_code=USER_TOKENS_NOT_FOUND",
+            request_id,
+            (time.time() - request_started) * 1000,
+            user_email,
+            engine_name,
+        )
         return jsonify({"error": "Could not retrieve user tokens"}), 500
 
     if int(DATACHAT_TOKEN_COST) > user_tokens:
+        DATACHAT_RUNTIME_LOGGER.info(
+            "datachat_request_end request_id=%s status=error http_status=500 duration_ms_total=%.2f user=%s engine=%s error_code=NOT_ENOUGH_TOKENS",
+            request_id,
+            (time.time() - request_started) * 1000,
+            user_email,
+            engine_name,
+        )
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
     # Perform the chat operation and get the response and explanation
-    response = engine.chat(chat)
+    chat_started = time.time()
+    response = engine.chat(chat, request_id=request_id)
     response_kind = response.get("kind") if isinstance(response, dict) else None
+    DATACHAT_RUNTIME_LOGGER.info(
+        "datachat_engine_done request_id=%s user=%s engine=%s duration_ms=%.2f response_kind=%s",
+        request_id,
+        user_email,
+        engine_name,
+        (time.time() - chat_started) * 1000,
+        response_kind or "unknown",
+    )
 
     trace = None
     log_id: Optional[int] = None
+    structured_log_ok = False
+    db_log_ok = False
     if hasattr(engine, "get_last_trace"):
         try:
             trace = engine.get_last_trace()  # type: ignore[attr-defined]
@@ -599,8 +700,10 @@ def dataChat() -> Response | tuple[Response, int]:
                 extra={
                     "channel": "datachat",
                     "response_kind": response_kind,
+                    "request_id": request_id,
                 },
             )
+            structured_log_ok = True
         except Exception as e:
             app.logger.error(f"[datachat] Structured logging failed: {e}")
 
@@ -624,15 +727,35 @@ def dataChat() -> Response | tuple[Response, int]:
                 model=DATACHAT_MODEL,
                 provider=DATACHAT_PROVIDER,
             )
+            db_log_ok = True
             app.logger.info(f"[datachat] token usage logged log_id={log_id}")
         except Exception as e:
             app.logger.error(f"[datachat] Failed to log token usage: {e}")
+
+    DATACHAT_RUNTIME_LOGGER.info(
+        "datachat_trace_status request_id=%s user=%s engine=%s trace_present=%s structured_log_ok=%s db_log_ok=%s log_id=%s",
+        request_id,
+        user_email,
+        engine_name,
+        bool(trace_payload is not None),
+        structured_log_ok,
+        db_log_ok,
+        log_id if log_id is not None else "none",
+    )
 
     response = adapt_engine_output(response)
 
     try:
         response_dict = normalize_datachat_response(response)
     except RuntimeError as e:
+        DATACHAT_RUNTIME_LOGGER.info(
+            "datachat_request_end request_id=%s status=error http_status=500 duration_ms_total=%.2f user=%s engine=%s response_kind=%s error_code=NORMALIZE_FAILED",
+            request_id,
+            (time.time() - request_started) * 1000,
+            user_email,
+            engine_name,
+            response_kind or "unknown",
+        )
         return jsonify({"error": str(e)}), 500
 
     # Spends User's tokens
@@ -644,6 +767,16 @@ def dataChat() -> Response | tuple[Response, int]:
     }
     if log_id is not None:
         response_payload["log_id"] = log_id
+
+    DATACHAT_RUNTIME_LOGGER.info(
+        "datachat_request_end request_id=%s status=ok http_status=200 duration_ms_total=%.2f user=%s engine=%s response_kind=%s log_id=%s",
+        request_id,
+        (time.time() - request_started) * 1000,
+        user_email,
+        engine_name,
+        response_kind or "unknown",
+        log_id if log_id is not None else "none",
+    )
 
     return jsonify(response_payload)
 
@@ -1387,6 +1520,10 @@ def admin_dashboard():
         "VISION_PROVIDER": VISION_PROVIDER,
         "VISION_MODEL": VISION_MODEL,
         "DATACHAT_TOKEN_COST": DATACHAT_TOKEN_COST,
+        "DATACHAT_MAX_STEPS": DATACHAT_MAX_STEPS,
+        "DATACHAT_RATE_LIMIT_PER_MIN": DATACHAT_RATE_LIMIT_PER_MIN,
+        "DATACHAT_SESSION_TTL_MIN": DATACHAT_SESSION_TTL_MIN,
+        "DATACHAT_LOG_LEVEL": DATACHAT_LOG_LEVEL,
         "COMPLETION_TOKEN_COST": COMPLETION_TOKEN_COST,
         "PROMPT_TOKEN_COST": PROMPT_TOKEN_COST,
         "AUDIO_FORM_TOKEN_COST": AUDIO_FORM_TOKEN_COST
