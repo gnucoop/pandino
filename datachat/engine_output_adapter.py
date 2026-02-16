@@ -1,5 +1,24 @@
 from typing import Any
 import json
+from contextvars import ContextVar
+
+
+_adapter_fallback_used_ctx: ContextVar[bool] = ContextVar(
+    "adapter_fallback_used",
+    default=False,
+)
+
+
+def consume_adapter_fallback_used() -> bool:
+    """
+    Return and reset the per-request adapter fallback flag.
+
+    This flag is set to True when adapt_engine_output had to coerce a non-contract
+    output into the DataChat contract.
+    """
+    used = _adapter_fallback_used_ctx.get()
+    _adapter_fallback_used_ctx.set(False)
+    return bool(used)
 
 
 def _try_parse_contract_payload(s: str) -> dict[str, Any] | None:
@@ -80,6 +99,8 @@ def adapt_engine_output(raw_output: Any) -> Any:
         * str -> {"kind":"text","text":"...","format":"plain"}
         * list[str|int|float|bool|None] -> table with single column 'value'
     """
+    _adapter_fallback_used_ctx.set(False)
+
     # 1) Already contract dict
     if isinstance(raw_output, dict) and "kind" in raw_output:
         return raw_output
@@ -95,14 +116,17 @@ def adapt_engine_output(raw_output: Any) -> Any:
         # NEW: if it looks like an image filepath, return image_path contract
         s_low = s.lower()
         if s_low.endswith((".png", ".jpg", ".jpeg", ".bmp", ".gif")):
+            _adapter_fallback_used_ctx.set(True)
             return {"kind": "image_path", "path": s}
 
         # Plain string -> contract text
+        _adapter_fallback_used_ctx.set(True)
         return {"kind": "text", "text": s, "format": "plain"}
 
     # 3) Common legacy/tool shape: list of dicts -> contract table
     if isinstance(raw_output, list):
         if all(isinstance(item, dict) for item in raw_output):
+            _adapter_fallback_used_ctx.set(True)
             return {"kind": "table", "data": raw_output}
 
         # list of scalars -> table with one column
@@ -110,10 +134,13 @@ def adapt_engine_output(raw_output: Any) -> Any:
             (item is None) or isinstance(item, (str, int, float, bool))
             for item in raw_output
         ):
+            _adapter_fallback_used_ctx.set(True)
             return {"kind": "table", "data": [{"value": v} for v in raw_output]}
 
         # unknown list content -> fallback text
+        _adapter_fallback_used_ctx.set(True)
         return {"kind": "text", "text": str(raw_output), "format": "plain"}
 
     # 4) Anything else: keep as-is (or optionally coerce to text)
+    _adapter_fallback_used_ctx.set(True)
     return raw_output
