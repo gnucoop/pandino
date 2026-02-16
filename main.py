@@ -46,7 +46,10 @@ from agent_manager import getAgent, createAgent, deleteAgent
 from retriever_tool import RetrieverTool
 from datachat.output_normalizer import normalize_datachat_response
 from datachat.dataset_loader import load_csv_to_dataframe
-from datachat.engine_output_adapter import adapt_engine_output
+from datachat.engine_output_adapter import (
+    adapt_engine_output,
+    consume_adapter_fallback_used,
+)
 from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
 from database_pg import (
@@ -89,7 +92,7 @@ from ai import (
 )
 from prompt_utils import load_prompt, render_prompt
 from utils.agent_serialization import serialize_runresult
-from utils.agent_logging import log_runresult, setup_agent_logger
+from utils.agent_logging import log_runresult, setup_agent_logger, setup_datachat_runtime_logger
 from dotenv import load_dotenv
 
 
@@ -107,28 +110,6 @@ app.secret_key = secret_key
 
 # Configure the agent run logger
 setup_agent_logger()
-
-
-def setup_datachat_runtime_logger() -> logging.Logger:
-    """
-    Configure runtime logger for DataChat observability on terminal.
-    Keeps existing structured/file logging untouched.
-    """
-    logger = logging.getLogger("datachat.runtime")
-    logger.setLevel(getattr(logging, os.getenv("DATACHAT_LOG_LEVEL", "INFO").upper(), logging.INFO))
-    logger.propagate = False
-
-    if not any(getattr(h, "_datachat_runtime", False) for h in logger.handlers):
-        handler = logging.StreamHandler()
-        handler._datachat_runtime = True  # type: ignore[attr-defined]
-        handler.setLevel(logger.level)
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
-        )
-        logger.addHandler(handler)
-
-    return logger
-
 
 DATACHAT_RUNTIME_LOGGER = setup_datachat_runtime_logger()
 
@@ -744,6 +725,14 @@ def dataChat() -> Response | tuple[Response, int]:
     )
 
     response = adapt_engine_output(response)
+    adapter_fallback_used = consume_adapter_fallback_used()
+    DATACHAT_RUNTIME_LOGGER.info(
+        "datachat_adapter_status request_id=%s user=%s engine=%s adapter_fallback_used=%s",
+        request_id,
+        user_email,
+        engine_name,
+        adapter_fallback_used,
+    )
 
     try:
         response_dict = normalize_datachat_response(response)
@@ -769,12 +758,13 @@ def dataChat() -> Response | tuple[Response, int]:
         response_payload["log_id"] = log_id
 
     DATACHAT_RUNTIME_LOGGER.info(
-        "datachat_request_end request_id=%s status=ok http_status=200 duration_ms_total=%.2f user=%s engine=%s response_kind=%s log_id=%s",
+        "datachat_request_end request_id=%s status=ok http_status=200 duration_ms_total=%.2f user=%s engine=%s response_kind=%s adapter_fallback_used=%s log_id=%s",
         request_id,
         (time.time() - request_started) * 1000,
         user_email,
         engine_name,
         response_kind or "unknown",
+        adapter_fallback_used,
         log_id if log_id is not None else "none",
     )
 
