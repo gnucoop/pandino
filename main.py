@@ -11,7 +11,6 @@ import textwrap
 import logging
 import time
 from functools import wraps
-import io
 
 # === Third-party ===
 from flask import (
@@ -92,7 +91,8 @@ from ai import (
 )
 from prompt_utils import load_prompt, render_prompt
 from utils.agent_serialization import serialize_runresult
-from utils.agent_logging import log_runresult, setup_agent_logger, setup_datachat_runtime_logger
+from utils.agent_logging import log_runresult, setup_agent_logger
+from utils.runtime_logging import setup_datachat_runtime_logger
 from dotenv import load_dotenv
 
 
@@ -592,17 +592,6 @@ def dataChat() -> Response | tuple[Response, int]:
         )
         return jsonify({"error": "Missing Chat string"}), 400
 
-    # Check if user email is present
-    if not user_email:
-        DATACHAT_RUNTIME_LOGGER.info(
-            "datachat_request_end request_id=%s status=error http_status=400 duration_ms_total=%.2f user=%s engine=%s error_code=MISSING_USER_EMAIL",
-            request_id,
-            (time.time() - request_started) * 1000,
-            user_email,
-            engine_name,
-        )
-        return jsonify({"error": "Missing User email"}), 400
-
     # Check if the Agent is active
     if not engine:
         DATACHAT_RUNTIME_LOGGER.info(
@@ -640,8 +629,11 @@ def dataChat() -> Response | tuple[Response, int]:
 
     # Perform the chat operation and get the response and explanation
     chat_started = time.time()
+    
     response = engine.chat(chat, request_id=request_id)
+    
     response_kind = response.get("kind") if isinstance(response, dict) else None
+    
     DATACHAT_RUNTIME_LOGGER.info(
         "datachat_engine_done request_id=%s user=%s engine=%s duration_ms=%.2f response_kind=%s",
         request_id,
