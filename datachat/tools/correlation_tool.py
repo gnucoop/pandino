@@ -14,8 +14,9 @@ class CorrelationTool(Tool):
 
     name = "correlation"
     description = (
-        "Compute correlation between two numeric columns. Use when the user asks "
-        "if there is a correlation or relationship between two numeric variables."
+        "Compute the Pearson correlation coefficient between two numeric columns. "
+        "Both columns must contain numeric values. "
+        "Returns a single-row table with correlation and number of valid pairs."
     )
     output_type = "object"
 
@@ -28,6 +29,15 @@ class CorrelationTool(Tool):
             "type": "string",
             "description": "Second numeric column.",
         },
+        "data": {
+            "type": "array",
+            "description": (
+                "Optional table records (list of objects) produced by another tool. "
+                "If provided, correlation will be computed on this data instead of the session dataset."
+            ),
+            "items": {"type": "object"},
+            "nullable": True,
+        },
         "method": {
             "type": "string",
             "description": "Correlation method (only 'pearson' supported).",
@@ -39,15 +49,52 @@ class CorrelationTool(Tool):
         super().__init__()
         self._df = df
 
-    def forward(self, col_x: str, col_y: str, method: str | None = None) -> dict[str, Any]:
+    def forward(
+        self, 
+        col_x: str, 
+        col_y: str, 
+        data: list[dict[str, Any]] | None = None,
+        method: str | None = None
+    ) -> dict[str, Any]:
+        
         try:
-            df = self._df
+            if data is not None:
+                if isinstance(data, dict) and "data" in data:
+                    data = data.get("data")
+
+                if not isinstance(data, list):
+                    return {"kind": "error", "message": "Invalid data: expected a list of records.", "code": "INVALID_DATA"}
+                if len(data) == 0:
+                    return {"kind": "error", "message": "Not enough data to compute correlation.", "code": "INSUFFICIENT_DATA"}
+
+                try:
+                    df = pd.DataFrame(data)
+                except Exception:
+                    return {"kind": "error", "message": "Invalid data: could not build a table from records.", "code": "INVALID_DATA"}
+            else:
+                df = self._df
 
             x = (col_x or "").strip()
             y = (col_y or "").strip()
-            if not x or x not in df.columns:
+
+            if not x or not y:
+                return {"kind": "error", "message": "Missing col_x or col_y.", "code": "MISSING_COLUMNS"}
+
+            if x not in df.columns or y not in df.columns:
+                if data is not None:
+                    lowered = {c.lower(): c for c in df.columns}
+                    if x not in df.columns:
+                        hit = lowered.get(x.lower())
+                        if hit:
+                            x = hit
+                    if y not in df.columns:
+                        hit = lowered.get(y.lower())
+                        if hit:
+                            y = hit
+
+            if x not in df.columns:
                 return {"kind": "error", "message": f"Invalid col_x: {x}", "code": "INVALID_COLUMN"}
-            if not y or y not in df.columns:
+            if y not in df.columns:
                 return {"kind": "error", "message": f"Invalid col_y: {y}", "code": "INVALID_COLUMN"}
 
             method_clean = (method or "pearson").strip().lower()
@@ -56,6 +103,24 @@ class CorrelationTool(Tool):
 
             s_x = pd.to_numeric(df[x], errors="coerce")
             s_y = pd.to_numeric(df[y], errors="coerce")
+
+            x_valid = int(s_x.notna().sum())
+            y_valid = int(s_y.notna().sum())
+
+            # If one column has (almost) no numeric values, correlation is not the right operation
+            if x_valid < 2:
+                return {
+                    "kind": "error",
+                    "message": f"Column '{x}' has not enough numeric values to compute correlation.",
+                    "code": "NO_NUMERIC_DATA",
+                }
+            if y_valid < 2:
+                return {
+                    "kind": "error",
+                    "message": f"Column '{y}' has not enough numeric values to compute correlation.",
+                    "code": "NO_NUMERIC_DATA",
+                }
+
             tmp = pd.DataFrame({x: s_x, y: s_y}).dropna()
 
             if len(tmp) < 2:

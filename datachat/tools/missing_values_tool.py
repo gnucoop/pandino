@@ -24,12 +24,21 @@ class MissingValuesTool(Tool):
 
     name = "missing_values"
     description = (
-        "Return missing-value counts per column. Use this when the user asks "
-        "about null/NaN/missing data."
+        "Return missing-value statistics per column, including total rows, "
+        "number of missing values, and missing percentage."
     )
     output_type = "object"
 
     inputs: ClassVar[dict[str, Any]] = {
+        "data": {
+            "type": "array",
+            "description": (
+                "Optional table records (list of objects) produced by another tool. "
+                "If provided, missing values will be computed on this data instead of the session dataset."
+            ),
+            "items": {"type": "object"},
+            "nullable": True,
+        },
         "columns": {
             "type": "array",
             "description": "Optional list of columns to check. If omitted, checks all columns.",
@@ -49,14 +58,47 @@ class MissingValuesTool(Tool):
 
     def forward(
         self,
+        data: list[dict[str, Any]] | None = None,
         columns: Optional[list[str]] = None,
         n: Optional[int] = 50,
     ) -> dict[str, Any]:
         try:
-            df = self._df
+            
+            if data is not None:
+                if isinstance(data, dict) and "data" in data:
+                    data = data.get("data")
+
+                if not isinstance(data, list):
+                    return {"kind": "error", "message": "Invalid data: expected a list of records.", "code": "INVALID_DATA"}
+                if len(data) == 0:
+                    return {"kind": "table", "data": []}
+
+                try:
+                    df = pd.DataFrame(data)
+                except Exception:
+                    return {"kind": "error", "message": "Invalid data: could not build a table from records.", "code": "INVALID_DATA"}
+            else:
+                df = self._df
 
             if columns:
-                cols = [c for c in columns if c in df.columns]
+                # keep only existing columns, allow case-insensitive match (useful on tool-provided data)
+                if data is not None:
+                    lowered = {c.lower(): c for c in df.columns}
+                    normalized: list[str] = []
+                    for c in columns:
+                        c_clean = (c or "").strip()
+                        if not c_clean:
+                            continue
+                        if c_clean in df.columns:
+                            normalized.append(c_clean)
+                        else:
+                            hit = lowered.get(c_clean.lower())
+                            if hit:
+                                normalized.append(hit)
+                    cols = normalized
+                else:
+                    cols = [c for c in columns if c in df.columns]
+
                 if cols:
                     df = df[cols]
 

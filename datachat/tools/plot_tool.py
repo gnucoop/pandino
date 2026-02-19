@@ -23,6 +23,9 @@ class PlotTool(Tool):
     - pie: composition chart as a derived view of:
         * count by category (y is empty)
         * sum(y) by category (y is provided, agg must be 'sum')
+    - box:
+        * single-column mode: boxplot of a numeric column x (y must be empty)
+        * grouped mode: boxplots of numeric y grouped by categorical x
 
     Returns:
       {"kind":"image_path","path":"...png"} on success
@@ -31,8 +34,9 @@ class PlotTool(Tool):
 
     name = "plot"
     description = (
-        "Generate a plot from the dataset and return an image path. "
-        "Use for chart requests (bar/line/hist/pie)."
+        "Generate a chart from tabular data using a specified chart type "
+        "(bar, line, histogram, pie, box). "
+        "Returns the file path of the generated image."
     )
     output_type = "object"
 
@@ -40,25 +44,46 @@ class PlotTool(Tool):
     inputs: ClassVar[dict[str, Any]] = {
         "kind": {
             "type": "string",
-            "description": "Plot kind: one of 'bar', 'line', 'hist', 'pie'.",
+            "description": "Plot kind: one of 'bar', 'line', 'hist', 'pie', 'box'.",
         },
         "x": {
             "type": "string",
-            "description": "X column name (for hist, this is the numeric column to plot).",
+            "description": (
+                "X column name. "
+                "For hist: numeric column to plot. "
+                "For box: either a numeric column (single-column mode) OR a categorical column (grouped mode when y is provided)."
+            ),
         },
         "y": {
             "type": "string",
-            "description": "Y column name (used for line; optional for bar; optional for pie).",
+            "description": (
+                "Y column name. "
+                "Used for line; optional for bar; optional for pie. "
+                "For box (grouped mode): numeric column to plot per category of x."
+            ),
+            "nullable": True,
+        },
+        "data": {
+            "type": "array",
+            "description": (
+                "Optional table records (list of objects) produced by another tool. "
+                "If provided, the plot will be built from this data instead of the session dataset."
+            ),
+            "items": {"type": "object"},
             "nullable": True,
         },
         "agg": {
             "type": "string",
-            "description": "Aggregation for bar when y is provided: 'mean' (default) or 'sum'. For pie with y, only 'sum' is allowed.",
+            "description": (
+                "Aggregation for bar when y is provided: 'mean' (default) or 'sum'. "
+                "For pie with y, only 'sum' is allowed. "
+                "Ignored for hist/line/box."
+            ),
             "nullable": True,
         },
         "n": {
             "type": "integer",
-            "description": "Max number of categories for bar/pie (max 50).",
+            "description": "Max number of categories for bar/pie/box-grouped (max 50).",
             "nullable": True,
         },
         "bins": {
@@ -84,23 +109,53 @@ class PlotTool(Tool):
         kind: str,
         x: str,
         y: str | None = None,
+        data: list[dict[str, Any]] | None = None,
         agg: str | None = None,
         n: int | None = 20,
         bins: int | None = 20,
         title: str | None = None,
     ) -> dict[str, Any]:
         try:
-            df = self._df
+            # Data source selection:
+            # - default: session dataset (self._df)
+            # - if 'data' is provided: build a temporary dataframe from tool output records
+            if data is not None:
+                # Allow passing either raw records OR a full table payload {"kind":"table","data":[...]}
+                if isinstance(data, dict) and "data" in data:
+                    data = data.get("data")
+
+                if not isinstance(data, list):
+                    return {
+                        "kind": "error",
+                        "message": "Invalid data: expected a list of records.",
+                        "code": "INVALID_DATA",
+                    }
+                if len(data) == 0:
+                    return {
+                        "kind": "error",
+                        "message": "Invalid data: empty list of records.",
+                        "code": "EMPTY_DATA",
+                    }
+                try:
+                    df = pd.DataFrame(data)
+                except Exception:
+                    return {
+                        "kind": "error",
+                        "message": "Invalid data: could not build a table from records.",
+                        "code": "INVALID_DATA",
+                    }
+            else:
+                df = self._df
 
             kind_clean = (kind or "").strip().lower()
             x_clean = (x or "").strip()
             y_clean = (y or "").strip() if y is not None else None
             agg_clean = (agg or "mean").strip().lower() if agg is not None else "mean"
 
-            if kind_clean not in {"bar", "line", "hist", "pie"}:
+            if kind_clean not in {"bar", "line", "hist", "pie", "box"}:
                 return {
                     "kind": "error",
-                    "message": f"Invalid plot kind: {kind_clean}. Allowed: bar, line, hist, pie.",
+                    "message": f"Invalid plot kind: {kind_clean}. Allowed: bar, line, hist, pie, box.",
                     "code": "INVALID_KIND",
                 }
 
@@ -157,6 +212,15 @@ class PlotTool(Tool):
                     # y is None/empty => pie is counts by category; agg is ignored
                     pass
 
+            if kind_clean == "box" and y_clean:
+                # grouped mode requires y to exist
+                if y_clean not in df.columns:
+                    return {
+                        "kind": "error",
+                        "message": f"Invalid y column: {y_clean}",
+                        "code": "INVALID_Y",
+                    }
+
             n_int = int(n) if n is not None else 20
             n_int = max(1, min(n_int, 50))
 
@@ -181,6 +245,72 @@ class PlotTool(Tool):
                 plt.hist(series, bins=bins_int)
                 plt.xlabel(x_clean)
                 plt.ylabel("count")
+
+            elif kind_clean == "box":
+                # Mode A: grouped boxplot (x = category, y = numeric)
+                if y_clean:
+                    y_num = pd.to_numeric(df[y_clean], errors="coerce")
+                    tmp = pd.DataFrame({x_clean: df[x_clean], y_clean: y_num}).dropna(subset=[y_clean])
+
+                    if tmp.empty or tmp[y_clean].notna().sum() == 0:
+                        return {
+                            "kind": "error",
+                            "message": f"Column '{y_clean}' has no numeric values for box plot.",
+                            "code": "NO_NUMERIC_DATA",
+                        }
+
+                    grouped = tmp.groupby(x_clean, dropna=False)[y_clean]
+
+                    # Order groups by size (descending) and cap to n_int
+                    sizes = grouped.size().sort_values(ascending=False).head(n_int)
+
+                    pairs: list[tuple[str, Any]] = []
+
+                    for k in sizes.index.tolist():
+                        arr = grouped.get_group(k).dropna().to_numpy(dtype=float, copy=False)
+                        if len(arr) > 0:
+                            pairs.append((str(k), arr))
+
+                    if not pairs:
+                        return {
+                            "kind": "error",
+                            "message": "Not enough numeric data to build grouped box plots.",
+                            "code": "EMPTY_RESULT",
+                        }
+
+                    labels = [p[0] for p in pairs]
+                    data_lists = [p[1] for p in pairs]
+
+                    if not data_lists:
+                        return {
+                            "kind": "error",
+                            "message": "Not enough numeric data to build grouped box plots.",
+                            "code": "EMPTY_RESULT",
+                        }
+
+                    ax = plt.gca()
+                    ax.boxplot(data_lists)
+                    
+                    ax.set_xticks(range(1, len(labels) + 1))
+                    ax.set_xticklabels(labels, rotation=45, ha="right")
+                    
+                    ax.set_xlabel(x_clean)
+                    ax.set_ylabel(y_clean)
+
+
+                # Mode B: single-column boxplot (x = numeric)
+                else:
+                    series = pd.to_numeric(df[x_clean], errors="coerce").dropna()
+
+                    if series.empty:
+                        return {
+                            "kind": "error",
+                            "message": f"Column '{x_clean}' has no numeric values for box plot.",
+                            "code": "NO_NUMERIC_DATA",
+                        }
+
+                    plt.boxplot(series.to_numpy(dtype=float, copy=False))
+                    plt.xlabel(x_clean)
 
             elif kind_clean == "bar":
                 if not y_clean:
@@ -228,25 +358,59 @@ class PlotTool(Tool):
                     }
                 assert y_clean is not None  # for type checkers
 
-                x_num = pd.to_numeric(df[x_clean], errors="coerce")
+                # Always coerce Y to numeric
                 y_num = pd.to_numeric(df[y_clean], errors="coerce")
-                tmp = pd.DataFrame({x_clean: x_num, y_clean: y_num}).dropna()
 
-                if tmp.empty:
-                    return {
-                        "kind": "error",
-                        "message": f"Not enough numeric data to plot '{y_clean}' vs '{x_clean}'.",
-                        "code": "NO_NUMERIC_DATA",
-                    }
+                # Try numeric X first
+                x_num = pd.to_numeric(df[x_clean], errors="coerce")
 
-                tmp = tmp.sort_values(by=x_clean)
+                # ---------------------------------
+                # Mode A: numeric X
+                # ---------------------------------
+                if x_num.notna().any():
+                    tmp = pd.DataFrame({x_clean: x_num, y_clean: y_num}).dropna()
 
-                x_arr = tmp[x_clean].to_numpy(dtype=float, copy=False)
-                y_arr = tmp[y_clean].to_numpy(dtype=float, copy=False)
+                    if tmp.empty:
+                        return {
+                            "kind": "error",
+                            "message": f"Not enough numeric data to plot '{y_clean}' vs '{x_clean}'.",
+                            "code": "NO_NUMERIC_DATA",
+                        }
 
-                plt.plot(x_arr, y_arr)
-                plt.xlabel(x_clean)
-                plt.ylabel(y_clean)
+                    tmp = tmp.sort_values(by=x_clean)
+
+                    x_arr = tmp[x_clean].to_numpy(dtype=float, copy=False)
+                    y_arr = tmp[y_clean].to_numpy(dtype=float, copy=False)
+
+                    plt.plot(x_arr, y_arr)
+                    plt.xlabel(x_clean)
+                    plt.ylabel(y_clean)
+
+                # ---------------------------------
+                # Mode B: categorical X (e.g. period)
+                # ---------------------------------
+                else:
+                    tmp = pd.DataFrame({x_clean: df[x_clean], y_clean: y_num}).dropna()
+
+                    if tmp.empty:
+                        return {
+                            "kind": "error",
+                            "message": f"Not enough numeric data to plot '{y_clean}'.",
+                            "code": "NO_NUMERIC_DATA",
+                        }
+
+                    # Preserve order as given (important for trend tool)
+                    x_vals = tmp[x_clean].astype(str).tolist()
+                    y_vals = tmp[y_clean].astype(float).tolist()
+
+                    plt.plot(range(len(x_vals)), y_vals)
+
+                    ax = plt.gca()
+                    ax.set_xticks(range(len(x_vals)))
+                    ax.set_xticklabels(x_vals, rotation=45, ha="right")
+
+                    plt.xlabel(x_clean)
+                    plt.ylabel(y_clean)
 
             elif kind_clean == "pie":
                 if not y_clean:

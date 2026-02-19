@@ -22,19 +22,17 @@ def _to_json_scalar(value: Any) -> Any:
     return str(value)
 
 
-def _parse_iso_date(s: Optional[str]) -> pd.Timestamp | None:
-    """
-    Parse an ISO-like date string to Timestamp. Returns None if empty/invalid.
-    """
-    if not s:
+def _parse_iso_date(s: Any) -> pd.Timestamp | None:
+    if s is None:
         return None
     try:
-        ts = pd.to_datetime(str(s).strip(), errors="coerce", utc=False)
+        txt = str(s).strip()
+        if not txt:
+            return None
+        ts = pd.to_datetime(txt, errors="coerce", utc=False)
         if pd.isna(ts):
             return None
-        if isinstance(ts, pd.Timestamp):
-            return ts
-        return pd.Timestamp(ts)
+        return ts if isinstance(ts, pd.Timestamp) else pd.Timestamp(ts)
     except Exception:
         return None
 
@@ -87,9 +85,9 @@ class TrendTool(Tool):
 
     name = "trend"
     description = (
-        "Compute a simple time trend by grouping rows by a date column over day/week/month. "
-        "Use for questions like 'how many per month', 'average score over time', "
-        "'from Sep to Dec 2025 how did it change'. Returns a small table."
+        "Compute a time trend by grouping rows on a date column using day, week, or month buckets. "
+        "Works on the full dataset or on a subset passed via `data`. "
+        "Returns a small table usable for comparisons or plotting."
     )
     output_type = "object"
 
@@ -106,18 +104,27 @@ class TrendTool(Tool):
             "type": "string",
             "description": "Aggregation: 'count' or 'mean' or 'sum'.",
         },
+        "data": {
+            "type": "array",
+            "description": (
+                "Optional table records (list of objects) produced by another tool. "
+                "If provided, the trend will be computed on this data instead of the session dataset."
+            ),
+            "items": {"type": "object"},
+            "nullable": True,
+        },
         "metric": {
             "type": "string",
             "description": "Numeric column for mean/sum (must be null for count).",
             "nullable": True,
         },
         "start": {
-            "type": "string",
+            "type": "any",
             "description": "Optional start date (ISO), inclusive. Example: '2025-09-01'.",
             "nullable": True,
         },
         "end": {
-            "type": "string",
+            "type": "any",
             "description": "Optional end date (ISO), inclusive. Example: '2025-12-31'.",
             "nullable": True,
         },
@@ -142,17 +149,48 @@ class TrendTool(Tool):
         date_col: str,
         freq: str,
         op: str,
+        data: list[dict[str, Any]] | None = None,
         metric: Optional[str] = None,
-        start: Optional[str] = None,
-        end: Optional[str] = None,
+        start: Optional[Any] = None,
+        end: Optional[Any] = None,
         n: Optional[int] = 50,
         ascending: Optional[bool] = True,
     ) -> dict[str, Any]:
+        
         try:
-            df = self._df
+            # Data source selection:
+            # - default: session dataset (self._df)
+            # - if 'data' is provided: build a temporary dataframe from tool output records
+            if data is not None:
+                if isinstance(data, dict) and "data" in data:
+                    data = data.get("data")
+
+                if not isinstance(data, list):
+                    return {"kind": "error", "message": "Invalid data: expected a list of records.", "code": "INVALID_DATA"}
+                if len(data) == 0:
+                    return {"kind": "table", "data": []}
+
+                try:
+                    df = pd.DataFrame(data)
+                except Exception:
+                    return {"kind": "error", "message": "Invalid data: could not build a table from records.", "code": "INVALID_DATA"}
+            else:
+                df = self._df
 
             date_col_clean = (date_col or "").strip()
-            if not date_col_clean or date_col_clean not in df.columns:
+
+            if not date_col_clean:
+                return {"kind": "error", "message": "Missing date_col column.", "code": "MISSING_DATE_COL"}
+
+            if date_col_clean not in df.columns:
+                # If we are operating on tool-provided data, try a small set of common fallbacks
+                if data is not None:
+                    for candidate in ("created_at", "date", "datetime", "timestamp"):
+                        if candidate in df.columns:
+                            date_col_clean = candidate
+                            break
+
+            if date_col_clean not in df.columns:
                 return {
                     "kind": "error",
                     "message": f"Invalid date_col column: {date_col_clean}",

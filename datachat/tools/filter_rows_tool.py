@@ -94,9 +94,9 @@ class FilterRowsTool(Tool):
 
     name = "filter_rows"
     description = (
-        "Filter rows in the dataset by simple conditions and return a small table. "
-        "Use this when the user asks for rows matching a condition "
-        "(e.g., Problemi = 'Lavoro', Rate visita < 4)."
+        "Return rows that satisfy one or two conditions on specified columns. "
+        "Supports equality and numeric comparisons (lt, lte, gt, gte). "
+        "Returns a table of matching rows."
     )
     output_type = "object"
 
@@ -105,16 +105,24 @@ class FilterRowsTool(Tool):
             "type": "string",
             "description": "Column name to filter on.",
         },
+        "value": {
+            "type": "any",
+            "description": "Value to match.",
+        },
         "op": {
             "type": "string",
             "description": "Filter operation: 'eq' (default), 'lt', 'lte', 'gt', 'gte'.",
             "nullable": True,
         },
-        "value": {
-            "type": "string",
-            "description": "Value to match.",
+        "data": {
+            "type": "array",
+            "description": (
+                "Optional table records (list of objects) produced by another tool. "
+                "If provided, filtering will be applied to this data instead of the session dataset."
+            ),
+            "items": {"type": "object"},
+            "nullable": True,
         },
-
         # NEW: optional second condition (AND)
         "where_col2": {
             "type": "string",
@@ -127,7 +135,7 @@ class FilterRowsTool(Tool):
             "nullable": True,
         },
         "value2": {
-            "type": "string",
+            "type": "any",
             "description": "Optional second value to match (AND).",
             "nullable": True,
         },
@@ -157,17 +165,33 @@ class FilterRowsTool(Tool):
     def forward(
         self,
         where_col: str,
-        value: str,
+        value: Any,
         op: Optional[str] = None,
+        data: list[dict[str, Any]] | None = None,
         where_col2: Optional[str] = None,
-        value2: Optional[str] = None,
         op2: Optional[str] = None,
+        value2: Optional[Any] = None,
         n: Optional[int] = 5,
-        columns: Optional[list[str]] = None,
         offset: Optional[int] = None,
+        columns: Optional[list[str]] = None,
     ) -> dict[str, Any]:
+       
         try:
-            df = self._df
+            if data is not None:
+                if isinstance(data, dict) and "data" in data:
+                    data = data.get("data")
+
+                if not isinstance(data, list):
+                    return {"kind": "error", "message": "Invalid data: expected a list of records.", "code": "INVALID_DATA"}
+                if len(data) == 0:
+                    return {"kind": "table", "data": []}
+
+                try:
+                    df = pd.DataFrame(data)
+                except Exception:
+                    return {"kind": "error", "message": "Invalid data: could not build a table from records.", "code": "INVALID_DATA"}
+            else:
+                df = self._df
 
             if not where_col or where_col not in df.columns:
                 return {
