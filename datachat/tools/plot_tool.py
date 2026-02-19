@@ -261,13 +261,14 @@ class PlotTool(Tool):
 
                     grouped = tmp.groupby(x_clean, dropna=False)[y_clean]
 
-                    # Order groups by size (descending) and cap to n_int
-                    sizes = grouped.size().sort_values(ascending=False).head(n_int)
+                    # Rank groups by *valid numeric* values (not raw row count),
+                    # so we don't pick big groups that become empty after numeric coercion.
+                    valid_counts = grouped.apply(lambda s: pd.to_numeric(s, errors="coerce").notna().sum())
+                    valid_counts = valid_counts[valid_counts > 0].sort_values(ascending=False).head(n_int)
 
                     pairs: list[tuple[str, Any]] = []
-
-                    for k in sizes.index.tolist():
-                        arr = grouped.get_group(k).dropna().to_numpy(dtype=float, copy=False)
+                    for k in valid_counts.index.tolist():
+                        arr = pd.to_numeric(grouped.get_group(k), errors="coerce").dropna().to_numpy(dtype=float, copy=False)
                         if len(arr) > 0:
                             pairs.append((str(k), arr))
 
