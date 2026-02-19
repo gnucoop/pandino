@@ -121,9 +121,9 @@ class AggregateTool(Tool):
 
     name = "aggregate"
     description = (
-        "Aggregate the dataset by grouping on one column and applying an operation. "
-        "Use it for questions like 'how many per category', 'average X by group', "
-        "'top groups by count', etc. Returns a small table."
+        "Group rows by one column and apply an aggregation (count, mean, sum, etc.). "
+        "Works on the full dataset or on a subset passed via `data`. "
+        "Returns a small table suitable for further filtering, sorting, plotting, or counting."
     )
     output_type = "object"
 
@@ -140,6 +140,15 @@ class AggregateTool(Tool):
         "metric": {
             "type": "string",
             "description": "Metric column to aggregate (required for mean/sum/min/max).",
+            "nullable": True,
+        },
+        "data": {
+            "type": "array",
+            "description": (
+                "Optional table records (list of objects) produced by another tool. "
+                "If provided, the aggregation will be computed on this data instead of the session dataset."
+            ),
+            "items": {"type": "object"},
             "nullable": True,
         },
         "n": {
@@ -197,6 +206,7 @@ class AggregateTool(Tool):
         group_by: str,
         op: str,
         metric: Optional[str] = None,
+        data: list[dict[str, Any]] | None = None,
         n: Optional[int] = 10,
         ascending: Optional[bool] = False,
         where_col: Optional[str] = None,
@@ -206,8 +216,27 @@ class AggregateTool(Tool):
         op2_filter: Optional[str] = None,
         value2: Any = None,
     ) -> dict[str, Any]:
+        
         try:
-            df = self._df
+            # Data source selection:
+            # - default: session dataset (self._df)
+            # - if 'data' is provided: build a temporary dataframe from tool output records
+            if data is not None:
+                # allow passing full table payload {"kind":"table","data":[...]} by mistake
+                if isinstance(data, dict) and "data" in data:
+                    data = data.get("data")  # type: ignore[assignment]
+
+                if not isinstance(data, list):
+                    return {"kind": "error", "message": "Invalid data: expected a list of records.", "code": "INVALID_DATA"}
+                if len(data) == 0:
+                    return {"kind": "table", "data": []}
+
+                try:
+                    df = pd.DataFrame(data)
+                except Exception:
+                    return {"kind": "error", "message": "Invalid data: could not build a table from records.", "code": "INVALID_DATA"}
+            else:
+                df = self._df
 
             # --- group_by hardening: sometimes the LLM passes ["col"] instead of "col" ---
             if isinstance(group_by, list):

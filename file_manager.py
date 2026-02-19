@@ -14,7 +14,9 @@ def base64toFile(b64: str):
 # Converts a filepath to a base64 string
 def fileToBase64(filepath: str) -> str:
     with open(filepath, "rb") as file:
-        return base64.b64encode(file.read()).decode("utf-8")
+        convert = base64.b64encode(file.read())
+        return str(convert)
+        #return base64.b64encode(file.read()).decode("utf-8")
 
 
 # Checks if a text can be an image file path

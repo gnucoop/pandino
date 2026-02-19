@@ -35,13 +35,22 @@ class DescribeTool(Tool):
 
     name = "describe"
     description = (
-        "Return a compact summary of dataset columns (counts, missing, unique, "
-        "and numeric stats when applicable). Use this when the user asks for "
-        "a general overview or descriptive statistics."
+        "Return a compact per-column summary of the dataset. "
+        "For each column it reports type, non-null count, missing count, "
+        "number of unique values, and numeric statistics when applicable."
     )
     output_type = "object"
 
     inputs: ClassVar[dict[str, Any]] = {
+        "data": {
+            "type": "array",
+            "description": (
+                "Optional table records (list of objects) produced by another tool. "
+                "If provided, describe will run on this data instead of the session dataset."
+            ),
+            "items": {"type": "object"},
+            "nullable": True,
+        },
         "columns": {
             "type": "array",
             "description": "Optional list of columns to describe. If omitted, describe all columns.",
@@ -61,14 +70,47 @@ class DescribeTool(Tool):
 
     def forward(
         self,
+        data: list[dict[str, Any]] | None = None,
         columns: Optional[list[str]] = None,
         n: Optional[int] = 50,
     ) -> dict[str, Any]:
+        
         try:
-            df = self._df
+            if data is not None:
+                if isinstance(data, dict) and "data" in data:
+                    data = data.get("data")
+
+                if not isinstance(data, list):
+                    return {"kind": "error", "message": "Invalid data: expected a list of records.", "code": "INVALID_DATA"}
+                if len(data) == 0:
+                    return {"kind": "table", "data": []}
+
+                try:
+                    df = pd.DataFrame(data)
+                except Exception:
+                    return {"kind": "error", "message": "Invalid data: could not build a table from records.", "code": "INVALID_DATA"}
+            else:
+                df = self._df
 
             if columns:
-                cols = [c for c in columns if c in df.columns]
+                # keep only existing columns, allow case-insensitive match (useful on tool-provided data)
+                if data is not None:
+                    lowered = {c.lower(): c for c in df.columns}
+                    normalized: list[str] = []
+                    for c in columns:
+                        c_clean = (c or "").strip()
+                        if not c_clean:
+                            continue
+                        if c_clean in df.columns:
+                            normalized.append(c_clean)
+                        else:
+                            hit = lowered.get(c_clean.lower())
+                            if hit:
+                                normalized.append(hit)
+                    cols = normalized
+                else:
+                    cols = [c for c in columns if c in df.columns]
+
                 if cols:
                     df = df[cols]
 

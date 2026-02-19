@@ -15,27 +15,46 @@ class RowCountTool(Tool):
     """
 
     name = "row_count"
-    description = "Return the total number of rows (records) in the dataset."
+    description = (
+    "Return the total number of rows in the dataset or in the provided table data."
+    )
     output_type = "object"
 
-    # No inputs: the operation is unambiguous and always available.
-    inputs: ClassVar[dict[str, Any]] = {}
+    inputs: ClassVar[dict[str, Any]] = {
+        "data": {
+            "type": "array",
+            "description": (
+                "Optional table records (list of objects) produced by another tool. "
+                "If provided, row_count will be computed on this data instead of the session dataset."
+            ),
+            "items": {"type": "object"},
+            "nullable": True,
+        }
+    }
 
     def __init__(self, df: pd.DataFrame) -> None:
         super().__init__()
         self._df = df
 
-    def forward(self) -> dict[str, Any]:
+    def forward(
+        self, 
+        data: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
         try:
-            n_rows = int(len(self._df))
+            if data is not None:
+                if isinstance(data, dict) and "data" in data:
+                    data = data.get("data")
+
+                if not isinstance(data, list):
+                    return {"kind": "error", "message": "Invalid data: expected a list of records.", "code": "INVALID_DATA"}
+
+                n_rows = int(len(data))
+            else:
+                n_rows = int(len(self._df))
 
             logging.info("[datachat][row_count_tool] n_rows=%s", n_rows)
 
-            return {
-                "kind": "text",
-                "text": f"Totale record nel dataset: {n_rows}",
-                "format": "plain",
-            }
+            return {"kind": "table", "data": [{"row_count": n_rows}]}
 
         except Exception as e:
             logging.exception("[datachat][row_count_tool] failed")
