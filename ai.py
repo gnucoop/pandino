@@ -128,6 +128,14 @@ def choose_llm(
             seed=seed,
             api_key=SecretStr(os.getenv("OPENAI_API_KEY") or ""),
         )
+    elif llm_type == "OpenRouter":
+        return ChatOpenAI(
+            model=model,
+            temperature=temperature,
+            seed=seed,
+            base_url="https://openrouter.ai/api/v1",
+            api_key=SecretStr(os.getenv("OPENROUTER_API_KEY") or ""),
+        )
     elif llm_type == "Ollama":
         return ChatOpenAI(
             model=model,
