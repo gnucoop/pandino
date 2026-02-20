@@ -979,6 +979,7 @@ def agentchat() -> Response | tuple[Response, int]:
             "Mistral": "MISTRAL_API_KEY",
             "Google": "GOOGLE_API_KEY",
             "OpenAI": "OPENAI_API_KEY",
+            "OpenRouter": "OPENROUTER_API_KEY",
             "Anthropic": "ANTHROPIC_API_KEY",
             "Groq": "GROQ_API_KEY",
         }
