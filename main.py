@@ -1,5 +1,6 @@
 # === Built-in ===
 import os
+
 os.environ["MPLBACKEND"] = "Agg"
 import base64
 import secrets
@@ -14,16 +15,16 @@ from functools import wraps
 
 # === Third-party ===
 from flask import (
-    Flask, 
-    request, 
-    Response, 
-    jsonify, 
-    abort, 
+    Flask,
+    request,
+    Response,
+    jsonify,
+    abort,
     render_template,
-    redirect, 
-    url_for, 
-    session, 
-    flash
+    redirect,
+    url_for,
+    session,
+    flash,
 )
 from flask_cors import CORS
 import pandas as pd
@@ -52,29 +53,29 @@ from datachat.engine_output_adapter import (
 from vector_store import PineconeStore, PGVectorStore, merge_segments
 import database_pg
 from database_pg import (
-    edit_tokens, 
-    validate_api_key, 
-    get_users_for_admin, 
-    get_users_stats, 
-    get_logs_for_admin, 
-    get_logs_stats, 
-    update_user_tokens, 
-    get_user_by_id, 
-    get_all_prompts, 
-    get_prompt_by_id, 
-    add_prompt, 
-    update_prompt, 
-    delete_prompt, 
-    get_all_costs, 
-    add_cost, 
-    update_cost, 
-    delete_cost, 
-    get_cost_by_id, 
-    get_daily_stats, 
-    get_recent_activity, 
+    edit_tokens,
+    validate_api_key,
+    get_users_for_admin,
+    get_users_stats,
+    get_logs_for_admin,
+    get_logs_stats,
+    update_user_tokens,
+    get_user_by_id,
+    get_all_prompts,
+    get_prompt_by_id,
+    add_prompt,
+    update_prompt,
+    delete_prompt,
+    get_all_costs,
+    add_cost,
+    update_cost,
+    delete_cost,
+    get_cost_by_id,
+    get_daily_stats,
+    get_recent_activity,
     log_token_usage,
     get_feedback_for_admin,
-    get_feedback_stats
+    get_feedback_stats,
 )
 
 from dino import dino_authenticate
@@ -87,7 +88,7 @@ from ai import (
     complete_chat,
     reply_to_prompt,
     choose_llm,
-    choose_emb_model
+    choose_emb_model,
 )
 from prompt_utils import load_prompt, render_prompt
 from utils.agent_serialization import serialize_runresult
@@ -103,7 +104,7 @@ app = Flask(__name__)
 # origins=["http://localhost:4200"]
 CORS(app)
 
-secret_key = os.environ.get('ENCRYPTION_KEY')
+secret_key = os.environ.get("ENCRYPTION_KEY")
 if not secret_key:
     raise RuntimeError("ENCRYPTION_KEY must be set in environment")
 app.secret_key = secret_key
@@ -147,18 +148,19 @@ DATACHAT_LOG_LEVEL = os.environ.get("DATACHAT_LOG_LEVEL", "INFO")
 COMPLETION_TOKEN_COST = os.environ.get("COMPLETION_TOKEN_COST")
 PROMPT_TOKEN_COST = os.environ.get("PROMPT_TOKEN_COST")
 AUDIO_FORM_TOKEN_COST = os.environ.get("AUDIO_FORM_TOKEN_COST")
-ADMIN_USERNAME = os.environ.get('ADMIN_USERNAME', 'admin')
-ADMIN_PASSWORD_HASH = os.environ.get('ADMIN_PASSWORD_HASH', '').encode("utf-8")
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH", "").encode("utf-8")
 
 
 # Admin authentication decorator
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not session.get('admin_logged_in'):
-            flash('Please log in to access the admin panel', 'warning')
-            return redirect(url_for('admin_login'))
+        if not session.get("admin_logged_in"):
+            flash("Please log in to access the admin panel", "warning")
+            return redirect(url_for("admin_login"))
         return f(*args, **kwargs)
+
     return decorated_function
 
 
@@ -186,7 +188,7 @@ def assert_valid_api_key(api_key: str, user_email: str) -> None:
             abort(403, description="API key expired")
         else:
             abort(403, description="Invalid API key")
-            
+
 
 # Define a route for the '/edittokens' endpoint that accepts POST requests
 @app.route("/edittokens", methods=["POST"])
@@ -356,9 +358,10 @@ def feedback_handler() -> Response | tuple[Response, int]:
         required = ["username", "question", "answer", "feedback"]
         missing = [k for k in required if k not in r]
         if missing:
-            return jsonify(
-                {"error": f"Missing required keys: {', '.join(missing)}"}
-            ), 400
+            return (
+                jsonify({"error": f"Missing required keys: {', '.join(missing)}"}),
+                400,
+            )
 
         api_key = request.headers.get("X-API-KEY")
         if not api_key:
@@ -452,7 +455,6 @@ def endChat() -> Response | tuple[Response, int]:
         return jsonify({"Agent was not active for this key": api_key})
 
 
-
 # Define a route for the '/startchat' endpoint that accepts POST requests
 @app.route("/startdatachat", methods=["POST"])
 def startChat() -> Response | tuple[Response, int]:
@@ -502,10 +504,10 @@ def startChat() -> Response | tuple[Response, int]:
 
     # Read the data from the provided CSV file
     data = load_csv_to_dataframe(request_file)
-    
+
     # Initialize the language model based on the provided type
     llm = choose_llm(llm_type, model_name)
-    
+
     # Initialize the agent with the data and configuration
     try:
         engine = createAgent(api_key, data, llm, user_name)
@@ -516,7 +518,9 @@ def startChat() -> Response | tuple[Response, int]:
         agentResponse: dict[str, Any] = {"Agent active": "active"}
 
         # Language-aware prompt generation
-        logging.info(f"Invoking startdatachat engine bootstrap with language={lang}, user={user_email}")
+        logging.info(
+            f"Invoking startdatachat engine bootstrap with language={lang}, user={user_email}"
+        )
 
         bootstrap = engine.bootstrap(lang)
         if bootstrap.suggested_questions_html is not None:
@@ -569,7 +573,7 @@ def dataChat() -> Response | tuple[Response, int]:
         return jsonify({"error": "Missing JSON body"}), 400
 
     chat = request.json.get("chat")
-    
+
     engine = getAgent(api_key)
     engine_name = engine.__class__.__name__ if engine is not None else "none"
 
@@ -629,11 +633,11 @@ def dataChat() -> Response | tuple[Response, int]:
 
     # Perform the chat operation and get the response and explanation
     chat_started = time.time()
-    
+
     response = engine.chat(chat, request_id=request_id)
-    
+
     response_kind = response.get("kind") if isinstance(response, dict) else None
-    
+
     DATACHAT_RUNTIME_LOGGER.info(
         "datachat_engine_done request_id=%s user=%s engine=%s duration_ms=%.2f response_kind=%s",
         request_id,
@@ -838,7 +842,9 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
         llm_type = COMPLETION_MODEL_PROVIDER or "google"
         model = COMPLETION_MODEL or "gemini-2.5-flash"
         emb_llm_type = COMPLETION_EMBEDDING_MODEL_PROVIDER or "Deepinfra"
-        emb_model = COMPLETION_EMBEDDING_MODEL or "intfloat/multilingual-e5-large-instruct"
+        emb_model = (
+            COMPLETION_EMBEDDING_MODEL or "intfloat/multilingual-e5-large-instruct"
+        )
 
         embeddings = choose_emb_model(emb_llm_type, emb_model)
 
@@ -875,6 +881,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
         app.logger.error(f"Unexpected error in completion_handler: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
 
+
 textContentType = {"Content-Type": "text/plain"}
 
 
@@ -886,8 +893,9 @@ def agentchat() -> Response | tuple[Response, int]:
     before generating the response.
     """
     try:
+
         # === INPUT VALIDATION ===
-        
+
         r = request.get_json()
         if not r:
             return jsonify({"error": "No JSON data provided"}), 400
@@ -895,18 +903,21 @@ def agentchat() -> Response | tuple[Response, int]:
         required = ["chat", "username"]
         missing = [k for k in required if k not in r]
         if missing:
-            return jsonify({"error": f"Missing required keys: {', '.join(missing)}"}), 400
+            return (
+                jsonify({"error": f"Missing required keys: {', '.join(missing)}"}),
+                400,
+            )
 
         api_key = request.headers.get("X-API-KEY")
         if not api_key:
             return jsonify({"error": "Missing X-API-KEY header"}), 400
 
         # === Validate the provided API key for the given user email ===
-        
+
         assert_valid_api_key(api_key, r["username"])
-        
+
         # === PARAMETERS WITH FALLBACK ===
-        
+
         chat = r["chat"]
         if not isinstance(chat, list) or not chat:
             return jsonify({"error": "Invalid 'chat': expected non-empty list"}), 400
@@ -925,11 +936,15 @@ def agentchat() -> Response | tuple[Response, int]:
         if user_tokens is None:
             return jsonify({"error": "Could not retrieve user tokens"}), 500
         if token_cost > user_tokens:
-            return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 403
-        
+            return (
+                jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
+                403,
+            )
+
         # === DYNAMIC PROMPT (COMPASS AI TUTOR) ===
 
-        default_agentchat_prompt = textwrap.dedent("""\
+        default_agentchat_prompt = textwrap.dedent(
+            """\
             You are "Compass AI Tutor", an assistant embedded in the Compass training platform.
 
             PURPOSE
@@ -953,8 +968,8 @@ def agentchat() -> Response | tuple[Response, int]:
 
             LANGUAGE
             - Always respond in the language indicated by the variable {language}.
-        """)
-
+        """
+        )
 
         # === MODEL AND PROVIDER NORMALIZATION ===
 
@@ -962,14 +977,15 @@ def agentchat() -> Response | tuple[Response, int]:
         configured_model = os.getenv("COMPLETION_MODEL_AGENT_CHAT", "").strip()
 
         if not configured_model:
-            raise ValueError("Environment variable COMPLETION_MODEL_AGENT_CHAT is not set.")
+            raise ValueError(
+                "Environment variable COMPLETION_MODEL_AGENT_CHAT is not set."
+            )
 
         # Model used in database logs and cost accounting
         model_clean = configured_model
 
         # Model passed to LiteLLM (provider prefix required)
         model_id_for_llm = f"{provider.lower()}/{configured_model}"
-
 
         # === MODEL AND TOOL INITIALIZATION ===
 
@@ -983,20 +999,20 @@ def agentchat() -> Response | tuple[Response, int]:
             "Anthropic": "ANTHROPIC_API_KEY",
             "Groq": "GROQ_API_KEY",
         }
-        
+
         # Default fallback to standard naming convention {PROVIDER}_API_KEY
         env_var_name = provider_env_var_map.get(provider, f"{provider.upper()}_API_KEY")
         provider_api_key = os.getenv(env_var_name)
-        
-        # If specific key not found, try fallback to DEEPINFRA if provider is Deepinfra (redundant but safe) 
+
+        # If specific key not found, try fallback to DEEPINFRA if provider is Deepinfra (redundant but safe)
         # or logging a warning could be useful, but for now we follow the pattern.
 
         llm = LiteLLMModel(
-            model_id=model_id_for_llm, 
+            model_id=model_id_for_llm,
             api_key=provider_api_key,
             temperature=0,
-        )        
-        
+        )
+
         retriever_tool = RetrieverTool(namespace)
 
         agent = CodeAgent(
@@ -1005,14 +1021,13 @@ def agentchat() -> Response | tuple[Response, int]:
             max_steps=5,
             additional_authorized_imports=["json"],
         )
-                
+
         # EXTRACTING LAST USER MESSAGE
         user_message = chat[-1]
 
         # Dynamic prompt retrieval:
         base_prompt_template = load_prompt(
-            "compass_agentchat_system",
-            default_text=default_agentchat_prompt
+            "compass_agentchat_system", default_text=default_agentchat_prompt
         )
 
         # Rendering the prompt with dynamic variables (namespace, user_question, language)
@@ -1020,18 +1035,16 @@ def agentchat() -> Response | tuple[Response, int]:
             base_prompt_template,
             namespace=namespace,
             user_question=user_message,
-            language=language
+            language=language,
         )
-        
+
         # === AGENT EXECUTION AND TIME MEASUREMENT ===
         start_time = time.time()
         app.logger.info(f"[agentchat] Executing agent message='{user_message[:60]}...'")
 
         result = agent.run(
             user_message,
-            additional_args={
-                "system_prompt": system_prompt
-            },
+            additional_args={"system_prompt": system_prompt},
             return_full_result=True,
         )
 
@@ -1041,7 +1054,19 @@ def agentchat() -> Response | tuple[Response, int]:
         # === RESULT SERIALIZATION ===
 
         payload = serialize_runresult(result)
-        payload["metrics"]["duration_ms"] = duration_ms  # aggiunta durata misurata lato Flask
+
+        # Ensure the frontend never receives an empty answer on exhausted runs.
+
+        no_answer_fallback = (
+            "Mi dispiace, non ho trovato informazioni sufficienti nel "
+            "materiale disponibile per rispondere con precisione."
+        )
+
+        if not str(payload.get("answer", "")).strip():
+            payload["answer"] = no_answer_fallback
+        payload["metrics"][
+            "duration_ms"
+        ] = duration_ms  # aggiunta durata misurata lato Flask
 
         # === STRUCTURED LOGGING ===
 
@@ -1073,7 +1098,7 @@ def agentchat() -> Response | tuple[Response, int]:
             token_output = token_metrics.get("output", 0)
 
             # Use clean model name from earlier normalization
-            model = model_clean     
+            model = model_clean
 
             # Log into PostgreSQL
             log_id = log_token_usage(
@@ -1087,13 +1112,11 @@ def agentchat() -> Response | tuple[Response, int]:
         except Exception as e:
             app.logger.error(f"[agentchat] Failed to log token usage: {e}")
 
-
         # === TOKEN MANAGEMENT ===
 
         answer_text = payload.get("answer", "")
         if answer_text:
             edit_tokens(r["username"], -token_cost)
-
 
         app.logger.info(
             f"[agentchat] done user={r['username']} duration={duration_ms}ms "
@@ -1109,6 +1132,7 @@ def agentchat() -> Response | tuple[Response, int]:
 
     except Exception as e:
         import traceback
+
         app.logger.error(f"[agentchat] Unexpected error: {str(e)}")
         app.logger.error(traceback.format_exc())
         return jsonify({"error": "An unexpected error occurred"}), 500
@@ -1354,7 +1378,9 @@ def whisper_parse() -> Union[Response, tuple[Response, int]]:
             except Exception as e:
                 return jsonify({"error": f"Invalid JSON from whisper: {str(e)}"}), 500
         else:
-            app.logger.error(f"Whisper failed: {response.status_code} - {response.text}")
+            app.logger.error(
+                f"Whisper failed: {response.status_code} - {response.text}"
+            )
             return jsonify({"error": "Whisper transcription failed"}), 500
 
     if file.mimetype == "application/pdf":
@@ -1365,7 +1391,7 @@ def whisper_parse() -> Union[Response, tuple[Response, int]]:
                 return jsonify({"text": text}), 200
         except Exception as e:
             return jsonify({"error": f"Error extracting text from pdf: {str(e)}"}), 422
-        
+
     if file.mimetype.startswith("image"):
         try:
             b64 = base64.b64encode(file.read()).decode()
@@ -1373,7 +1399,10 @@ def whisper_parse() -> Union[Response, tuple[Response, int]]:
             text = describe_image(dataurl, VISION_PROVIDER or "", VISION_MODEL or "")
             return jsonify({"text": text}), 200
         except Exception as e:
-            return jsonify({"error": f"Error extracting text from image: {str(e)}"}), 500
+            return (
+                jsonify({"error": f"Error extracting text from image: {str(e)}"}),
+                500,
+            )
 
     return jsonify({"error": f"Unexpected file mimetype: {file.mimetype}"}), 400
 
@@ -1441,6 +1470,7 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
     app.logger.debug(f"Audio form compilation result: {invocation}")
     return jsonify(invocation), 200
 
+
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
 @app.route("/summarize", methods=["GET"])
 def summarize():
@@ -1459,32 +1489,36 @@ def img_comparison():
     return "The /img-comparison endpoint is not yet implemented.", 501
 
 
-
-
-@app.route('/admin/login', methods=['GET', 'POST'])
+@app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
-    if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
-        
-        if username == ADMIN_USERNAME and password and bcrypt.checkpw(password.encode('utf-8'), ADMIN_PASSWORD_HASH):
-            session['admin_logged_in'] = True
-            session['admin_username'] = username
-            flash('Successfully logged in!', 'success')
-            return redirect(url_for('admin_dashboard'))
+    if request.method == "POST":
+        username = request.form.get("username")
+        password = request.form.get("password")
+
+        if (
+            username == ADMIN_USERNAME
+            and password
+            and bcrypt.checkpw(password.encode("utf-8"), ADMIN_PASSWORD_HASH)
+        ):
+            session["admin_logged_in"] = True
+            session["admin_username"] = username
+            flash("Successfully logged in!", "success")
+            return redirect(url_for("admin_dashboard"))
         else:
-            flash('Invalid credentials', 'danger')
-    
-    return render_template('admin/login.html')
+            flash("Invalid credentials", "danger")
 
-@app.route('/admin/logout')
+    return render_template("admin/login.html")
+
+
+@app.route("/admin/logout")
 def admin_logout():
-    session.pop('admin_logged_in', None)
-    session.pop('admin_username', None)
-    flash('Successfully logged out', 'info')
-    return redirect(url_for('admin_login'))
+    session.pop("admin_logged_in", None)
+    session.pop("admin_username", None)
+    flash("Successfully logged out", "info")
+    return redirect(url_for("admin_login"))
 
-@app.route('/admin')
+
+@app.route("/admin")
 @admin_required
 def admin_dashboard():
     env_vars = {
@@ -1496,7 +1530,7 @@ def admin_dashboard():
         "AUDIO_PROVIDER": AUDIO_PROVIDER,
         "COMPLETION_MODEL": COMPLETION_MODEL,
         "COMPLETION_MODEL_PROVIDER": COMPLETION_MODEL_PROVIDER,
-        "COMPLETION_MODEL_AGENT_CHAT": COMPLETION_MODEL_AGENT_CHAT, 
+        "COMPLETION_MODEL_AGENT_CHAT": COMPLETION_MODEL_AGENT_CHAT,
         "COMPLETION_EMBEDDING_MODEL": COMPLETION_EMBEDDING_MODEL,
         "COMPLETION_EMBEDDING_MODEL_PROVIDER": COMPLETION_EMBEDDING_MODEL_PROVIDER,
         "WHISPER_MODEL": WHISPER_MODEL,
@@ -1509,85 +1543,85 @@ def admin_dashboard():
         "DATACHAT_LOG_LEVEL": DATACHAT_LOG_LEVEL,
         "COMPLETION_TOKEN_COST": COMPLETION_TOKEN_COST,
         "PROMPT_TOKEN_COST": PROMPT_TOKEN_COST,
-        "AUDIO_FORM_TOKEN_COST": AUDIO_FORM_TOKEN_COST
+        "AUDIO_FORM_TOKEN_COST": AUDIO_FORM_TOKEN_COST,
     }
-    
+
     try:
         stats_data = get_users_stats()
-        
+
         today = datetime.now().strftime("%Y-%m-%d")
         daily_stats = get_daily_stats(today)
         recent_activity = get_recent_activity()
-        
+
         stats = {
-            'total_users': stats_data['total_users'],
-            'active_sessions': stats_data['total_tokens'], # Keeping this for now, but will replace in template
-            'daily_tokens': daily_stats['total_tokens'],
-            'daily_cost': daily_stats['total_cost'],
-            'total_orders': 0,
-            'recent_activity': recent_activity,
-            'db_connected': True,  # If we got here, DB is connected
-  
+            "total_users": stats_data["total_users"],
+            "active_sessions": stats_data[
+                "total_tokens"
+            ],  # Keeping this for now, but will replace in template
+            "daily_tokens": daily_stats["total_tokens"],
+            "daily_cost": daily_stats["total_cost"],
+            "total_orders": 0,
+            "recent_activity": recent_activity,
+            "db_connected": True,  # If we got here, DB is connected
             "cpu_percent": psutil.cpu_percent(interval=0.5),  # utilizzo CPU
             "memory": {
                 "total": psutil.virtual_memory().total,
                 "used": psutil.virtual_memory().used,
                 "available": psutil.virtual_memory().available,
-                "percent": psutil.virtual_memory().percent
-            }
+                "percent": psutil.virtual_memory().percent,
+            },
         }
-        return render_template('admin/dashboard.html', stats=stats, env_vars=env_vars)
-        
-    except Exception as e:
-        flash(f'Errore nel caricamento dashboard: {str(e)}', 'danger')
-        stats = {
-            'total_users': 0, 
-            'active_sessions': 0, 
-            'total_orders': 0,
-            'db_connected': False,  # DB connection failed
-            'recent_activity': [],
-            'daily_tokens': 0,
-            'daily_cost': 0.0,
-            'cpu_percent': 0,
-            'memory': {
-                'total': 0,
-                'used': 0,
-                'available': 0,
-                'percent': 0
-            }
-        }
-        
-        return render_template('admin/dashboard.html', stats=stats, env_vars=env_vars)
+        return render_template("admin/dashboard.html", stats=stats, env_vars=env_vars)
 
-@app.route('/admin/users')
+    except Exception as e:
+        flash(f"Errore nel caricamento dashboard: {str(e)}", "danger")
+        stats = {
+            "total_users": 0,
+            "active_sessions": 0,
+            "total_orders": 0,
+            "db_connected": False,  # DB connection failed
+            "recent_activity": [],
+            "daily_tokens": 0,
+            "daily_cost": 0.0,
+            "cpu_percent": 0,
+            "memory": {"total": 0, "used": 0, "available": 0, "percent": 0},
+        }
+
+        return render_template("admin/dashboard.html", stats=stats, env_vars=env_vars)
+
+
+@app.route("/admin/users")
 @admin_required
 def admin_users():
     try:
-        page = request.args.get('page', 1, type=int)
+        page = request.args.get("page", 1, type=int)
         users_data = get_users_for_admin(page=page, limit=50)
-        users = users_data['users']
+        users = users_data["users"]
         pagination = {
-            'page': users_data['page'],
-            'total_pages': users_data['total_pages'],
-            'total_count': users_data['total_count']
+            "page": users_data["page"],
+            "total_pages": users_data["total_pages"],
+            "total_count": users_data["total_count"],
         }
-        return render_template('admin/users.html', users=users, pagination=pagination)
-        
-    except Exception as e:
-        flash(f'Errore nel recupero utenti: {str(e)}', 'danger')
-        return render_template('admin/users.html', users=[], pagination={'page': 1, 'total_pages': 1})
+        return render_template("admin/users.html", users=users, pagination=pagination)
 
-@app.route('/admin/logs')
+    except Exception as e:
+        flash(f"Errore nel recupero utenti: {str(e)}", "danger")
+        return render_template(
+            "admin/users.html", users=[], pagination={"page": 1, "total_pages": 1}
+        )
+
+
+@app.route("/admin/logs")
 @admin_required
 def admin_logs():
     try:
         # Get query parameters
-        page = request.args.get('page', 1, type=int)
-        
+        page = request.args.get("page", 1, type=int)
+
         # Date filter
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        
+        start_date = request.args.get("start_date")
+        end_date = request.args.get("end_date")
+
         # Calculate default dates if not provided (for charts)
         if not start_date or not end_date:
             default_end = datetime.now()
@@ -1597,193 +1631,224 @@ def admin_logs():
         else:
             chart_start = start_date
             chart_end = end_date
-            
-        logs_data = get_logs_for_admin(page=page, limit=50, start_date=chart_start, end_date=chart_end)
-        logs = logs_data['logs']
+
+        logs_data = get_logs_for_admin(
+            page=page, limit=50, start_date=chart_start, end_date=chart_end
+        )
+        logs = logs_data["logs"]
         pagination = {
-            'page': logs_data['page'],
-            'total_pages': logs_data['total_pages'],
-            'total_count': logs_data['total_count']
+            "page": logs_data["page"],
+            "total_pages": logs_data["total_pages"],
+            "total_count": logs_data["total_count"],
         }
-        
+
         stats = get_logs_stats(start_date=chart_start, end_date=chart_end)
-        
+
         return render_template(
-            'admin/logs.html', 
-            logs=logs, 
+            "admin/logs.html",
+            logs=logs,
             stats=stats,
             pagination=pagination,
             current_start_date=chart_start,
-            current_end_date=chart_end
+            current_end_date=chart_end,
         )
-        
+
     except Exception as e:
-        flash(f'Errore nel recupero logs: {str(e)}', 'danger')
-        return render_template('admin/logs.html', logs=[], stats={}, pagination={'page':1, 'total_pages':1}, current_start_date='', current_end_date='')
+        flash(f"Errore nel recupero logs: {str(e)}", "danger")
+        return render_template(
+            "admin/logs.html",
+            logs=[],
+            stats={},
+            pagination={"page": 1, "total_pages": 1},
+            current_start_date="",
+            current_end_date="",
+        )
 
 
-@app.route('/admin/feedback')
+@app.route("/admin/feedback")
 @admin_required
 def admin_feedback():
     try:
-        source_filter = request.args.get('source')
-        if source_filter == 'all':
+        source_filter = request.args.get("source")
+        if source_filter == "all":
             source_filter = None
-            
-        page = request.args.get('page', 1, type=int)
-        
+
+        page = request.args.get("page", 1, type=int)
+
         # Date filter
-        start_date = request.args.get('start_date')
-        end_date = request.args.get('end_date')
-        
+        start_date = request.args.get("start_date")
+        end_date = request.args.get("end_date")
+
         # Calculate default dates if not provided
         if not start_date or not end_date:
             default_end = datetime.now()
-            default_start = default_end - timedelta(days=30) # Default to last 30 days for feedback
+            default_start = default_end - timedelta(
+                days=30
+            )  # Default to last 30 days for feedback
             chart_start = default_start.strftime("%Y-%m-%d")
             chart_end = default_end.strftime("%Y-%m-%d")
         else:
             chart_start = start_date
             chart_end = end_date
-            
-        feedback_data = get_feedback_for_admin(source_filter, page=page, limit=20, start_date=chart_start, end_date=chart_end)
-        feedbacks = feedback_data['feedbacks']
+
+        feedback_data = get_feedback_for_admin(
+            source_filter,
+            page=page,
+            limit=20,
+            start_date=chart_start,
+            end_date=chart_end,
+        )
+        feedbacks = feedback_data["feedbacks"]
         pagination = {
-            'page': feedback_data['page'],
-            'total_pages': feedback_data['total_pages'],
-            'total_count': feedback_data['total_count']
+            "page": feedback_data["page"],
+            "total_pages": feedback_data["total_pages"],
+            "total_count": feedback_data["total_count"],
         }
-        
-        stats = get_feedback_stats(source_filter, start_date=chart_start, end_date=chart_end)
-        
+
+        stats = get_feedback_stats(
+            source_filter, start_date=chart_start, end_date=chart_end
+        )
+
         return render_template(
-            'admin/feedback.html', 
-            feedbacks=feedbacks, 
+            "admin/feedback.html",
+            feedbacks=feedbacks,
             stats=stats,
             current_filter=source_filter,
             pagination=pagination,
             current_start_date=chart_start,
-            current_end_date=chart_end
+            current_end_date=chart_end,
         )
     except Exception as e:
-        flash(f'Errore nel recupero feedback: {str(e)}', 'danger')
-        return render_template('admin/feedback.html', feedbacks=[], stats={}, pagination={'page':1, 'total_pages':1}, current_start_date='', current_end_date='')
+        flash(f"Errore nel recupero feedback: {str(e)}", "danger")
+        return render_template(
+            "admin/feedback.html",
+            feedbacks=[],
+            stats={},
+            pagination={"page": 1, "total_pages": 1},
+            current_start_date="",
+            current_end_date="",
+        )
 
 
-@app.route('/admin/users/<int:user_id>/edit', methods=['GET', 'POST'])
+@app.route("/admin/users/<int:user_id>/edit", methods=["GET", "POST"])
 @admin_required
 def admin_edit_user(user_id):
-    if request.method == 'POST':
+    if request.method == "POST":
         try:
-            new_tokens = request.form.get('tokens', type=int)
-            
+            new_tokens = request.form.get("tokens", type=int)
+
             if new_tokens is None or new_tokens < 0:
-                flash('Numero di token non valido', 'danger')
-                return redirect(url_for('admin_users'))
-            
+                flash("Numero di token non valido", "danger")
+                return redirect(url_for("admin_users"))
+
             success = update_user_tokens(user_id, new_tokens)
-            
+
             if success:
-                flash(f'Token aggiornati con successo a {new_tokens}', 'success')
+                flash(f"Token aggiornati con successo a {new_tokens}", "success")
             else:
-                flash('Utente non trovato', 'danger')
-                
+                flash("Utente non trovato", "danger")
+
         except Exception as e:
-            flash(f"Errore nell'aggiornamento: {str(e)}", 'danger')
-        
-        return redirect(url_for('admin_users'))
-    
+            flash(f"Errore nell'aggiornamento: {str(e)}", "danger")
+
+        return redirect(url_for("admin_users"))
+
     # GET request - show edit form
     try:
         user = get_user_by_id(user_id)
         if user:
-            return render_template('admin/edit_user.html', user=user)
+            return render_template("admin/edit_user.html", user=user)
         else:
-            flash('Utente non trovato', 'danger')
-            return redirect(url_for('admin_users'))
+            flash("Utente non trovato", "danger")
+            return redirect(url_for("admin_users"))
     except Exception as e:
-        flash(f'Errore: {str(e)}', 'danger')
-        return redirect(url_for('admin_users'))
+        flash(f"Errore: {str(e)}", "danger")
+        return redirect(url_for("admin_users"))
 
-@app.route('/admin/prompts')
+
+@app.route("/admin/prompts")
 @admin_required
 def admin_prompts():
     try:
         prompts = get_all_prompts()
-        return render_template('admin/prompts.html', prompts=prompts)
+        return render_template("admin/prompts.html", prompts=prompts)
     except Exception as e:
-        flash(f'Errore nel recupero prompt: {str(e)}', 'danger')
-        return render_template('admin/prompts.html', prompts=[])
+        flash(f"Errore nel recupero prompt: {str(e)}", "danger")
+        return render_template("admin/prompts.html", prompts=[])
 
-@app.route('/admin/prompts/add', methods=['POST'])
+
+@app.route("/admin/prompts/add", methods=["POST"])
 @admin_required
 def admin_add_prompt():
     try:
-        title = request.form.get('title')
-        version = request.form.get('version', type=int)
-        message = request.form.get('message')
-        
-        if not title or not version or not message:
-            flash('Tutti i campi sono obbligatori', 'danger')
-            return redirect(url_for('admin_prompts'))
-        
-        add_prompt(title, version, message)
-        flash('Prompt aggiunto con successo', 'success')
-    except Exception as e:
-        flash(f'Errore nell\'aggiunta del prompt: {str(e)}', 'danger')
-    
-    return redirect(url_for('admin_prompts'))
+        title = request.form.get("title")
+        version = request.form.get("version", type=int)
+        message = request.form.get("message")
 
-@app.route('/admin/prompts/<int:prompt_id>/edit', methods=['GET', 'POST'])
+        if not title or not version or not message:
+            flash("Tutti i campi sono obbligatori", "danger")
+            return redirect(url_for("admin_prompts"))
+
+        add_prompt(title, version, message)
+        flash("Prompt aggiunto con successo", "success")
+    except Exception as e:
+        flash(f"Errore nell'aggiunta del prompt: {str(e)}", "danger")
+
+    return redirect(url_for("admin_prompts"))
+
+
+@app.route("/admin/prompts/<int:prompt_id>/edit", methods=["GET", "POST"])
 @admin_required
 def admin_edit_prompt(prompt_id):
-    if request.method == 'POST':
+    if request.method == "POST":
         try:
-            title = request.form.get('title')
-            version = request.form.get('version', type=int)
-            message = request.form.get('message')
-            
+            title = request.form.get("title")
+            version = request.form.get("version", type=int)
+            message = request.form.get("message")
+
             if not title or not version or not message:
-                flash('Tutti i campi sono obbligatori', 'danger')
-                return redirect(url_for('admin_edit_prompt', prompt_id=prompt_id))
-            
+                flash("Tutti i campi sono obbligatori", "danger")
+                return redirect(url_for("admin_edit_prompt", prompt_id=prompt_id))
+
             success = update_prompt(prompt_id, title, version, message)
-            
+
             if success:
-                flash('Prompt aggiornato con successo', 'success')
+                flash("Prompt aggiornato con successo", "success")
             else:
-                flash('Prompt non trovato', 'danger')
-                
+                flash("Prompt non trovato", "danger")
+
         except Exception as e:
-            flash(f"Errore nell'aggiornamento: {str(e)}", 'danger')
-        
-        return redirect(url_for('admin_prompts'))
-    
+            flash(f"Errore nell'aggiornamento: {str(e)}", "danger")
+
+        return redirect(url_for("admin_prompts"))
+
     # GET request - show edit form
     try:
         prompt = get_prompt_by_id(prompt_id)
         if prompt:
-            return render_template('admin/edit_prompt.html', prompt=prompt)
+            return render_template("admin/edit_prompt.html", prompt=prompt)
         else:
-            flash('Prompt non trovato', 'danger')
-            return redirect(url_for('admin_prompts'))
+            flash("Prompt non trovato", "danger")
+            return redirect(url_for("admin_prompts"))
     except Exception as e:
-        flash(f'Errore: {str(e)}', 'danger')
-        return redirect(url_for('admin_prompts'))
+        flash(f"Errore: {str(e)}", "danger")
+        return redirect(url_for("admin_prompts"))
 
-@app.route('/admin/prompts/<int:prompt_id>/delete', methods=['POST'])
+
+@app.route("/admin/prompts/<int:prompt_id>/delete", methods=["POST"])
 @admin_required
 def admin_delete_prompt(prompt_id):
     try:
         success = delete_prompt(prompt_id)
         if success:
-            flash('Prompt eliminato con successo', 'success')
+            flash("Prompt eliminato con successo", "success")
         else:
-            flash('Prompt non trovato', 'danger')
+            flash("Prompt non trovato", "danger")
     except Exception as e:
-        flash(f"Errore nell'eliminazione: {str(e)}", 'danger')
-    
-    return redirect(url_for('admin_prompts'))
+        flash(f"Errore nell'eliminazione: {str(e)}", "danger")
+
+    return redirect(url_for("admin_prompts"))
+
 
 @app.route("/health")
 def health():
@@ -1795,4 +1860,4 @@ def health():
 
 
 if __name__ == "__main__":
-    app.run(debug=True,port=5000)
+    app.run(debug=True, port=5000)
