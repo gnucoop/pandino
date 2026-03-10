@@ -180,6 +180,7 @@ class PlotTool(Tool):
                     }
                 try:
                     df = pd.DataFrame(data)
+                    using_intermediate_data = True
                 except Exception:
                     return {
                         "kind": "error",
@@ -188,6 +189,7 @@ class PlotTool(Tool):
                     }
             else:
                 df = self._df
+                using_intermediate_data = False
 
             kind_clean = (kind or "").strip().lower()
             x_clean = (x or "").strip()
@@ -387,21 +389,32 @@ class PlotTool(Tool):
                     plt.ylabel("count")
                     plt.xticks(rotation=45, ha="right")
                 else:
-                    # mean/sum(y) by x
                     y_num = pd.to_numeric(df[y_clean], errors="coerce")
-                    tmp = pd.DataFrame({x_clean: df[x_clean], y_clean: y_num})
-                    grouped = tmp.groupby(x_clean, dropna=False)[y_clean]
-                    if agg_clean == "sum":
-                        agg_series = grouped.sum()
-                        y_label = f"sum({y_clean})"
+                    tmp = pd.DataFrame({x_clean: df[x_clean], y_clean: y_num}).dropna(subset=[y_clean])
+
+                    if tmp.empty:
+                        return _err(
+                            f"Column '{y_clean}' has no numeric values for bar plot.",
+                            "NO_NUMERIC_DATA",
+                        )
+
+                    if using_intermediate_data:
+                        x_labels = tmp[x_clean].astype(str).tolist()
+                        y_vals = tmp[y_clean].to_numpy(dtype=float, copy=False)
+                        y_label = y_clean
                     else:
-                        agg_series = grouped.mean()
-                        y_label = f"mean({y_clean})"
+                        grouped = tmp.groupby(x_clean, dropna=False)[y_clean]
+                        if agg_clean == "sum":
+                            agg_series = grouped.sum()
+                            y_label = f"sum({y_clean})"
+                        else:
+                            agg_series = grouped.mean()
+                            y_label = f"mean({y_clean})"
 
-                    agg_series = agg_series.sort_values(ascending=False).head(n_int)
+                        agg_series = agg_series.sort_values(ascending=False).head(n_int)
+                        x_labels = [str(v) for v in agg_series.index.tolist()]
+                        y_vals = agg_series.to_numpy(dtype=float, copy=False)
 
-                    x_labels = [str(v) for v in agg_series.index.tolist()]
-                    y_vals = agg_series.to_numpy(dtype=float, copy=False)
                     plt.bar(x_labels, y_vals)
                     plt.xlabel(x_clean)
                     plt.ylabel(y_label)
