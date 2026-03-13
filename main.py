@@ -79,6 +79,7 @@ from database_pg import (
 )
 
 from dino import dino_authenticate
+from external_auth import external_authenticate
 from ai import (
     audioFormCompilation,
     audioFormPromptBuild,
@@ -267,7 +268,7 @@ def addNewUser() -> Union[tuple[Response, int], tuple[str, int, dict[str, str]]]
     if not user_email:
         return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
 
-    err = dino_authenticate(graphql_url, auth_token)
+    err = external_authenticate(user_email, auth_token, "dino")
     if err:
         return str(err), 403, {"Content-Type": "text/plain"}
 
