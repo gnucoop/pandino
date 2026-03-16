@@ -262,12 +262,17 @@ def addNewUser() -> Union[tuple[Response, int], tuple[str, int, dict[str, str]]]
     auth_token = request.headers.get("X-AUTH-TOKEN")
     user_email = request.headers.get("X-USER-EMAIL")
     client = request.headers.get("X-CLIENT")
+
+    # backward compatibility for Dino
+    # TODO: remove this fallback once Dino sends X-CLIENT header
+    if not client:
+        client = "dino"
+
     if not auth_token:
         return jsonify({"error": "Missing X-AUTH-TOKEN header"}), 400
     if not user_email:
         return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
-    if not client:
-        return jsonify({"error": "Missing X-CLIENT header"}), 400
+    # Dino still requires graphql_url
     if client == "dino" and not graphql_url:
         return jsonify({"error": "Missing X-GRAPHQL-URL header"}), 400
 
