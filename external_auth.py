@@ -2,7 +2,12 @@ import os
 import requests
 
 
-def external_authenticate(email: str, auth_token: str, client: str) -> str | None:
+def external_authenticate(
+    email: str,
+    auth_token: str,
+    client: str,
+    graphql_url: str | None = None,
+) -> str | None:
     gateway_url = os.environ.get("AUTH_GATEWAY_URL", "http://localhost:3000/validate")
 
     payload = {
@@ -10,6 +15,9 @@ def external_authenticate(email: str, auth_token: str, client: str) -> str | Non
         "auth_token": auth_token,
         "client": client,
     }
+
+    if graphql_url is not None:
+        payload["graphql_url"] = graphql_url
 
     try:
         response = requests.post(gateway_url, json=payload, timeout=5)
