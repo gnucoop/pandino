@@ -261,14 +261,17 @@ def addNewUser() -> Union[tuple[Response, int], tuple[str, int, dict[str, str]]]
     graphql_url = request.headers.get("X-GRAPHQL-URL")
     auth_token = request.headers.get("X-AUTH-TOKEN")
     user_email = request.headers.get("X-USER-EMAIL")
-    if not graphql_url:
-        return jsonify({"error": "Missing X-GRAPHQL-URL header"}), 400
+    client = request.headers.get("X-CLIENT")
     if not auth_token:
         return jsonify({"error": "Missing X-AUTH-TOKEN header"}), 400
     if not user_email:
         return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
+    if not client:
+        return jsonify({"error": "Missing X-CLIENT header"}), 400
+    if client == "dino" and not graphql_url:
+        return jsonify({"error": "Missing X-GRAPHQL-URL header"}), 400
 
-    err = external_authenticate(user_email, auth_token, "dino")
+    err = external_authenticate(user_email, auth_token, client, graphql_url)
     if err:
         return str(err), 403, {"Content-Type": "text/plain"}
 
@@ -307,7 +310,7 @@ def addNewUser() -> Union[tuple[Response, int], tuple[str, int, dict[str, str]]]
                 {
                     "response": {
                         "user": {
-                            "user_email": existingUser.get("user"),
+                            "user_email": existingUser.get("username"),
                             "api_key": existingUser.get("api_key"),
                             "expiration_date": existingUser.get("date_valid_until"),
                         }
