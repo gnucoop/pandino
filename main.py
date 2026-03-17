@@ -276,7 +276,11 @@ def addNewUser() -> Union[tuple[Response, int], tuple[str, int, dict[str, str]]]
     if client == "dino" and not graphql_url:
         return jsonify({"error": "Missing X-GRAPHQL-URL header"}), 400
 
-    err = external_authenticate(user_email, auth_token, client, graphql_url)
+    if client == "dino":
+        err = dino_authenticate(graphql_url, auth_token)
+    else:
+        err = external_authenticate(user_email, auth_token, client, graphql_url)
+
     if err:
         return str(err), 403, {"Content-Type": "text/plain"}
 
