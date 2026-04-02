@@ -1272,11 +1272,29 @@ def admin_delete_cost(cost_id: int) -> Response:
 def store_rag_file() -> tuple[str, int, dict[str, str]]:
     graphql_url = request.form.get("graphqlUrl")
     auth_token = request.form.get("authToken")
+    user_email = request.form.get("userEmail")
+    client = request.form.get("client")
 
-    # TEMP: bypass auth for migration test
-    # err = dino_authenticate(graphql_url, auth_token)
-    # if err:
-    #     return str(err), 403, textContentType
+    # backward compatibility for Dino
+    # TODO: remove this fallback once Dino sends client explicitly
+    if not client:
+        client = "dino"
+
+    if not auth_token:
+        return "Missing authToken", 400, textContentType
+    if client != "dino" and not user_email:
+        return "Missing userEmail", 400, textContentType
+    if client == "dino" and not graphql_url:
+        return "Missing graphqlUrl", 400, textContentType
+
+    if client == "dino":
+        err = dino_authenticate(graphql_url, auth_token)
+    else:
+        assert user_email is not None
+        err = external_authenticate(user_email, auth_token, client, graphql_url)
+
+    if err:
+        return str(err), 403, textContentType
 
     file = request.files.get("file")
     url = request.form.get("url")
