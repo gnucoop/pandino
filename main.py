@@ -52,9 +52,8 @@ from datachat.engine_output_adapter import (
 )
 from vector_store import (
     PineconeStore,
-    PGVectorStore,
+    MauiVectorStore,
     merge_segments,
-    PGVectorStoreV2,
     ensure_pgvector_namespace_ready,
 )
 import database_pg
@@ -867,7 +866,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
 
         embeddings = choose_emb_model(emb_llm_type, emb_model)
 
-        store = PGVectorStore(embeddings, namespace)
+        store = MauiVectorStore(embeddings, namespace)
         resp = complete_chat(chat_request, store, llm_type, model)
         if resp and hasattr(resp, "vectors") and resp.vectors:
             for vec in resp.vectors:
@@ -1359,7 +1358,7 @@ def store_rag_file() -> tuple[str, int, dict[str, str]]:
             table_name=namespace.lower(),
         )
 
-        store = PGVectorStoreV2(embeddings, namespace.lower())
+        store = MauiVectorStore(embeddings, namespace)
         store.store_paragraphs(paragraphs)
 
         return text, 200, textContentType

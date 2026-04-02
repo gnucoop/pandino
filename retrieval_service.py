@@ -19,7 +19,7 @@ import logging
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
-from vector_store import PGVectorStoreV2
+from vector_store import MauiVectorStore
 from ai import choose_emb_model
 
 load_dotenv()
@@ -61,7 +61,7 @@ def retrieve_from_collection(question: str, namespace: str) -> List[Dict[str, An
         )
 
         # === Initialize vector store ===
-        store = PGVectorStoreV2(embeddings=emb, table_name=namespace)
+        store = MauiVectorStore(embeddings=emb, table_name=namespace)
 
         # === Perform similarity search ===
         vectors = store.find_similar_vectors(

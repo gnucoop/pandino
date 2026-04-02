@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from database_pg import table_exists, pgvector_maui_id_exists
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
-from langchain_postgres import PGVector, PGEngine, PGVectorStore as LC_PGVectorStore
+from langchain_postgres import PGEngine, PGVectorStore
 
 load_dotenv()
 
@@ -50,20 +50,26 @@ def ensure_pgvector_namespace_ready(
     embeddings: Embeddings,
     table_name: str,
 ) -> None:
+    normalized_table_name = normalize_table_name(table_name)
+
     engine = create_pgvector_engine()
-    table_already_exists = table_exists(schema, table_name)
+    table_already_exists = table_exists(schema, normalized_table_name)
 
     if not table_already_exists:
         vector_size = len(embeddings.embed_query("test"))
 
         engine.init_vectorstore_table(
-            table_name=table_name,
+            table_name=normalized_table_name,
             vector_size=vector_size,
             schema_name=schema,
         )
 
 
-class PGVectorStoreV2(VectorStore):
+def normalize_table_name(name: str) -> str:
+    return name.strip().lower().replace("-", "_")
+
+
+class MauiVectorStore(VectorStore):
     def __init__(
         self,
         embeddings: Embeddings,
@@ -71,25 +77,13 @@ class PGVectorStoreV2(VectorStore):
     ):
         super().__init__(embeddings)
 
-        PGUSER = os.environ["PGUSER"]
-        PGPWD = os.environ["PGPWD"]
-        PGHOST = os.environ["PGHOST"]
-        PGDB = os.environ["PGDB"]
-        PGPORT = os.getenv("PG_PORT", "5432")
-        schema = os.environ.get("MAUI_SCHEMA", "public")
+        normalized_table_name = normalize_table_name(table_name)
 
-        connection_string = (
-            f"postgresql+psycopg://{PGUSER}:{PGPWD}@{PGHOST}:{PGPORT}/{PGDB}"
-        )
+        self.engine = create_pgvector_engine()
 
-        # 1. engine
-        self.engine = PGEngine.from_connection_string(connection_string)
+        self.table_name = normalized_table_name
 
-        # 2. table name
-        self.table_name = table_name
-
-        # 3. store (senza init tabella!)
-        self.store = LC_PGVectorStore.create_sync(  # type: ignore
+        self.store = PGVectorStore.create_sync(  # type: ignore
             engine=self.engine,
             table_name=table_name,
             embedding_service=embeddings,
@@ -154,129 +148,6 @@ class PGVectorStoreV2(VectorStore):
 
         except Exception as e:
             raise RuntimeError(f"Error in store_paragraphs (V2): {str(e)}")
-
-
-class PGVectorStore(VectorStore):
-    def __init__(self, embeddings: Embeddings, collection_name: str):
-
-        connection = (
-            f"postgresql+psycopg://{PGUSER}:{PGPWD}@{PGHOST}:{PGPORT}/{PGDB}"
-            f"?options=-csearch_path%3D{schema}"
-        )
-        self.collection = PGVector(
-            embeddings=embeddings,
-            collection_name=collection_name,
-            connection=connection,
-            use_jsonb=True,
-        )
-
-    def find_similar_vectors(
-        self, text: str, top_k: int, min_similarity: float
-    ) -> List[dict]:
-        try:
-            results = self.collection.similarity_search_with_score(query=text, k=top_k)
-            logging.info(f"PGVector query completed, found {len(results)} matches")
-
-            vectors = []
-            for doc, score in results:
-                if (1 - score) < min_similarity:
-                    continue
-                vectors.append(
-                    {
-                        "similarity": 1 - score,
-                        "metadata": doc.metadata,
-                    }
-                )
-            return vectors
-        except Exception as e:
-            raise RuntimeError(f"Error in find_similar_vectors: {str(e)}")
-
-    def store_paragraphs(self, paragraphs: List[Document]) -> None:
-        batch_size = 100
-        for start in range(0, len(paragraphs), batch_size):
-            end = min(start + batch_size, len(paragraphs))
-
-            batch = paragraphs[start:end]
-            ids = [paragraph_id(par, "") for par in batch]
-
-            try:
-                # Get existing documents
-                existing_docs = self.collection.get_by_ids(ids)
-
-                # Extract existing IDs - the exact method depends on your PGVector implementation
-                # Option 1: If the returned docs have id in metadata
-                existing_ids = {
-                    doc.metadata.get("id")
-                    for doc in existing_docs
-                    if doc.metadata.get("id")
-                }
-
-                # Option 2: If get_by_ids returns a dict mapping ids to docs
-                # existing_ids = set(existing_docs.keys()) if isinstance(existing_docs, dict) else set()
-
-                # Option 3: If you need to compare with the original ids list
-                # existing_ids = set(ids[:len(existing_docs)]) if existing_docs else set()
-
-                new_docs = []
-                for i, par in enumerate(batch):
-                    doc_id = ids[i]
-                    if doc_id in existing_ids:
-                        logging.info(f"Skipping existing document with ID: {doc_id}")
-                        continue
-
-                    # Create Document objects instead of dictionaries
-                    new_doc = Document(
-                        page_content=par.page_content,
-                        metadata=par.metadata
-                        | {"text": par.page_content, "id": doc_id},
-                    )
-                    new_docs.append(new_doc)
-
-                if not new_docs:
-                    logging.info("Batch already present")
-                    continue
-
-                # Add documents with their IDs
-                self.collection.add_documents(new_docs, ids=ids[-len(new_docs) :])
-                logging.info(
-                    f"Successfully added {len(new_docs)} new documents to PGVector"
-                )
-
-            except Exception as e:
-                logging.error(f"Error in batch starting at {start}: {str(e)}")
-                raise RuntimeError(f"Error storing paragraphs to PGVector: {e}")
-
-
-#    def store_paragraphs(self, paragraphs: List[Document]) -> None:
-#        batch_size = 100
-#        for start in range(0, len(paragraphs), batch_size):
-#            end = min(start + batch_size, len(paragraphs))#
-#
-#            batch = paragraphs[start:end]
-#            ids = [paragraph_id(par, "") for par in batch]
-#            try:
-#                existing_docs = self.collection.get_by_ids(ids)
-#                existing_ids = {doc.id for doc in existing_docs}#
-#
-#                new_docs = []
-#                for i, par in enumerate(batch):
-#                    id = ids[i]
-#                    if id in existing_ids:
-#                        # Skipping already existing paragraph
-#                        continue
-#                    new_docs.append({
-#                        "id": id,
-#                        "page_content": par.page_content,
-#                        "metadata": par.metadata | {"text": par.page_content},
-#                    })
-#                if not new_docs:
-#                    logging.info("Batch already present")
-#                    continue#
-#
-#                self.collection.add_documents(new_docs)
-#                logging.info(f"Successfully added {len(new_docs)} new documents to PGVector")
-#            except Exception as e:
-#                raise RuntimeError(f"Error storing paragraphs to PGVector: {e}")
 
 
 class PineconeStore(VectorStore):
