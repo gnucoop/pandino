@@ -19,7 +19,7 @@ import logging
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
-from vector_store import PGVectorStore
+from vector_store import PGVectorStoreV2
 from ai import choose_emb_model
 
 load_dotenv()
@@ -57,20 +57,15 @@ def retrieve_from_collection(question: str, namespace: str) -> List[Dict[str, An
         # === Load embedding model once per call ===
         emb = choose_emb_model(
             os.getenv("COMPLETION_EMBEDDING_MODEL_PROVIDER", "Deepinfra"),
-            os.getenv("COMPLETION_EMBEDDING_MODEL", "BAAI/bge-m3")
+            os.getenv("COMPLETION_EMBEDDING_MODEL", "BAAI/bge-m3"),
         )
 
         # === Initialize vector store ===
-        store = PGVectorStore(
-            embeddings=emb,
-            collection_name=namespace
-        )
+        store = PGVectorStoreV2(embeddings=emb, table_name=namespace)
 
         # === Perform similarity search ===
         vectors = store.find_similar_vectors(
-            text=question,
-            top_k=top_k,
-            min_similarity=min_sim
+            text=question, top_k=top_k, min_similarity=min_sim
         )
 
         logging.info(
@@ -83,4 +78,3 @@ def retrieve_from_collection(question: str, namespace: str) -> List[Dict[str, An
         raise RuntimeError(
             f"Error retrieving vectors from namespace '{namespace}': {e}"
         ) from e
-
