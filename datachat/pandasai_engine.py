@@ -1,11 +1,16 @@
-
 import os
 import shutil
 from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
-from pandasai import Agent
+
+# from pandasai import Agent
+try:
+    from pandasai import Agent
+except ImportError:
+    Agent = None
+
 
 from datachat.bootstrap import build_bootstrap_question
 from datachat.engine_interface import DataChatEngine, EngineBootstrapResult
@@ -20,6 +25,8 @@ class PandasAIEngine(DataChatEngine):
     open_charts: bool = False
 
     def __post_init__(self) -> None:
+        if Agent is None:
+            raise ImportError("pandasai is not installed")
         agent_config = {
             "llm": self.llm,
             "open_charts": self.open_charts,

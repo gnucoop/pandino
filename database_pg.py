@@ -48,7 +48,9 @@ from database_methods import (
     build_get_feedback_model_stats_query,
     build_get_total_feedback_count_query,
     build_get_total_logs_count_query,
-    build_get_total_users_count_query
+    build_get_total_users_count_query,
+    build_check_pgvector_maui_id_exists_query,
+    build_check_table_exists_query,
 )
 
 # Generate a key for encryption and decryption
@@ -83,12 +85,12 @@ cipher_suite = Fernet(KEY)
 
 
 def connect():
-    conn = psycopg.connect(host=PGHOST, dbname=PGDB, user=PGUSER, password=PGPWD, port=PGPORT)
+    conn = psycopg.connect(
+        host=PGHOST, dbname=PGDB, user=PGUSER, password=PGPWD, port=PGPORT
+    )
 
     with conn.cursor() as cur:
-        cur.execute(
-            sql.SQL("SET search_path TO {}").format(sql.Identifier(schema))
-        )
+        cur.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
 
     return conn
 
@@ -497,6 +499,36 @@ def log_token_usage(
     return log_id
 
 
+def table_exists(table_schema: str, table_name: str) -> bool:
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_check_table_exists_query(table_schema, table_name)
+        cursor.execute(query, params)
+        return cursor.fetchone() is not None
+    except Exception as e:
+        logging.exception("Error checking table existence")
+        return False
+    finally:
+        conn.close()
+
+
+def pgvector_maui_id_exists(table_name: str, maui_id: str) -> bool:
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_check_pgvector_maui_id_exists_query(table_name, maui_id)
+        cursor.execute(query, params)
+        return cursor.fetchone() is not None
+    except Exception as e:
+        logging.exception("Error checking maui_id existence")
+        return False
+    finally:
+        conn.close()
+
+
 def get_prompt_from_db(title: str, version: Optional[int] = None) -> Optional[str]:
     """
     Retrieves a prompt's message from the database by title, optionally filtering by version.
@@ -518,7 +550,9 @@ def get_prompt_from_db(title: str, version: Optional[int] = None) -> Optional[st
         if result:
             return result[0]  # message
         else:
-            logging.warning(f"No prompt found in DB for title='{title}', version={version}")
+            logging.warning(
+                f"No prompt found in DB for title='{title}', version={version}"
+            )
             return None
     except Exception as e:
         logging.exception(f"Error retrieving prompt from DB: {str(e)}")
@@ -598,12 +632,12 @@ def get_users_for_admin(page=1, limit=50):
         query, params = build_list_users_query(limit, offset)
         cursor.execute(query, params)
         users_raw = cursor.fetchall()
-        
+
         # Get total count
         query_count, params_count = build_get_total_users_count_query()
         cursor.execute(query_count, params_count)
         total_count = cursor.fetchone()[0]
-        
+
     finally:
         conn.close()
 
@@ -614,13 +648,13 @@ def get_users_for_admin(page=1, limit=50):
                 decrypted_api_key = cipher_suite.decrypt(api_key).decode()
             except InvalidToken:
                 decrypted_api_key = "Decryption failed"
-            
+
             is_active = False
             # Formatta la data se esiste
-            if date_valid_until and hasattr(date_valid_until, 'strftime'):
-                formatted_date = date_valid_until.strftime('%Y-%m-%d')
+            if date_valid_until and hasattr(date_valid_until, "strftime"):
+                formatted_date = date_valid_until.strftime("%Y-%m-%d")
             else:
-                formatted_date = str(date_valid_until) if date_valid_until else 'N/A'
+                formatted_date = str(date_valid_until) if date_valid_until else "N/A"
 
             # Check if user is active (today < date_valid_until)
             if date_valid_until:
@@ -628,93 +662,99 @@ def get_users_for_admin(page=1, limit=50):
                     # Se è una stringa, prova a parsarla
                     if isinstance(date_valid_until, str):
                         # Prova vari formati
-                        for fmt in ['%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d']:
+                        for fmt in [
+                            "%Y-%m-%d %H:%M:%S.%f",
+                            "%Y-%m-%d %H:%M:%S",
+                            "%Y-%m-%d",
+                        ]:
                             try:
-                                valid_date = datetime.strptime(date_valid_until, fmt).date()
+                                valid_date = datetime.strptime(
+                                    date_valid_until, fmt
+                                ).date()
                                 break
                             except ValueError:
                                 continue
                         else:
                             # Se nessun formato funziona
                             valid_date = None
-                        
+
                         if valid_date:
-                            formatted_date = valid_date.strftime('%Y-%m-%d')
+                            formatted_date = valid_date.strftime("%Y-%m-%d")
                     # Se è già un datetime
-                    elif hasattr(date_valid_until, 'date'):
+                    elif hasattr(date_valid_until, "date"):
                         valid_date = date_valid_until.date()
-                        formatted_date = valid_date.strftime('%Y-%m-%d')
+                        formatted_date = valid_date.strftime("%Y-%m-%d")
                     # Se è già un date
-                    elif hasattr(date_valid_until, 'year'):
+                    elif hasattr(date_valid_until, "year"):
                         valid_date = date_valid_until
-                        formatted_date = valid_date.strftime('%Y-%m-%d')
+                        formatted_date = valid_date.strftime("%Y-%m-%d")
                     else:
                         valid_date = None
                         formatted_date = str(date_valid_until)
-                    
+
                     # Controlla se è attivo (oggi < data_scadenza)
                     if valid_date:
                         today = datetime.now().date()
                         is_active = today < valid_date
-                        
+
                 except (ValueError, AttributeError):
                     # Se il parsing fallisce, considera l'utente non attivo
                     is_active = False
                     formatted_date = str(date_valid_until)
-            
-            users.append({
-                'id': id,
-                'name': username,
-                'email': decrypted_api_key,
-                'tokens': f"{tokens} tokens",
-                'is_active': is_active,
-                'created_at': formatted_date
-            })
-            
+
+            users.append(
+                {
+                    "id": id,
+                    "name": username,
+                    "email": decrypted_api_key,
+                    "tokens": f"{tokens} tokens",
+                    "is_active": is_active,
+                    "created_at": formatted_date,
+                }
+            )
+
     total_pages = (total_count + limit - 1) // limit
-    
+
     return {
-        'users': users,
-        'page': page,
-        'total_pages': total_pages,
-        'total_count': total_count
+        "users": users,
+        "page": page,
+        "total_pages": total_pages,
+        "total_count": total_count,
     }
 
 
 def get_users_stats():
     """
     Get statistics about users for the admin dashboard.
-    
+
     :return: Dictionary with user statistics
     """
     conn = connect()
     cursor = conn.cursor()
-    
+
     try:
         # Count total users
         query, params = build_get_total_users_query()
         cursor.execute(query, params)
         total_users_row = cursor.fetchone()
         total_users = total_users_row[0] if total_users_row else 0
-        
+
         # Sum total tokens
         query, params = build_get_total_tokens_query()
         cursor.execute(query, params)
         total_tokens_row = cursor.fetchone()
         total_tokens = total_tokens_row[0] if total_tokens_row else 0
-        
+
     finally:
         conn.close()
-    
-    return {
-        'total_users': total_users,
-        'total_tokens': total_tokens
-    }
+
+    return {"total_users": total_users, "total_tokens": total_tokens}
+
 
 def get_logs_for_admin(page=1, limit=50, start_date=None, end_date=None):
     """
     Retrieves logs from the database for the admin panel with pagination.
-    
+
     :param page: Page number (1-based)
     :param limit: Maximum number of logs per page
     :param start_date: Optional start date filter
@@ -723,58 +763,75 @@ def get_logs_for_admin(page=1, limit=50, start_date=None, end_date=None):
     """
     conn = connect()
     cursor = conn.cursor()
-    
+
     offset = (page - 1) * limit
-    
+
     try:
         # Get logs
-        query, params = build_get_logs_for_admin_query(limit, offset, start_date, end_date)
+        query, params = build_get_logs_for_admin_query(
+            limit, offset, start_date, end_date
+        )
         cursor.execute(query, params)
         logs_raw = cursor.fetchall()
-        
+
         # Get total count
-        query_count, params_count = build_get_total_logs_count_query(start_date, end_date)
+        query_count, params_count = build_get_total_logs_count_query(
+            start_date, end_date
+        )
         cursor.execute(query_count, params_count)
         total_count = cursor.fetchone()[0]
-        
+
     finally:
         conn.close()
-    
+
     logs = []
     if logs_raw:
-        for log_id, user_id, username, date, token_input, token_output, cost, model, provider in logs_raw:
+        for (
+            log_id,
+            user_id,
+            username,
+            date,
+            token_input,
+            token_output,
+            cost,
+            model,
+            provider,
+        ) in logs_raw:
             # Formatta la data
-            if date and hasattr(date, 'strftime'):
-                formatted_date = date.strftime('%Y-%m-%d %H:%M:%S')
+            if date and hasattr(date, "strftime"):
+                formatted_date = date.strftime("%Y-%m-%d %H:%M:%S")
             else:
-                formatted_date = str(date) if date else 'N/A'
-            
-            logs.append({
-                'id': log_id,
-                'user_id': user_id,
-                'username': username or 'Unknown',
-                'date': formatted_date,
-                'token_input': token_input or 0,
-                'token_output': token_output or 0,
-                'cost': cost or 0,
-                'model': model or 'N/A',
-                'provider': provider or 'N/A'
-            })
-            
+                formatted_date = str(date) if date else "N/A"
+
+            logs.append(
+                {
+                    "id": log_id,
+                    "user_id": user_id,
+                    "username": username or "Unknown",
+                    "date": formatted_date,
+                    "token_input": token_input or 0,
+                    "token_output": token_output or 0,
+                    "cost": cost or 0,
+                    "model": model or "N/A",
+                    "provider": provider or "N/A",
+                }
+            )
+
     total_pages = (total_count + limit - 1) // limit
-    
+
     return {
-        'logs': logs,
-        'page': page,
-        'total_pages': total_pages,
-        'total_count': total_count
+        "logs": logs,
+        "page": page,
+        "total_pages": total_pages,
+        "total_count": total_count,
     }
+
 
 def update_user_tokens(user_id, new_tokens):
     """
     Update the tokens field for a specific user.
     Sets date_valid_until to one year from today.
-    
+
     :param user_id: ID of the user to update
     :param new_tokens: New token value
     :return: True if successful, False otherwise
@@ -784,12 +841,16 @@ def update_user_tokens(user_id, new_tokens):
 
     try:
         # Calculate date one year from today
-        one_year_from_today = datetime.now().replace(microsecond=0) + timedelta(days=365)
+        one_year_from_today = datetime.now().replace(microsecond=0) + timedelta(
+            days=365
+        )
 
-        query, params = build_update_user_tokens_query(user_id, new_tokens, one_year_from_today)
+        query, params = build_update_user_tokens_query(
+            user_id, new_tokens, one_year_from_today
+        )
         cursor.execute(query, params)
         conn.commit()
-        
+
         if cursor.rowcount > 0:
             return True
         else:
@@ -800,105 +861,105 @@ def update_user_tokens(user_id, new_tokens):
     finally:
         conn.close()
 
+
 def get_logs_stats(start_date=None, end_date=None):
     """
     Get statistics about logs for charts and dashboard.
-    
+
     :param start_date: Optional start date for stats
     :param end_date: Optional end date for stats
     :return: Dictionary with log statistics
     """
     conn = connect()
     cursor = conn.cursor()
-    
+
     try:
         # Total tokens input/output
         query, params = build_get_total_log_stats_query(start_date, end_date)
         cursor.execute(query, params)
         totals = cursor.fetchone()
-        
+
         # Tokens by day (filtered by date range)
         query, params = build_get_daily_log_stats_query(start_date, end_date)
         cursor.execute(query, params)
         daily_stats = cursor.fetchall()
-        
+
         # Top users by token usage
         query, params = build_get_top_users_by_token_usage_query(start_date, end_date)
         cursor.execute(query, params)
         top_users = cursor.fetchall()
-        
+
     finally:
         conn.close()
-    
+
     # Format daily stats
     daily_data = []
     if daily_stats:
         for day, input_t, output_t in daily_stats:
-            day_str = day.strftime('%Y-%m-%d') if hasattr(day, 'strftime') else str(day)
-            daily_data.append({
-                'day': day_str,
-                'input': input_t or 0,
-                'output': output_t or 0
-            })
-    
+            day_str = day.strftime("%Y-%m-%d") if hasattr(day, "strftime") else str(day)
+            daily_data.append(
+                {"day": day_str, "input": input_t or 0, "output": output_t or 0}
+            )
+
     # Format top users
     top_users_data = []
     if top_users:
         for username, total in top_users:
-            top_users_data.append({
-                'username': username or 'Unknown',
-                'total_tokens': total or 0
-            })
-    
+            top_users_data.append(
+                {"username": username or "Unknown", "total_tokens": total or 0}
+            )
+
     return {
-        'total_input': totals[0] if totals and totals[0] is not None else 0,
-        'total_output': totals[1] if totals and totals[1] is not None else 0,
-        'total_cost': totals[2] if totals and totals[2] is not None else 0.0,
-        'total_requests': totals[3] if totals and totals[3] is not None else 0,
-        'daily_stats': daily_data,
-        'top_users': top_users_data
+        "total_input": totals[0] if totals and totals[0] is not None else 0,
+        "total_output": totals[1] if totals and totals[1] is not None else 0,
+        "total_cost": totals[2] if totals and totals[2] is not None else 0.0,
+        "total_requests": totals[3] if totals and totals[3] is not None else 0,
+        "daily_stats": daily_data,
+        "top_users": top_users_data,
     }
+
 
 def get_user_by_id(user_id):
     """
     Get a single user by ID.
-    
+
     :param user_id: ID of the user
     :return: User dictionary or None
     """
     conn = connect()
     cursor = conn.cursor()
-    
+
     try:
         query, params = build_get_user_by_id_query(user_id)
         cursor.execute(query, params)
         user_data = cursor.fetchone()
-        
+
         if user_data:
             id, username, api_key, date_valid_until, tokens = user_data
-            
+
             try:
                 decrypted_api_key = cipher_suite.decrypt(api_key).decode()
             except InvalidToken:
                 decrypted_api_key = "Decryption failed"
-            
+
             # Formatta la data se esiste
-            if date_valid_until and hasattr(date_valid_until, 'strftime'):
-                formatted_date = date_valid_until.strftime('%Y-%m-%d')
+            if date_valid_until and hasattr(date_valid_until, "strftime"):
+                formatted_date = date_valid_until.strftime("%Y-%m-%d")
             else:
-                formatted_date = str(date_valid_until) if date_valid_until else 'N/A'
-            
+                formatted_date = str(date_valid_until) if date_valid_until else "N/A"
+
             return {
-                'id': id,
-                'username': username,
-                'api_key': decrypted_api_key,
-                'date_valid_until': formatted_date,
-                'tokens': tokens
+                "id": id,
+                "username": username,
+                "api_key": decrypted_api_key,
+                "date_valid_until": formatted_date,
+                "tokens": tokens,
             }
         return None
-        
+
     finally:
         conn.close()
+
 
 def get_all_prompts():
     """
@@ -908,51 +969,54 @@ def get_all_prompts():
     """
     conn = connect()
     cursor = conn.cursor()
-    
+
     try:
         query, params = build_get_all_prompts_query()
         cursor.execute(query, params)
         prompts_raw = cursor.fetchall()
     finally:
         conn.close()
-    
+
     prompts = []
     if prompts_raw:
         for id, title, version, message in prompts_raw:
-            prompts.append({
-                'id': id,
-                'title': title,
-                'version': version,
-                'message': message,
-            })
-    
+            prompts.append(
+                {
+                    "id": id,
+                    "title": title,
+                    "version": version,
+                    "message": message,
+                }
+            )
+
     return prompts
+
 
 def get_prompt_by_id(prompt_id):
     """
     Get a single prompt by ID.
-    
+
     :param prompt_id: ID of the prompt
     :return: Prompt dictionary or None
     """
     conn = connect()
     cursor = conn.cursor()
-    
+
     try:
         query, params = build_get_prompt_by_id_query(prompt_id)
         cursor.execute(query, params)
         prompt_data = cursor.fetchone()
-        
+
         if prompt_data:
             id, title, version, message = prompt_data
             return {
-                'id': id,
-                'title': title,
-                'version': version,
-                'message': message,
+                "id": id,
+                "title": title,
+                "version": version,
+                "message": message,
             }
         return None
-        
+
     finally:
         conn.close()
 
@@ -1083,15 +1147,17 @@ def get_all_costs():
     costs = []
     if costs_raw:
         for id, model, provider, in_cost, out_cost, start, end in costs_raw:
-            costs.append({
-                'id': id,
-                'model': model,
-                'provider': provider,
-                'token_input_cost': in_cost,
-                'token_output_cost': out_cost,
-                'start_date_valid': start,
-                'end_date_valid': end,
-            })
+            costs.append(
+                {
+                    "id": id,
+                    "model": model,
+                    "provider": provider,
+                    "token_input_cost": in_cost,
+                    "token_output_cost": out_cost,
+                    "start_date_valid": start,
+                    "end_date_valid": end,
+                }
+            )
 
     return costs
 
@@ -1114,13 +1180,13 @@ def get_cost_by_id(cost_id: int):
         if cost_data:
             id, model, provider, in_cost, out_cost, start, end = cost_data
             return {
-                'id': id,
-                'model': model,
-                'provider': provider,
-                'token_input_cost': in_cost,
-                'token_output_cost': out_cost,
-                'start_date_valid': start,
-                'end_date_valid': end,
+                "id": id,
+                "model": model,
+                "provider": provider,
+                "token_input_cost": in_cost,
+                "token_output_cost": out_cost,
+                "start_date_valid": start,
+                "end_date_valid": end,
             }
         return None
 
@@ -1142,14 +1208,11 @@ def get_daily_stats(date: str):
         query, params = build_get_daily_stats_query(date)
         cursor.execute(query, params)
         result = cursor.fetchone()
-        
+
         total_tokens = result[0] if result and result[0] else 0
         total_cost = result[1] if result and result[1] else 0.0
-        
-        return {
-            'total_tokens': total_tokens,
-            'total_cost': total_cost
-        }
+
+        return {"total_tokens": total_tokens, "total_cost": total_cost}
     finally:
         conn.close()
 
@@ -1169,9 +1232,7 @@ def add_prompt(title: str, version: int, message: str) -> Optional[str]:
     cursor = conn.cursor()
 
     try:
-        query, params = build_add_prompt_query(
-            title, version, message
-        )
+        query, params = build_add_prompt_query(title, version, message)
         cursor.execute(query, params)
         conn.commit()
         return None
@@ -1184,10 +1245,11 @@ def add_prompt(title: str, version: int, message: str) -> Optional[str]:
     finally:
         conn.close()
 
+
 def update_prompt(prompt_id: int, title: str, version: int, message: str) -> bool:
     """
     Update a prompt.
-    
+
     :param prompt_id: ID of the prompt to update
     :param title: New title value.
     :param version: New version value.
@@ -1201,7 +1263,7 @@ def update_prompt(prompt_id: int, title: str, version: int, message: str) -> boo
         query, params = build_update_prompt_query(prompt_id, title, version, message)
         cursor.execute(query, params)
         conn.commit()
-        
+
         if cursor.rowcount > 0:
             return True
         else:
@@ -1211,6 +1273,7 @@ def update_prompt(prompt_id: int, title: str, version: int, message: str) -> boo
         raise e
     finally:
         conn.close()
+
 
 def delete_prompt(prompt_id: int) -> bool:
     """
@@ -1239,7 +1302,7 @@ def delete_prompt(prompt_id: int) -> bool:
 def get_recent_activity():
     """
     Get the 3 most recent activities (logs and new users).
-    
+
     :return: List of activity dictionaries
     """
     conn = connect()
@@ -1249,25 +1312,26 @@ def get_recent_activity():
         query, params = build_get_recent_activity_query()
         cursor.execute(query, params)
         rows = cursor.fetchall()
-        
+
         activities = []
         if rows:
             for type, date, details in rows:
-                activities.append({
-                    'type': type,
-                    'date': date,
-                    'details': details
-                })
+                activities.append({"type": type, "date": date, "details": details})
         return activities
     finally:
         conn.close()
 
 
-
-def get_feedback_for_admin(source_filter: Optional[str] = None, page=1, limit=50, start_date=None, end_date=None) -> Dict[str, Any]:
+def get_feedback_for_admin(
+    source_filter: Optional[str] = None,
+    page=1,
+    limit=50,
+    start_date=None,
+    end_date=None,
+) -> Dict[str, Any]:
     """
     Retrieves feedback entries for the admin panel with pagination.
-    
+
     :param source_filter: Optional source to filter by.
     :param page: Page number (1-based)
     :param limit: Maximum number of entries per page
@@ -1277,59 +1341,62 @@ def get_feedback_for_admin(source_filter: Optional[str] = None, page=1, limit=50
     """
     conn = connect()
     cursor = conn.cursor()
-    
+
     offset = (page - 1) * limit
-    
+
     try:
         # Get feedback
-        query, params = build_get_feedback_for_admin_query(limit, offset, source_filter, start_date, end_date)
+        query, params = build_get_feedback_for_admin_query(
+            limit, offset, source_filter, start_date, end_date
+        )
         cursor.execute(query, params)
         rows = cursor.fetchall()
-        
+
         # Get total count
-        query_count, params_count = build_get_total_feedback_count_query(source_filter, start_date, end_date)
+        query_count, params_count = build_get_total_feedback_count_query(
+            source_filter, start_date, end_date
+        )
         cursor.execute(query_count, params_count)
         total_count = cursor.fetchone()[0]
-        
+
         feedback_list = []
         if rows:
             for row in rows:
-                feedback_list.append({
-                    'id': row[0],
-                    'user_email': row[1],
-                    'question': row[2],
-                    'answer': row[3],
-                    'feedback_value': row[4],
-                    'timestamp': row[5],
-                    'log_id': row[6],
-                    'source': row[7],
-                    'model': row[8]
-                })
-                
+                feedback_list.append(
+                    {
+                        "id": row[0],
+                        "user_email": row[1],
+                        "question": row[2],
+                        "answer": row[3],
+                        "feedback_value": row[4],
+                        "timestamp": row[5],
+                        "log_id": row[6],
+                        "source": row[7],
+                        "model": row[8],
+                    }
+                )
+
         total_pages = (total_count + limit - 1) // limit
-        
+
         return {
-            'feedbacks': feedback_list,
-            'page': page,
-            'total_pages': total_pages,
-            'total_count': total_count
+            "feedbacks": feedback_list,
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": total_count,
         }
     except Exception as e:
         logging.exception(f"Error retrieving feedback: {e}")
-        return {
-            'feedbacks': [],
-            'page': 1,
-            'total_pages': 1,
-            'total_count': 0
-        }
+        return {"feedbacks": [], "page": 1, "total_pages": 1, "total_count": 0}
     finally:
         conn.close()
 
 
-def get_feedback_stats(source_filter: Optional[str] = None, start_date=None, end_date=None) -> Dict[str, Any]:
+def get_feedback_stats(
+    source_filter: Optional[str] = None, start_date=None, end_date=None
+) -> Dict[str, Any]:
     """
     Retrieves feedback statistics and list of sources.
-    
+
     :param source_filter: Optional source to filter by.
     :param start_date: Optional start date filter
     :param end_date: Optional end date filter
@@ -1337,40 +1404,46 @@ def get_feedback_stats(source_filter: Optional[str] = None, start_date=None, end
     """
     conn = connect()
     cursor = conn.cursor()
-    
+
     stats = {
-        'total': 0,
-        'positive_count': 0,
-        'negative_count': 0,
-        'sources': [],
-        'models': []
+        "total": 0,
+        "positive_count": 0,
+        "negative_count": 0,
+        "sources": [],
+        "models": [],
     }
 
     try:
         # Get counts
-        query_stats, params_stats = build_get_feedback_stats_query(source_filter, start_date, end_date)
+        query_stats, params_stats = build_get_feedback_stats_query(
+            source_filter, start_date, end_date
+        )
         cursor.execute(query_stats, params_stats)
         row = cursor.fetchone()
-        
+
         if row:
-            stats['total'] = row[0]
-            stats['positive_count'] = row[1]
-            stats['negative_count'] = row[2]
-        
+            stats["total"] = row[0]
+            stats["positive_count"] = row[1]
+            stats["negative_count"] = row[2]
+
         # Get sources (always get all sources for the filter dropdown)
         query_sources, _ = build_get_feedback_sources_query()
         cursor.execute(query_sources)
         rows_sources = cursor.fetchall()
         if rows_sources:
-            stats['sources'] = [r[0] for r in rows_sources]
-            
+            stats["sources"] = [r[0] for r in rows_sources]
+
         # Get model stats
-        query_models, params_models = build_get_feedback_model_stats_query(source_filter, start_date, end_date)
+        query_models, params_models = build_get_feedback_model_stats_query(
+            source_filter, start_date, end_date
+        )
         cursor.execute(query_models, params_models)
         rows_models = cursor.fetchall()
         if rows_models:
-            stats['models'] = [{'name': r[0] or 'Unknown', 'count': r[1]} for r in rows_models]
-            
+            stats["models"] = [
+                {"name": r[0] or "Unknown", "count": r[1]} for r in rows_models
+            ]
+
         return stats
     except Exception as e:
         logging.exception(f"Error retrieving feedback stats: {e}")
