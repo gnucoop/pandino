@@ -1373,7 +1373,7 @@ def store_rag_file() -> tuple[str, int, dict[str, str]]:
 
         ensure_pgvector_namespace_ready(
             embeddings=embeddings,
-            table_name=namespace.lower(),
+            table_name=namespace,
         )
 
         store = MauiVectorStore(embeddings, namespace)

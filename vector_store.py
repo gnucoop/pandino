@@ -85,7 +85,7 @@ class MauiVectorStore(VectorStore):
 
         self.store = PGVectorStore.create_sync(  # type: ignore
             engine=self.engine,
-            table_name=table_name,
+            table_name=normalized_table_name,
             embedding_service=embeddings,
         )
 
