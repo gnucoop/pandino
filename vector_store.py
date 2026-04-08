@@ -276,3 +276,8 @@ def hash_text(t: str) -> str:
 
 def paragraph_id(paragraph: Document, namespace: str) -> str:
     return f"{namespace}:{hash_text(paragraph.page_content)}"
+
+
+def file_id_from_text(text: str, namespace: str) -> str:
+    normalized_namespace = normalize_table_name(namespace)
+    return f"{normalized_namespace}:{hash_text(text)}"

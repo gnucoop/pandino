@@ -51,10 +51,11 @@ from datachat.engine_output_adapter import (
     consume_adapter_fallback_used,
 )
 from vector_store import (
-    PineconeStore,
     MauiVectorStore,
     merge_segments,
     ensure_pgvector_namespace_ready,
+    file_id_from_text,
+    normalize_table_name,
 )
 import database_pg
 from database_pg import (
@@ -81,6 +82,7 @@ from database_pg import (
     log_token_usage,
     get_feedback_for_admin,
     get_feedback_stats,
+    insert_rag_file,
 )
 
 from dino import dino_authenticate
@@ -1299,11 +1301,14 @@ def store_rag_file() -> tuple[str, int, dict[str, str]]:
     file = request.files.get("file")
     url = request.form.get("url")
     namespace = request.form.get("namespace") or ""
+    language = request.form.get("language")
 
     if not file:
         return "File not provided", 400, textContentType
     if not url:
         return "Url not provided", 400, textContentType
+    if not language:
+        return "Missing language", 400, textContentType
 
     chunk_size = 900
     chunk_overlap = 100
@@ -1315,25 +1320,23 @@ def store_rag_file() -> tuple[str, int, dict[str, str]]:
     metadata = {"url": url, "mimetype": file.mimetype, "source": file.filename}
     text = ""
     paragraphs: List[Document] = []
-    try:
-        text = ""
-        is_markdown = False
 
+    try:
         if file.mimetype == "text/plain":
             text = file.stream.read().decode()
             paragraphs = tx_split.split_documents(
                 [Document(page_content=text, metadata=metadata)]
             )
+
         elif file.mimetype == "text/markdown":
             text = file.stream.read().decode()
             paragraphs = md_split.split_documents(
                 [Document(page_content=text, metadata=metadata)]
             )
+
         elif file.mimetype == "application/pdf":
             with tempfile.NamedTemporaryFile(suffix=".pdf") as temp:
                 file.save(temp.name)
-                # Method 'to_markdown' of library 'pymupdf4llm' incorrectly hints always
-                # returning a string (return a List[dict] in this case)
                 pages: List[dict] = pymupdf4llm.to_markdown(temp.name, page_chunks=True)  # type: ignore
                 page_texts = [p["text"] for p in pages]
                 text = "".join(page_texts)
@@ -1345,10 +1348,12 @@ def store_rag_file() -> tuple[str, int, dict[str, str]]:
                     for p in pages
                 ]
                 paragraphs = md_split.split_documents(page_docs)
+
         elif file.mimetype.startswith("audio"):
             resp = whisper_response(file)
             if resp.status_code != 200:
                 return "Error whispering audio", 500, textContentType
+
             json = resp.json()
             text = json["text"]
             segments = [
@@ -1359,13 +1364,35 @@ def store_rag_file() -> tuple[str, int, dict[str, str]]:
                 for s in json["segments"]
             ]
             paragraphs = merge_segments(segments, chunk_size)
+
         elif file.mimetype.startswith("image"):
             text = describe_image(url, VISION_PROVIDER or "", VISION_MODEL or "")
+            paragraphs = [
+                Document(
+                    page_content=text,
+                    metadata=metadata,
+                )
+            ]
+
         else:
             return "Unsupported file type", 400, textContentType
 
         if text == "":
             return "", 200, textContentType
+
+        file_id = file_id_from_text(text, namespace)
+
+        paragraphs = [
+            Document(
+                page_content=par.page_content,
+                metadata=par.metadata
+                | {
+                    "file_id": file_id,
+                    "language": language,
+                },
+            )
+            for par in paragraphs
+        ]
 
         embeddings = choose_emb_model(
             COMPLETION_EMBEDDING_MODEL_PROVIDER or "", COMPLETION_EMBEDDING_MODEL or ""
@@ -1378,6 +1405,23 @@ def store_rag_file() -> tuple[str, int, dict[str, str]]:
 
         store = MauiVectorStore(embeddings, namespace)
         store.store_paragraphs(paragraphs)
+
+        chunk_count = len(paragraphs)
+
+        tracking_ok = insert_rag_file(
+            file_id=file_id,
+            file_name=file.filename or "",
+            namespace=normalize_table_name(namespace),
+            chunk_count=chunk_count,
+            language=language,
+        )
+
+        if not tracking_ok:
+            logging.warning(
+                "RAG file tracking failed for file_id=%s, namespace=%s",
+                file_id,
+                normalize_table_name(namespace),
+            )
 
         return text, 200, textContentType
 

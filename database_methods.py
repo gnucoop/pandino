@@ -167,6 +167,33 @@ def build_check_pgvector_maui_id_exists_query(
     return query, params
 
 
+def build_insert_rag_file_query(
+    file_id: str,
+    file_name: str,
+    namespace: str,
+    chunk_count: int,
+    language: str,
+) -> Tuple[sql.SQL, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to insert a new record into the rag_files table.
+
+    :param file_id: Unique identifier of the document (file-level, hash-based).
+    :param file_name: Original name of the uploaded file.
+    :param namespace: Namespace (table) where embeddings are stored.
+    :param chunk_count: Number of chunks generated from the document.
+    :param language: Language of the document.
+    :return: Tuple with SQL query and parameters.
+    """
+    query = sql.SQL(
+        """
+        INSERT INTO rag_files (id, file_name, namespace, chunk_count, language)
+        VALUES (%s, %s, %s, %s, %s)
+        """
+    )
+    params = (file_id, file_name, namespace, chunk_count, language)
+    return query, params
+
+
 def build_print_stored_keys_query() -> Tuple[sql.Composed, Tuple[()]]:
     """
     Builds a SQL query to retrieve usernames and encrypted API keys from the 'users' table.
