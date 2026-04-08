@@ -5,10 +5,9 @@ from cryptography.fernet import Fernet, InvalidToken
 import os
 import base64
 from datetime import datetime, timedelta
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, Dict, Any
 import logging
 import pandas as pd
-import bcrypt
 
 from database_methods import (
     build_get_user_by_username_query,
@@ -51,6 +50,7 @@ from database_methods import (
     build_get_total_users_count_query,
     build_check_pgvector_maui_id_exists_query,
     build_check_table_exists_query,
+    build_insert_rag_file_query,
 )
 
 # Generate a key for encryption and decryption
@@ -141,6 +141,14 @@ def init_db():
             timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             log_id INTEGER REFERENCES logs(id) ON DELETE SET NULL,
             source TEXT
+        );
+        CREATE TABLE IF NOT EXISTS rag_files (
+            id TEXT PRIMARY KEY,
+            file_name TEXT NOT NULL,
+            namespace TEXT NOT NULL,
+            chunk_count INTEGER NOT NULL CHECK (chunk_count >= 0),
+            language TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
     """
     # Execute the SQL script
@@ -497,6 +505,45 @@ def log_token_usage(
     conn.close()
 
     return log_id
+
+
+def insert_rag_file(
+    file_id: str,
+    file_name: str,
+    namespace: str,
+    chunk_count: int,
+    language: str,
+) -> bool:
+    """
+    Inserts a new record into the rag_files table.
+
+    :param file_id: Unique identifier of the document (file-level, hash-based).
+    :param file_name: Original name of the uploaded file.
+    :param namespace: Namespace (table) where embeddings are stored.
+    :param chunk_count: Number of chunks generated from the document.
+    :param language: Language of the document.
+    :return: True if the insert succeeds, False otherwise.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_insert_rag_file_query(
+            file_id=file_id,
+            file_name=file_name,
+            namespace=namespace,
+            chunk_count=chunk_count,
+            language=language,
+        )
+        cursor.execute(query, params)
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        logging.exception("Error inserting rag file")
+        return False
+    finally:
+        conn.close()
 
 
 def table_exists(table_schema: str, table_name: str) -> bool:
