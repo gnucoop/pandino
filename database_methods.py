@@ -172,7 +172,7 @@ def build_insert_rag_file_query(
     file_name: str,
     namespace: str,
     chunk_count: int,
-    language: str,
+    language: Optional[str],
 ) -> Tuple[sql.SQL, Tuple[Any, ...]]:
     """
     Builds a SQL query to insert a new record into the rag_files table.

@@ -147,7 +147,7 @@ def init_db():
             file_name TEXT NOT NULL,
             namespace TEXT NOT NULL,
             chunk_count INTEGER NOT NULL CHECK (chunk_count >= 0),
-            language TEXT NOT NULL,
+            language TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
     """
@@ -512,7 +512,7 @@ def insert_rag_file(
     file_name: str,
     namespace: str,
     chunk_count: int,
-    language: str,
+    language: Optional[str],
 ) -> bool:
     """
     Inserts a new record into the rag_files table.
