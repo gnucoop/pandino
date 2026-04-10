@@ -1307,8 +1307,6 @@ def store_rag_file() -> tuple[str, int, dict[str, str]]:
         return "File not provided", 400, textContentType
     if not url:
         return "Url not provided", 400, textContentType
-    if not language:
-        return "Missing language", 400, textContentType
 
     chunk_size = 900
     chunk_overlap = 100
@@ -1386,10 +1384,8 @@ def store_rag_file() -> tuple[str, int, dict[str, str]]:
             Document(
                 page_content=par.page_content,
                 metadata=par.metadata
-                | {
-                    "file_id": file_id,
-                    "language": language,
-                },
+                | {"file_id": file_id}
+                | ({"language": language} if language else {}),
             )
             for par in paragraphs
         ]
