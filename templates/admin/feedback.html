@@ -200,6 +200,10 @@
                         <ul class="pagination justify-content-center mb-0">
                             <li class="page-item {{ 'disabled' if pagination.page == 1 else '' }}">
                                 <a class="page-link"
+                                    href="{{ url_for('admin_feedback', page=1, source=current_filter, start_date=current_start_date, end_date=current_end_date) }}">&laquo; First</a>
+                            </li>
+                            <li class="page-item {{ 'disabled' if pagination.page == 1 else '' }}">
+                                <a class="page-link"
                                     href="{{ url_for('admin_feedback', page=pagination.page-1, source=current_filter, start_date=current_start_date, end_date=current_end_date) }}">Previous</a>
                             </li>
 
@@ -211,6 +215,10 @@
                             <li class="page-item {{ 'disabled' if pagination.page == pagination.total_pages else '' }}">
                                 <a class="page-link"
                                     href="{{ url_for('admin_feedback', page=pagination.page+1, source=current_filter, start_date=current_start_date, end_date=current_end_date) }}">Next</a>
+                            </li>
+                            <li class="page-item {{ 'disabled' if pagination.page == pagination.total_pages else '' }}">
+                                <a class="page-link"
+                                    href="{{ url_for('admin_feedback', page=pagination.total_pages, source=current_filter, start_date=current_start_date, end_date=current_end_date) }}">Last &raquo;</a>
                             </li>
                         </ul>
                     </nav>

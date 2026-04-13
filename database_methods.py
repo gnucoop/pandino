@@ -83,17 +83,27 @@ def build_edit_tokens_query(
 
 
 def build_list_users_query(
-    limit: int, offset: int = 0
-) -> Tuple[sql.Composed, Tuple[int, int]]:
+    limit: int, offset: int = 0, search: Optional[str] = None
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to retrieve users with selected columns from the 'users' table with pagination.
 
     :param limit: Maximum number of users to retrieve.
     :param offset: Number of users to skip.
+    :param search: Optional search term to filter by username.
     :return: Tuple with SQL query and parameters.
     """
+    where_clause = sql.SQL("")
+    params: List[Any] = []
+
+    if search:
+        where_clause = sql.SQL("WHERE {username} ILIKE %s").format(username=sql.Identifier("username"))
+        params.append(f"%{search}%")
+
+    params.extend([limit, offset])
+
     query = sql.SQL(
-        "SELECT {id}, {username}, {api_key}, {date_valid_until}, {tokens} FROM {table} ORDER BY {id} ASC LIMIT %s OFFSET %s"
+        "SELECT {id}, {username}, {api_key}, {date_valid_until}, {tokens} FROM {table} {where_clause} ORDER BY {id} ASC LIMIT %s OFFSET %s"
     ).format(
         id=sql.Identifier("id"),
         username=sql.Identifier("username"),
@@ -101,20 +111,30 @@ def build_list_users_query(
         date_valid_until=sql.Identifier("date_valid_until"),
         tokens=sql.Identifier("tokens"),
         table=sql.Identifier("users"),
+        where_clause=where_clause,
     )
-    return query, (limit, offset)
+    return query, tuple(params)
 
 
-def build_get_total_users_count_query() -> Tuple[sql.Composed, Tuple[()]]:
+def build_get_total_users_count_query(search: Optional[str] = None) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to count total users for pagination.
 
-    :return: Tuple with SQL query and empty parameter tuple.
+    :param search: Optional search term to filter by username.
+    :return: Tuple with SQL query and parameter tuple.
     """
-    query = sql.SQL("SELECT COUNT(*) FROM {table}").format(
-        table=sql.Identifier("users")
+    where_clause = sql.SQL("")
+    params: Tuple[Any, ...] = ()
+
+    if search:
+        where_clause = sql.SQL("WHERE {username} ILIKE %s").format(username=sql.Identifier("username"))
+        params = (f"%{search}%",)
+
+    query = sql.SQL("SELECT COUNT(*) FROM {table} {where_clause}").format(
+        table=sql.Identifier("users"),
+        where_clause=where_clause,
     )
-    return query, ()
+    return query, params
 
 
 def build_check_table_exists_query(
@@ -192,6 +212,19 @@ def build_insert_rag_file_query(
     )
     params = (file_id, file_name, namespace, chunk_count, language)
     return query, params
+
+
+def build_get_all_rag_files_query() -> Tuple[sql.Composed, Tuple[()]]:
+    """
+    Builds a SQL query to retrieve all records from the rag_files table.
+
+    :return: Tuple with SQL query and empty parameter tuple.
+    """
+    query = sql.SQL(
+        "SELECT id, file_name, namespace, chunk_count, language, created_at "
+        "FROM rag_files ORDER BY created_at DESC"
+    )
+    return query, ()
 
 
 def build_print_stored_keys_query() -> Tuple[sql.Composed, Tuple[()]]:
@@ -312,6 +345,7 @@ def build_get_logs_for_admin_query(
     offset: int = 0,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    search: Optional[str] = None,
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to retrieve logs for the admin panel with pagination and date filtering.
@@ -320,17 +354,25 @@ def build_get_logs_for_admin_query(
     :param offset: Number of logs to skip.
     :param start_date: Start date string (YYYY-MM-DD).
     :param end_date: End date string (YYYY-MM-DD).
+    :param search: Optional search term to filter by username, model, or provider.
     :return: Tuple with SQL query and parameters.
     """
-    where_clause = sql.SQL("")
-    params: List[Any] = [limit, offset]
+    conditions: List[sql.Composable] = []
+    params: List[Any] = []
 
     if start_date and end_date:
-        where_clause = sql.SQL(
-            "WHERE l.date::timestamp >= %s::timestamp AND l.date::timestamp <= %s::timestamp"
-        )
-        # Prepend date params because LIMIT/OFFSET are at the end
-        params = [start_date, end_date + " 23:59:59", limit, offset]
+        conditions.append(sql.SQL("l.date::timestamp >= %s::timestamp AND l.date::timestamp <= %s::timestamp"))
+        params.extend([start_date, end_date + " 23:59:59"])
+
+    if search:
+        conditions.append(sql.SQL("(u.username ILIKE %s OR l.model ILIKE %s OR l.provider ILIKE %s)"))
+        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+
+    where_clause = sql.SQL("")
+    if conditions:
+        where_clause = sql.SQL("WHERE ") + sql.SQL(" AND ").join(conditions)
+
+    params.extend([limit, offset])
 
     query = sql.SQL(
         """
@@ -351,28 +393,43 @@ def build_get_logs_for_admin_query(
 
 
 def build_get_total_logs_count_query(
-    start_date: Optional[str] = None, end_date: Optional[str] = None
+    start_date: Optional[str] = None, end_date: Optional[str] = None, search: Optional[str] = None
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to count total logs for pagination with date filtering.
 
     :param start_date: Start date string (YYYY-MM-DD).
     :param end_date: End date string (YYYY-MM-DD).
+    :param search: Optional search term to filter by username, model, or provider.
     :return: Tuple with SQL query and parameter tuple.
     """
-    where_clause = sql.SQL("")
-    params: Tuple[Any, ...] = ()
+    conditions: List[sql.Composable] = []
+    params: List[Any] = []
 
     if start_date and end_date:
-        where_clause = sql.SQL(
-            "WHERE date::timestamp >= %s::timestamp AND date::timestamp <= %s::timestamp"
-        )
-        params = (start_date, end_date + " 23:59:59")
+        conditions.append(sql.SQL("l.date::timestamp >= %s::timestamp AND l.date::timestamp <= %s::timestamp"))
+        params.extend([start_date, end_date + " 23:59:59"])
 
-    query = sql.SQL("SELECT COUNT(*) FROM {table} {where_clause}").format(
-        table=sql.Identifier("logs"), where_clause=where_clause
-    )
-    return query, params
+    if search:
+        conditions.append(sql.SQL("(u.username ILIKE %s OR l.model ILIKE %s OR l.provider ILIKE %s)"))
+        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+
+    where_clause = sql.SQL("")
+    if conditions:
+        where_clause = sql.SQL("WHERE ") + sql.SQL(" AND ").join(conditions)
+
+    if search:
+        query = sql.SQL("SELECT COUNT(*) FROM {logs} l LEFT JOIN {users} u ON l.user_id = u.id {where_clause}").format(
+            logs=sql.Identifier("logs"),
+            users=sql.Identifier("users"),
+            where_clause=where_clause,
+        )
+    else:
+        query = sql.SQL("SELECT COUNT(*) FROM {logs} l {where_clause}").format(
+            logs=sql.Identifier("logs"),
+            where_clause=where_clause,
+        )
+    return query, tuple(params)
 
 
 def build_update_user_tokens_query(

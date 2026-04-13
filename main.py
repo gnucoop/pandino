@@ -83,6 +83,7 @@ from database_pg import (
     get_feedback_for_admin,
     get_feedback_stats,
     insert_rag_file,
+    get_all_rag_files,
 )
 
 from dino import dino_authenticate
@@ -1270,6 +1271,129 @@ def admin_delete_cost(cost_id: int) -> Response:
         return str(e), 500, textContentType
 
 
+def process_rag_file(file, url: str, namespace: str, language: str | None) -> tuple[str, int]:
+    """Process a file for RAG: split, vectorize, store, track.
+
+    :param file: Uploaded file object (from request.files).
+    :param url: Source URL to store in chunk metadata.
+    :param namespace: Vector store namespace/table name.
+    :param language: Optional language code for metadata.
+    :return: Tuple of (extracted_text, chunk_count).
+    :raises ValueError: For unsupported file types or whisper errors.
+    """
+    chunk_size = 900
+    chunk_overlap = 100
+    tx_split = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size, chunk_overlap=chunk_overlap
+    )
+    md_split = MarkdownTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+
+    metadata = {"url": url, "mimetype": file.mimetype, "source": file.filename}
+    text = ""
+    paragraphs: List[Document] = []
+
+    if file.mimetype == "text/plain":
+        text = file.stream.read().decode()
+        paragraphs = tx_split.split_documents(
+            [Document(page_content=text, metadata=metadata)]
+        )
+
+    elif file.mimetype == "text/markdown":
+        text = file.stream.read().decode()
+        paragraphs = md_split.split_documents(
+            [Document(page_content=text, metadata=metadata)]
+        )
+
+    elif file.mimetype == "application/pdf":
+        with tempfile.NamedTemporaryFile(suffix=".pdf") as temp:
+            file.save(temp.name)
+            pages: List[dict] = pymupdf4llm.to_markdown(temp.name, page_chunks=True)  # type: ignore
+            page_texts = [p["text"] for p in pages]
+            text = "".join(page_texts)
+            page_docs = [
+                Document(
+                    page_content=p["text"],
+                    metadata=metadata | {"page": p["metadata"]["page"]},
+                )
+                for p in pages
+            ]
+            paragraphs = md_split.split_documents(page_docs)
+
+    elif file.mimetype.startswith("audio"):
+        resp = whisper_response(file)
+        if resp.status_code != 200:
+            raise ValueError("Error whispering audio")
+
+        json = resp.json()
+        text = json["text"]
+        segments = [
+            Document(
+                page_content=s["text"],
+                metadata=metadata | {"start_time": s["start"]},
+            )
+            for s in json["segments"]
+        ]
+        paragraphs = merge_segments(segments, chunk_size)
+
+    elif file.mimetype.startswith("image"):
+        text = describe_image(url, VISION_PROVIDER or "", VISION_MODEL or "")
+        paragraphs = [
+            Document(
+                page_content=text,
+                metadata=metadata,
+            )
+        ]
+
+    else:
+        raise ValueError(f"Unsupported file type: {file.mimetype}")
+
+    if text == "":
+        return "", 0
+
+    file_id = file_id_from_text(text, namespace)
+
+    paragraphs = [
+        Document(
+            page_content=par.page_content,
+            metadata=par.metadata
+            | {"file_id": file_id}
+            | ({"language": language} if language else {}),
+        )
+        for par in paragraphs
+    ]
+
+    embeddings = choose_emb_model(
+        COMPLETION_EMBEDDING_MODEL_PROVIDER or "", COMPLETION_EMBEDDING_MODEL or ""
+    )
+
+    ensure_pgvector_namespace_ready(
+        embeddings=embeddings,
+        table_name=namespace,
+    )
+
+    store = MauiVectorStore(embeddings, namespace)
+    store.store_paragraphs(paragraphs)
+
+    chunk_count = len(paragraphs)
+
+    tracking_ok = insert_rag_file(
+        file_id=file_id,
+        file_name=file.filename or "",
+        namespace=normalize_table_name(namespace),
+        chunk_count=chunk_count,
+        language=language,
+    )
+
+    if not tracking_ok:
+        logging.warning(
+            "RAG file tracking failed for file_id=%s, namespace=%s",
+            file_id,
+            normalize_table_name(namespace),
+        )
+
+    return text, chunk_count
+
+
 @app.route("/storeragfile", methods=["POST"])
 def store_rag_file() -> tuple[str, int, dict[str, str]]:
     graphql_url = request.form.get("graphqlUrl")
@@ -1308,119 +1432,13 @@ def store_rag_file() -> tuple[str, int, dict[str, str]]:
     if not url:
         return "Url not provided", 400, textContentType
 
-    chunk_size = 900
-    chunk_overlap = 100
-    tx_split = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size, chunk_overlap=chunk_overlap
-    )
-    md_split = MarkdownTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-
-    metadata = {"url": url, "mimetype": file.mimetype, "source": file.filename}
-    text = ""
-    paragraphs: List[Document] = []
-
     try:
-        if file.mimetype == "text/plain":
-            text = file.stream.read().decode()
-            paragraphs = tx_split.split_documents(
-                [Document(page_content=text, metadata=metadata)]
-            )
-
-        elif file.mimetype == "text/markdown":
-            text = file.stream.read().decode()
-            paragraphs = md_split.split_documents(
-                [Document(page_content=text, metadata=metadata)]
-            )
-
-        elif file.mimetype == "application/pdf":
-            with tempfile.NamedTemporaryFile(suffix=".pdf") as temp:
-                file.save(temp.name)
-                pages: List[dict] = pymupdf4llm.to_markdown(temp.name, page_chunks=True)  # type: ignore
-                page_texts = [p["text"] for p in pages]
-                text = "".join(page_texts)
-                page_docs = [
-                    Document(
-                        page_content=p["text"],
-                        metadata=metadata | {"page": p["metadata"]["page"]},
-                    )
-                    for p in pages
-                ]
-                paragraphs = md_split.split_documents(page_docs)
-
-        elif file.mimetype.startswith("audio"):
-            resp = whisper_response(file)
-            if resp.status_code != 200:
-                return "Error whispering audio", 500, textContentType
-
-            json = resp.json()
-            text = json["text"]
-            segments = [
-                Document(
-                    page_content=s["text"],
-                    metadata=metadata | {"start_time": s["start"]},
-                )
-                for s in json["segments"]
-            ]
-            paragraphs = merge_segments(segments, chunk_size)
-
-        elif file.mimetype.startswith("image"):
-            text = describe_image(url, VISION_PROVIDER or "", VISION_MODEL or "")
-            paragraphs = [
-                Document(
-                    page_content=text,
-                    metadata=metadata,
-                )
-            ]
-
-        else:
-            return "Unsupported file type", 400, textContentType
-
+        text, chunk_count = process_rag_file(file, url, namespace, language)
         if text == "":
             return "", 200, textContentType
-
-        file_id = file_id_from_text(text, namespace)
-
-        paragraphs = [
-            Document(
-                page_content=par.page_content,
-                metadata=par.metadata
-                | {"file_id": file_id}
-                | ({"language": language} if language else {}),
-            )
-            for par in paragraphs
-        ]
-
-        embeddings = choose_emb_model(
-            COMPLETION_EMBEDDING_MODEL_PROVIDER or "", COMPLETION_EMBEDDING_MODEL or ""
-        )
-
-        ensure_pgvector_namespace_ready(
-            embeddings=embeddings,
-            table_name=namespace,
-        )
-
-        store = MauiVectorStore(embeddings, namespace)
-        store.store_paragraphs(paragraphs)
-
-        chunk_count = len(paragraphs)
-
-        tracking_ok = insert_rag_file(
-            file_id=file_id,
-            file_name=file.filename or "",
-            namespace=normalize_table_name(namespace),
-            chunk_count=chunk_count,
-            language=language,
-        )
-
-        if not tracking_ok:
-            logging.warning(
-                "RAG file tracking failed for file_id=%s, namespace=%s",
-                file_id,
-                normalize_table_name(namespace),
-            )
-
         return text, 200, textContentType
-
+    except ValueError as e:
+        return str(e), 400, textContentType
     except Exception as e:
         return str(e), 500, textContentType
 
@@ -1680,19 +1698,20 @@ def admin_dashboard():
 def admin_users():
     try:
         page = request.args.get("page", 1, type=int)
-        users_data = get_users_for_admin(page=page, limit=50)
+        search = request.args.get("search", "").strip() or None
+        users_data = get_users_for_admin(page=page, limit=50, search=search)
         users = users_data["users"]
         pagination = {
             "page": users_data["page"],
             "total_pages": users_data["total_pages"],
             "total_count": users_data["total_count"],
         }
-        return render_template("admin/users.html", users=users, pagination=pagination)
+        return render_template("admin/users.html", users=users, pagination=pagination, current_search=search or "")
 
     except Exception as e:
         flash(f"Errore nel recupero utenti: {str(e)}", "danger")
         return render_template(
-            "admin/users.html", users=[], pagination={"page": 1, "total_pages": 1}
+            "admin/users.html", users=[], pagination={"page": 1, "total_pages": 1}, current_search=""
         )
 
 
@@ -1706,6 +1725,7 @@ def admin_logs():
         # Date filter
         start_date = request.args.get("start_date")
         end_date = request.args.get("end_date")
+        search = request.args.get("search", "").strip() or None
 
         # Calculate default dates if not provided (for charts)
         if not start_date or not end_date:
@@ -1718,7 +1738,7 @@ def admin_logs():
             chart_end = end_date
 
         logs_data = get_logs_for_admin(
-            page=page, limit=50, start_date=chart_start, end_date=chart_end
+            page=page, limit=50, start_date=chart_start, end_date=chart_end, search=search
         )
         logs = logs_data["logs"]
         pagination = {
@@ -1736,6 +1756,7 @@ def admin_logs():
             pagination=pagination,
             current_start_date=chart_start,
             current_end_date=chart_end,
+            current_search=search or "",
         )
 
     except Exception as e:
@@ -1747,6 +1768,7 @@ def admin_logs():
             pagination={"page": 1, "total_pages": 1},
             current_start_date="",
             current_end_date="",
+            current_search="",
         )
 
 
@@ -1933,6 +1955,42 @@ def admin_delete_prompt(prompt_id):
         flash(f"Errore nell'eliminazione: {str(e)}", "danger")
 
     return redirect(url_for("admin_prompts"))
+
+
+@app.route("/admin/rag-files")
+@admin_required
+def admin_rag_files():
+    try:
+        rag_files = get_all_rag_files()
+        return render_template("admin/rag_files.html", rag_files=rag_files)
+    except Exception as e:
+        flash(f"Error loading RAG files: {str(e)}", "danger")
+        return render_template("admin/rag_files.html", rag_files=[])
+
+
+@app.route("/admin/rag-files/upload", methods=["POST"])
+@admin_required
+def admin_upload_rag_file():
+    file = request.files.get("file")
+    namespace = request.form.get("namespace", "").strip()
+    language = request.form.get("language", "").strip() or None
+
+    if not file or not namespace:
+        flash("File and namespace are required", "danger")
+        return redirect(url_for("admin_rag_files"))
+
+    url = file.filename or ""
+
+    try:
+        text, chunk_count = process_rag_file(file, url, namespace, language)
+        if text:
+            flash(f"File indexed successfully ({chunk_count} chunks)", "success")
+        else:
+            flash("File was empty, nothing indexed", "warning")
+    except Exception as e:
+        flash(f"Error processing file: {str(e)}", "danger")
+
+    return redirect(url_for("admin_rag_files"))
 
 
 @app.route("/health")

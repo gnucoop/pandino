@@ -51,6 +51,7 @@ from database_methods import (
     build_check_pgvector_maui_id_exists_query,
     build_check_table_exists_query,
     build_insert_rag_file_query,
+    build_get_all_rag_files_query,
 )
 
 # Generate a key for encryption and decryption
@@ -546,6 +547,41 @@ def insert_rag_file(
         conn.close()
 
 
+def get_all_rag_files() -> list:
+    """
+    Retrieves all records from the rag_files table.
+
+    :return: List of dictionaries with RAG file info.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_get_all_rag_files_query()
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    rag_files = []
+    for file_id, file_name, namespace, chunk_count, language, created_at in rows:
+        if created_at and hasattr(created_at, "strftime"):
+            formatted_date = created_at.strftime("%Y-%m-%d %H:%M")
+        else:
+            formatted_date = str(created_at) if created_at else "N/A"
+
+        rag_files.append({
+            "id": file_id,
+            "file_name": file_name,
+            "namespace": namespace,
+            "chunk_count": chunk_count,
+            "language": language or "-",
+            "created_at": formatted_date,
+        })
+
+    return rag_files
+
+
 def table_exists(table_schema: str, table_name: str) -> bool:
     conn = connect()
     cursor = conn.cursor()
@@ -660,7 +696,7 @@ def save_feedback(
         conn.close()
 
 
-def get_users_for_admin(page=1, limit=50):
+def get_users_for_admin(page=1, limit=50, search=None):
     """
     Retrieves users from the database and returns them as a list of dictionaries
     for use in the admin panel with pagination.
@@ -676,12 +712,12 @@ def get_users_for_admin(page=1, limit=50):
 
     try:
         # Get users
-        query, params = build_list_users_query(limit, offset)
+        query, params = build_list_users_query(limit, offset, search=search)
         cursor.execute(query, params)
         users_raw = cursor.fetchall()
 
         # Get total count
-        query_count, params_count = build_get_total_users_count_query()
+        query_count, params_count = build_get_total_users_count_query(search=search)
         cursor.execute(query_count, params_count)
         total_count = cursor.fetchone()[0]
 
@@ -798,7 +834,7 @@ def get_users_stats():
     return {"total_users": total_users, "total_tokens": total_tokens}
 
 
-def get_logs_for_admin(page=1, limit=50, start_date=None, end_date=None):
+def get_logs_for_admin(page=1, limit=50, start_date=None, end_date=None, search=None):
     """
     Retrieves logs from the database for the admin panel with pagination.
 
@@ -816,14 +852,14 @@ def get_logs_for_admin(page=1, limit=50, start_date=None, end_date=None):
     try:
         # Get logs
         query, params = build_get_logs_for_admin_query(
-            limit, offset, start_date, end_date
+            limit, offset, start_date, end_date, search=search
         )
         cursor.execute(query, params)
         logs_raw = cursor.fetchall()
 
         # Get total count
         query_count, params_count = build_get_total_logs_count_query(
-            start_date, end_date
+            start_date, end_date, search=search
         )
         cursor.execute(query_count, params_count)
         total_count = cursor.fetchone()[0]
