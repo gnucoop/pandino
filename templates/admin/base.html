@@ -73,6 +73,12 @@
               </a>
             </li>
             <li class="nav-item">
+              <a class="nav-link {% if request.endpoint == 'admin_rag_files' %}active{% endif %}"
+                href="{{ url_for('admin_rag_files') }}">
+                <i class="fas fa-database me-2"></i> RAG Files
+              </a>
+            </li>
+            <li class="nav-item">
               <a class="nav-link {% if request.endpoint == 'admin_costs' %}active{% endif %}"
                 href="{{ url_for('admin_costs') }}">
                 <i class="fas fa-dollar-sign me-2"></i> Costs
