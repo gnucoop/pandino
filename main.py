@@ -57,6 +57,9 @@ from vector_store import (
     file_id_from_text,
     normalize_table_name,
 )
+
+from rag_ingestion_service import process_rag_file
+
 import database_pg
 from database_pg import (
     edit_tokens,
@@ -98,6 +101,7 @@ from ai import (
     reply_to_prompt,
     choose_llm,
     choose_emb_model,
+    whisper_response,
 )
 from prompt_utils import load_prompt, render_prompt
 from utils.agent_serialization import serialize_runresult
@@ -1271,131 +1275,8 @@ def admin_delete_cost(cost_id: int) -> Response:
         return str(e), 500, textContentType
 
 
-def process_rag_file(file, url: str, namespace: str, language: str | None) -> tuple[str, int]:
-    """Process a file for RAG: split, vectorize, store, track.
-
-    :param file: Uploaded file object (from request.files).
-    :param url: Source URL to store in chunk metadata.
-    :param namespace: Vector store namespace/table name.
-    :param language: Optional language code for metadata.
-    :return: Tuple of (extracted_text, chunk_count).
-    :raises ValueError: For unsupported file types or whisper errors.
-    """
-    chunk_size = 900
-    chunk_overlap = 100
-    tx_split = RecursiveCharacterTextSplitter(
-        chunk_size=chunk_size, chunk_overlap=chunk_overlap
-    )
-    md_split = MarkdownTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
-
-    metadata = {"url": url, "mimetype": file.mimetype, "source": file.filename}
-    text = ""
-    paragraphs: List[Document] = []
-
-    if file.mimetype == "text/plain":
-        text = file.stream.read().decode()
-        paragraphs = tx_split.split_documents(
-            [Document(page_content=text, metadata=metadata)]
-        )
-
-    elif file.mimetype == "text/markdown":
-        text = file.stream.read().decode()
-        paragraphs = md_split.split_documents(
-            [Document(page_content=text, metadata=metadata)]
-        )
-
-    elif file.mimetype == "application/pdf":
-        with tempfile.NamedTemporaryFile(suffix=".pdf") as temp:
-            file.save(temp.name)
-            pages: List[dict] = pymupdf4llm.to_markdown(temp.name, page_chunks=True)  # type: ignore
-            page_texts = [p["text"] for p in pages]
-            text = "".join(page_texts)
-            page_docs = [
-                Document(
-                    page_content=p["text"],
-                    metadata=metadata | {"page": p["metadata"]["page"]},
-                )
-                for p in pages
-            ]
-            paragraphs = md_split.split_documents(page_docs)
-
-    elif file.mimetype.startswith("audio"):
-        resp = whisper_response(file)
-        if resp.status_code != 200:
-            raise ValueError("Error whispering audio")
-
-        json = resp.json()
-        text = json["text"]
-        segments = [
-            Document(
-                page_content=s["text"],
-                metadata=metadata | {"start_time": s["start"]},
-            )
-            for s in json["segments"]
-        ]
-        paragraphs = merge_segments(segments, chunk_size)
-
-    elif file.mimetype.startswith("image"):
-        text = describe_image(url, VISION_PROVIDER or "", VISION_MODEL or "")
-        paragraphs = [
-            Document(
-                page_content=text,
-                metadata=metadata,
-            )
-        ]
-
-    else:
-        raise ValueError(f"Unsupported file type: {file.mimetype}")
-
-    if text == "":
-        return "", 0
-
-    file_id = file_id_from_text(text, namespace)
-
-    paragraphs = [
-        Document(
-            page_content=par.page_content,
-            metadata=par.metadata
-            | {"file_id": file_id}
-            | ({"language": language} if language else {}),
-        )
-        for par in paragraphs
-    ]
-
-    embeddings = choose_emb_model(
-        COMPLETION_EMBEDDING_MODEL_PROVIDER or "", COMPLETION_EMBEDDING_MODEL or ""
-    )
-
-    ensure_pgvector_namespace_ready(
-        embeddings=embeddings,
-        table_name=namespace,
-    )
-
-    store = MauiVectorStore(embeddings, namespace)
-    store.store_paragraphs(paragraphs)
-
-    chunk_count = len(paragraphs)
-
-    tracking_ok = insert_rag_file(
-        file_id=file_id,
-        file_name=file.filename or "",
-        namespace=normalize_table_name(namespace),
-        chunk_count=chunk_count,
-        language=language,
-    )
-
-    if not tracking_ok:
-        logging.warning(
-            "RAG file tracking failed for file_id=%s, namespace=%s",
-            file_id,
-            normalize_table_name(namespace),
-        )
-
-    return text, chunk_count
-
-
 @app.route("/storeragfile", methods=["POST"])
-def store_rag_file() -> tuple[str, int, dict[str, str]]:
+def store_rag_file() -> tuple[Response, int] | tuple[str, int, dict[str, str]]:
     graphql_url = request.form.get("graphqlUrl")
     auth_token = request.form.get("authToken")
     user_email = request.form.get("userEmail")
@@ -1433,21 +1314,38 @@ def store_rag_file() -> tuple[str, int, dict[str, str]]:
         return "Url not provided", 400, textContentType
 
     try:
-        text, chunk_count = process_rag_file(file, url, namespace, language)
-        if text == "":
-            return "", 200, textContentType
-        return text, 200, textContentType
+        result = process_rag_file(
+            file,
+            url,
+            namespace,
+            language,
+            whisper_model=WHISPER_MODEL,
+            deepinfra_api_key=DEEPINFRA_API_KEY,
+            vision_provider=VISION_PROVIDER,
+            vision_model=VISION_MODEL,
+            embedding_provider=COMPLETION_EMBEDDING_MODEL_PROVIDER,
+            embedding_model=COMPLETION_EMBEDDING_MODEL,
+        )
+
+        return (
+            jsonify(
+                {
+                    "status": "ok",
+                    "file_id": result.file_id,
+                    "file_name": result.file_name,
+                    "namespace": result.namespace,
+                    "chunk_count": result.chunk_count,
+                    "language": result.language,
+                    "tracking_saved": result.tracking_saved,
+                }
+            ),
+            200,
+        )
+
     except ValueError as e:
         return str(e), 400, textContentType
     except Exception as e:
         return str(e), 500, textContentType
-
-
-def whisper_response(file):
-    url = f"https://api.deepinfra.com/v1/inference/{WHISPER_MODEL}"
-    headers = {"Authorization": f"bearer {DEEPINFRA_API_KEY}"}
-    files = {"audio": file, "response_format": (None, "text")}
-    return requests.post(url, headers=headers, files=files)
 
 
 # Define a route for the '/transcribe' endpoint
@@ -1474,7 +1372,10 @@ def whisper_parse() -> Union[Response, tuple[Response, int]]:
     lang = request.form.get("lang") or "ENG"
 
     if file.mimetype.startswith("audio"):
-        response = whisper_response(file)
+        if not WHISPER_MODEL or not DEEPINFRA_API_KEY:
+            return jsonify({"error": "Missing Whisper configuration"}), 500
+
+        response = whisper_response(file, WHISPER_MODEL, DEEPINFRA_API_KEY)
         if response.status_code == 200:
             try:
                 return jsonify(response.json()), 200
@@ -1706,12 +1607,20 @@ def admin_users():
             "total_pages": users_data["total_pages"],
             "total_count": users_data["total_count"],
         }
-        return render_template("admin/users.html", users=users, pagination=pagination, current_search=search or "")
+        return render_template(
+            "admin/users.html",
+            users=users,
+            pagination=pagination,
+            current_search=search or "",
+        )
 
     except Exception as e:
         flash(f"Errore nel recupero utenti: {str(e)}", "danger")
         return render_template(
-            "admin/users.html", users=[], pagination={"page": 1, "total_pages": 1}, current_search=""
+            "admin/users.html",
+            users=[],
+            pagination={"page": 1, "total_pages": 1},
+            current_search="",
         )
 
 
@@ -1738,7 +1647,11 @@ def admin_logs():
             chart_end = end_date
 
         logs_data = get_logs_for_admin(
-            page=page, limit=50, start_date=chart_start, end_date=chart_end, search=search
+            page=page,
+            limit=50,
+            start_date=chart_start,
+            end_date=chart_end,
+            search=search,
         )
         logs = logs_data["logs"]
         pagination = {
@@ -1982,9 +1895,24 @@ def admin_upload_rag_file():
     url = file.filename or ""
 
     try:
-        text, chunk_count = process_rag_file(file, url, namespace, language)
-        if text:
-            flash(f"File indexed successfully ({chunk_count} chunks)", "success")
+        result = process_rag_file(
+            file,
+            url,
+            namespace,
+            language,
+            whisper_model=WHISPER_MODEL,
+            deepinfra_api_key=DEEPINFRA_API_KEY,
+            vision_provider=VISION_PROVIDER,
+            vision_model=VISION_MODEL,
+            embedding_provider=COMPLETION_EMBEDDING_MODEL_PROVIDER,
+            embedding_model=COMPLETION_EMBEDDING_MODEL,
+        )
+
+        if result.chunk_count > 0:
+            flash(
+                f"File indexed successfully ({result.chunk_count} chunks)",
+                "success",
+            )
         else:
             flash("File was empty, nothing indexed", "warning")
     except Exception as e:

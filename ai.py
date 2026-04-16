@@ -1,13 +1,13 @@
 import logging
 import os
-import re
+import requests
 import textwrap
 from dotenv import load_dotenv
 from database_pg import get_user_by_username, log_token_usage, get_prompt_from_db
 from prompt_utils import load_prompt, render_prompt
 from vector_store import VectorStore
 from dataclasses import dataclass
-from typing import Optional, Union, List, Any, cast
+from typing import Optional, Union, Any
 from pydantic import SecretStr
 
 # Import specific chat models from their respective libraries
@@ -140,7 +140,7 @@ def choose_llm(
         return ChatOpenAI(
             model=model,
             temperature=temperature,
-            base_url=os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434/v1" ,
+            base_url=os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434/v1",
             api_key=SecretStr("ollama" or ""),
         )
     elif llm_type == "Llama.cpp":
@@ -204,7 +204,11 @@ def choose_emb_model(
 
 
 def complete_chat(
-    req: CompletionRequest, store: VectorStore, llm_type: str, model: str, language: str = "ENG"
+    req: CompletionRequest,
+    store: VectorStore,
+    llm_type: str,
+    model: str,
+    language: str = "ENG",
 ) -> CompletionResponse:
     """
     Perform a chat completion using a vector store for contextual information.
@@ -246,7 +250,8 @@ def complete_chat(
         f"If you can't match the language, please answer in English."
     )
 
-    default_complete_chat_prompt = textwrap.dedent("""\
+    default_complete_chat_prompt = textwrap.dedent(
+        """\
             You are Dino, an assistant who helps users by answering questions concisely.
             You will receive information divided by
             BACKGROUND INFORMATION:
@@ -265,23 +270,18 @@ def complete_chat(
             4. You MUST NEVER say 'I have no information about this' if there is ANY relevant information in the context
             5. If you find ANY relevant information in the context, use it to provide a partial answer
             6. Only say 'I have no information about this' if the context contains ABSOLUTELY NOTHING relevant to the question
-    """)
+    """
+    )
 
     base_prompt_template = load_prompt(
-        "complete_chat_system",
-        default_text=default_complete_chat_prompt
+        "complete_chat_system", default_text=default_complete_chat_prompt
     )
-    
+
     base_prompt = render_prompt(base_prompt_template)
 
     full_prompt = f"{language_instruction}\n\n{base_prompt.strip()}"
-    
-    messages = [
-        {
-            "role": "system",
-            "content": full_prompt
-        }
-    ]
+
+    messages = [{"role": "system", "content": full_prompt}]
 
     # Format context with clear sections and metadata
     context = ""
@@ -340,7 +340,7 @@ def complete_chat(
     )
 
     log_id: Optional[int] = None
-  
+
     try:
         llm = choose_llm(llm_type, model)
         resp = llm.invoke(messages)
@@ -397,7 +397,10 @@ def complete_chat(
         logging.exception("Error in chat completion")
         return CompletionResponse(error=f"Chat completion failed: {str(e)}")
 
-def reply_to_prompt(prompt: str, username: str, llm_type: str, model: str, language: str = "ITA") -> str:
+
+def reply_to_prompt(
+    prompt: str, username: str, llm_type: str, model: str, language: str = "ITA"
+) -> str:
     """
     Generate a single text response from a structured prompt, using a fixed system message.
 
@@ -430,11 +433,10 @@ def reply_to_prompt(prompt: str, username: str, llm_type: str, model: str, langu
     )
 
     base_prompt_template = load_prompt(
-        "reply_to_prompt_system",
-        default_text=default_reply_to_prompt
+        "reply_to_prompt_system", default_text=default_reply_to_prompt
     )
-    
-    base_prompt = render_prompt(base_prompt_template)    
+
+    base_prompt = render_prompt(base_prompt_template)
 
     full_prompt = f"{language_instruction}\n\n{base_prompt}"
 
@@ -451,6 +453,7 @@ def reply_to_prompt(prompt: str, username: str, llm_type: str, model: str, langu
     except Exception as e:
         logging.exception(f"Error in prompt completion: {str(e)}")
         raise
+
 
 def describe_image(url: str, provider: str, model: str, language: str = "ITA") -> str:
     """
@@ -472,14 +475,13 @@ def describe_image(url: str, provider: str, model: str, language: str = "ITA") -
         f"Please answer using the official language of the country corresponding to the following ISO 3166-1 alpha-3 code: {language}. "
         f"If you can't match the language, please answer in English."
     )
-    
+
     default_describe_image_prompt = "briefly describe the content of this image"
 
     base_prompt_template = load_prompt(
-        "describe_image_user",
-        default_text=default_describe_image_prompt
+        "describe_image_user", default_text=default_describe_image_prompt
     )
-    
+
     base_prompt = render_prompt(base_prompt_template)
 
     full_prompt = f"{language_instruction}\n\n{base_prompt}"
@@ -505,6 +507,7 @@ def describe_image(url: str, provider: str, model: str, language: str = "ITA") -
     except Exception as e:
         logging.exception("Error while describing image")
         raise
+
 
 def audioFormPromptBuild(
     formSchemaExampleData: dict[str, Any],
@@ -542,14 +545,17 @@ def audioFormPromptBuild(
     )
 
     # Base prompts
-    
-    default_audio_form_system = textwrap.dedent("""\
+
+    default_audio_form_system = textwrap.dedent(
+        """\
         You are an assistant specialized in extracting data from audio transcriptions.
         Respond EXCLUSIVELY in valid JSON format.
         Do not add comments, explanations, or additional text.
-    """)
+    """
+    )
 
-    default_audio_form_user = textwrap.dedent("""\
+    default_audio_form_user = textwrap.dedent(
+        """\
         INPUT DATA:
         Form schema name: {formSchemaName}
         Available options: {formSchemaChoices}
@@ -567,17 +573,16 @@ def audioFormPromptBuild(
         - text/string: text extracted from the transcription
         - range/number: numeric value
         OUTPUT: Compiled JSON following the provided template.
-    """)
-    
+    """
+    )
+
     system_base_template = load_prompt(
-        "audio_form_system",
-        default_text=default_audio_form_system
+        "audio_form_system", default_text=default_audio_form_system
     )
     system_base = render_prompt(system_base_template)
 
     user_base_template = load_prompt(
-        "audio_form_user",
-        default_text=default_audio_form_user
+        "audio_form_user", default_text=default_audio_form_user
     )
     user_base = render_prompt(
         user_base_template,
@@ -586,7 +591,7 @@ def audioFormPromptBuild(
         fieldTypes=fieldTypes,
         fieldDescriptions=fieldDescriptions,
         transcribedAudio=transcribedAudio,
-    )    
+    )
 
     system = f"{language_instruction}\n\n{system_base.strip()}"
     user = f"{language_instruction}\n\n{user_base.strip()}"
@@ -652,3 +657,10 @@ def audioFormCompilation(
     except Exception as e:
         logging.exception("Error in audio form compilation")
         return CompletionResponse(error=f"Audio form compilation failed: {str(e)}")
+
+
+def whisper_response(file, whisper_model: str, deepinfra_api_key: str):
+    url = f"https://api.deepinfra.com/v1/inference/{whisper_model}"
+    headers = {"Authorization": f"bearer {deepinfra_api_key}"}
+    files = {"audio": file, "response_format": (None, "text")}
+    return requests.post(url, headers=headers, files=files)
