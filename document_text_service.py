@@ -1,5 +1,6 @@
 from werkzeug.datastructures import FileStorage
 from typing import TypedDict, Optional
+import pymupdf4llm
 
 
 class DocumentInput(TypedDict):
@@ -48,6 +49,9 @@ def _extract_text_from_file(file: FileStorage, filename: str) -> str:
     if filename.endswith(".txt"):
         return file.read().decode("utf-8")
 
+    if filename.endswith(".pdf"):
+        return pymupdf4llm.to_markdown(file.stream)
+
     raise NotImplementedError(f"Unsupported file format: {filename}")
 
 
@@ -76,9 +80,8 @@ def extract_and_normalize_document(input_doc: DocumentInput) -> NormalizedDocume
 
         filename = input_doc.get("filename") or file.filename
 
-        if not filename or not filename.endswith(".txt"):
-
-            raise NotImplementedError("Only .txt files are supported for now")
+        if not filename:
+            raise ValueError("Filename is missing")
 
         content = _extract_text_from_file(file, filename)
 
