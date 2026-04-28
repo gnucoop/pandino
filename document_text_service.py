@@ -35,16 +35,26 @@ class NormalizedDocument(TypedDict):
     role: Optional[str]
 
 
+def _normalize_text(text: str) -> str:
+    normalized = text.strip()
+
+    if not normalized:
+        raise ValueError("Document text is empty")
+
+    return normalized
+
+
 def extract_and_normalize_document(input_doc: DocumentInput) -> NormalizedDocument:
 
     if input_doc["source_type"] == "text":
         content = input_doc.get("content")
 
-        if not content or not content.strip():
-            raise ValueError("Text document is empty or missing content")
+        if not isinstance(content, str):
+
+            raise ValueError("Text document is missing content")
 
         return {
-            "text": content.strip(),
+            "text": _normalize_text(content),
             "filename": input_doc.get("filename"),
             "role": input_doc.get("role"),
         }
@@ -70,7 +80,7 @@ def extract_and_normalize_document(input_doc: DocumentInput) -> NormalizedDocume
             raise ValueError("File is empty")
 
         return {
-            "text": content.strip(),
+            "text": _normalize_text(content),
             "filename": filename,
             "role": input_doc.get("role"),
         }
