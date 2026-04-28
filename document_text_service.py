@@ -47,4 +47,7 @@ def extract_and_normalize_document(input_doc: DocumentInput) -> NormalizedDocume
             "role": input_doc.get("role"),
         }
 
+    elif input_doc["source_type"] == "file":
+        raise NotImplementedError("File extraction not implemented yet")
+
     raise NotImplementedError(f"Unsupported source_type: {input_doc['source_type']}")
