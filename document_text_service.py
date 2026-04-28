@@ -1,3 +1,4 @@
+from werkzeug.datastructures import FileStorage
 from typing import TypedDict, Optional
 
 
@@ -12,7 +13,7 @@ class DocumentInput(TypedDict):
     consistency, format, or safety of the content.
     """
 
-    content: Optional[str]
+    content: Optional[str | FileStorage]
     filename: Optional[str]
     source_type: str  # "file" | "text"
     role: Optional[str]
@@ -35,6 +36,7 @@ class NormalizedDocument(TypedDict):
 
 
 def extract_and_normalize_document(input_doc: DocumentInput) -> NormalizedDocument:
+
     if input_doc["source_type"] == "text":
         content = input_doc.get("content")
 
@@ -48,6 +50,29 @@ def extract_and_normalize_document(input_doc: DocumentInput) -> NormalizedDocume
         }
 
     elif input_doc["source_type"] == "file":
-        raise NotImplementedError("File extraction not implemented yet")
+
+        file = input_doc.get("content")
+
+        if not isinstance(file, FileStorage):
+
+            raise ValueError("Invalid file object")
+
+        filename = input_doc.get("filename") or file.filename
+
+        if not filename or not filename.endswith(".txt"):
+
+            raise NotImplementedError("Only .txt files are supported for now")
+
+        content = file.read().decode("utf-8")
+
+        if not content.strip():
+
+            raise ValueError("File is empty")
+
+        return {
+            "text": content.strip(),
+            "filename": filename,
+            "role": input_doc.get("role"),
+        }
 
     raise NotImplementedError(f"Unsupported source_type: {input_doc['source_type']}")
