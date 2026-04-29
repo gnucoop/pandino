@@ -16,6 +16,23 @@ class ComparisonResult(TypedDict):
     reasoning: str
 
 
+def _format_documents_for_prompt(documents: list[NormalizedDocument]) -> str:
+    formatted_documents: list[str] = []
+
+    for index, document in enumerate(documents, start=1):
+        role = document.get("role") or "unspecified"
+        filename = document.get("filename") or "unknown"
+
+        formatted_documents.append(
+            f"DOCUMENT {index}\n"
+            f"Role: {role}\n"
+            f"Filename: {filename}\n"
+            f"Content:\n{document['text']}"
+        )
+
+    return "\n\n---\n\n".join(formatted_documents)
+
+
 def compare_documents(
     documents: list[NormalizedDocument],
     prompt: str,
