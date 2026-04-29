@@ -78,6 +78,8 @@ def _build_comparison_prompt(
 def compare_documents(
     documents: list[NormalizedDocument],
     prompt: str,
+    llm_type: str,
+    model: str,
     additional_context: str | None = None,
     language: str | None = None,
 ) -> ComparisonResult:
@@ -86,5 +88,11 @@ def compare_documents(
 
     if not prompt or not prompt.strip():
         raise ValueError("Comparison prompt is required")
+
+    if not llm_type or not llm_type.strip():
+        raise ValueError("LLM provider is required")
+
+    if not model or not model.strip():
+        raise ValueError("LLM model is required")
 
     raise NotImplementedError("LLM comparison not implemented yet")
