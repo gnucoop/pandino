@@ -1,5 +1,6 @@
+import json
 from typing import TypedDict
-
+from ai import choose_llm
 from document_text_service import NormalizedDocument
 
 
@@ -33,6 +34,11 @@ Return only valid JSON with the following required fields:
 
 
 def _format_documents_for_prompt(documents: list[NormalizedDocument]) -> str:
+    """
+    Format normalized documents into a structured text block for prompt injection.
+    Each document is labeled with index, role, filename, and content,
+    ensuring a clear and consistent representation for the LLM.
+    """
     formatted_documents: list[str] = []
 
     for index, document in enumerate(documents, start=1):
@@ -55,6 +61,11 @@ def _build_comparison_prompt(
     additional_context: str | None = None,
     language: str | None = None,
 ) -> str:
+    """
+    Build the full user prompt for document comparison.
+    Combines client instructions, optional language and context, and
+    formatted documents into a single structured prompt string.
+    """
     sections = [
         "CLIENT COMPARISON INSTRUCTIONS:\n" + prompt.strip(),
     ]
@@ -83,6 +94,20 @@ def compare_documents(
     additional_context: str | None = None,
     language: str | None = None,
 ) -> ComparisonResult:
+    """
+    Compare multiple normalized documents using an LLM and return a validated result.
+
+    The function builds a controlled prompt, invokes the selected model, and enforces
+    a strict JSON output schema (score, summary, reasoning).
+
+    :param documents: List of normalized documents to compare
+    :param prompt: Client-provided comparison instructions
+    :param llm_type: LLM provider identifier
+    :param model: Model name/version
+    :param additional_context: Optional extra context
+    :param language: Optional language preference
+    :return: ComparisonResult with validated fields
+    """
     if len(documents) < 2:
         raise ValueError("At least two documents are required")
 
@@ -95,4 +120,49 @@ def compare_documents(
     if not model or not model.strip():
         raise ValueError("LLM model is required")
 
-    raise NotImplementedError("LLM comparison not implemented yet")
+    system_prompt = DEFAULT_COMPARE_DOCS_SYSTEM_PROMPT
+
+    user_prompt = _build_comparison_prompt(
+        documents=documents,
+        prompt=prompt,
+        additional_context=additional_context,
+        language=language,
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    llm = choose_llm(llm_type, model)
+    response = llm.invoke(messages)
+    content = (
+        response.content if isinstance(response.content, str) else str(response.content)
+    )
+
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError:
+        raise ValueError("Model response is not valid JSON")
+
+    if not isinstance(parsed, dict):
+        raise ValueError("Parsed response is not a JSON object")
+
+    score = parsed.get("score")
+    summary = parsed.get("summary")
+    reasoning = parsed.get("reasoning")
+
+    if not isinstance(score, int):
+        raise ValueError("Invalid or missing 'score'")
+
+    if not isinstance(summary, str) or not summary.strip():
+        raise ValueError("Invalid or missing 'summary'")
+
+    if not isinstance(reasoning, str) or not reasoning.strip():
+        raise ValueError("Invalid or missing 'reasoning'")
+
+    return {
+        "score": score,
+        "summary": summary,
+        "reasoning": reasoning,
+    }
