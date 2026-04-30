@@ -1151,6 +1151,8 @@ def compare_docs():
     prompt = request.form.get("prompt")
     llm_type = request.form.get("llm_type")
     model = request.form.get("model")
+    additional_context = request.form.get("additional_context")
+    language = request.form.get("language")
     files = request.files.getlist("files")
 
     if not prompt:
@@ -1210,6 +1212,8 @@ def compare_docs():
         prompt=prompt,
         llm_type=llm_type,
         model=model,
+        additional_context=additional_context,
+        language=language,
     )
 
     return jsonify(result), 200
