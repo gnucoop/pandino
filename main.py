@@ -1205,6 +1205,10 @@ def compare_docs():
         if file_roles and len(file_roles) != len(files):
             raise ValueError("file_roles length must match number of files")
 
+        for role in file_roles:
+            if not isinstance(role, str):
+                raise ValueError("Each file role must be a string")
+
         if len(files) + len(text_documents) < 2:
             return (
                 jsonify(
