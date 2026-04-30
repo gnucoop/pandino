@@ -31,13 +31,7 @@ import pandas as pd
 from smolagents import CodeAgent
 from smolagents.models import LiteLLMModel
 import matplotlib
-import requests
 import pymupdf4llm
-from langchain_core.documents import Document
-from langchain_text_splitters import (
-    RecursiveCharacterTextSplitter,
-    MarkdownTextSplitter,
-)
 import bcrypt
 import psutil
 
@@ -50,16 +44,9 @@ from datachat.engine_output_adapter import (
     adapt_engine_output,
     consume_adapter_fallback_used,
 )
-from vector_store import (
-    MauiVectorStore,
-    merge_segments,
-    ensure_pgvector_namespace_ready,
-    file_id_from_text,
-    normalize_table_name,
-)
-
+from vector_store import MauiVectorStore
 from rag_ingestion_service import process_rag_file
-
+from document_comparison_service import compare_documents
 import database_pg
 from database_pg import (
     edit_tokens,
@@ -85,7 +72,6 @@ from database_pg import (
     log_token_usage,
     get_feedback_for_admin,
     get_feedback_stats,
-    insert_rag_file,
     get_all_rag_files,
 )
 
@@ -1162,11 +1148,44 @@ def agentchat() -> Response | tuple[Response, int]:
 @app.route("/compare_docs", methods=["POST"])
 def compare_docs():
     prompt = request.form.get("prompt")
+    llm_type = request.form.get("llm_type")
+    model = request.form.get("model")
+    files = request.files.getlist("files")
 
     if not prompt:
         return (
             jsonify(
                 {"error": "Invalid request", "details": "The prompt field is required."}
+            ),
+            400,
+        )
+
+    if not llm_type:
+        return (
+            jsonify(
+                {
+                    "error": "Invalid request",
+                    "details": "The llm_type field is required.",
+                }
+            ),
+            400,
+        )
+
+    if not model:
+        return (
+            jsonify(
+                {"error": "Invalid request", "details": "The model field is required."}
+            ),
+            400,
+        )
+
+    if len(files) < 2:
+        return (
+            jsonify(
+                {
+                    "error": "Invalid request",
+                    "details": "At least two documents are required.",
+                }
             ),
             400,
         )
