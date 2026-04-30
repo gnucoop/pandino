@@ -1,5 +1,6 @@
 from werkzeug.datastructures import FileStorage
 from typing import TypedDict, Optional
+import pymupdf
 import pymupdf4llm
 
 
@@ -50,7 +51,9 @@ def _extract_text_from_file(file: FileStorage, filename: str) -> str:
         return file.read().decode("utf-8")
 
     if filename.endswith(".pdf"):
-        return pymupdf4llm.to_markdown(file.stream)
+        pdf_bytes = file.read()
+        pdf_document = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+        return pymupdf4llm.to_markdown(pdf_document)
 
     raise NotImplementedError(f"Unsupported file format: {filename}")
 
