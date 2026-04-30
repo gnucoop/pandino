@@ -11,6 +11,7 @@ from typing import Any, List, Union, Optional
 import textwrap
 import logging
 import time
+import json
 from functools import wraps
 
 # === Third-party ===
@@ -1154,6 +1155,7 @@ def compare_docs():
     additional_context = request.form.get("additional_context")
     language = request.form.get("language")
     files = request.files.getlist("files")
+    text_documents_raw = request.form.get("text_documents")
 
     if not prompt:
         return (
@@ -1182,7 +1184,12 @@ def compare_docs():
             400,
         )
 
-    if len(files) < 2:
+    text_documents_count = 0
+
+    if text_documents_raw:
+        text_documents_count = len(json.loads(text_documents_raw))
+
+    if len(files) + text_documents_count < 2:
         return (
             jsonify(
                 {
@@ -1195,6 +1202,21 @@ def compare_docs():
 
     try:
         normalized_documents = []
+        text_documents = []
+
+        if text_documents_raw:
+            text_documents = json.loads(text_documents_raw)
+
+        for text_document in text_documents:
+            doc_input: DocumentInput = {
+                "content": text_document.get("content"),
+                "filename": text_document.get("filename"),
+                "source_type": "text",
+                "role": text_document.get("role"),
+            }
+
+            normalized = extract_and_normalize_document(doc_input)
+            normalized_documents.append(normalized)
 
         for file in files:
             doc_input: DocumentInput = {
