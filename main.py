@@ -1205,7 +1205,14 @@ def compare_docs():
         normalized = extract_and_normalize_document(doc_input)
         normalized_documents.append(normalized)
 
-    return jsonify({"status": "ok", "documents_count": len(normalized_documents)}), 200
+    result = compare_documents(
+        documents=normalized_documents,
+        prompt=prompt,
+        llm_type=llm_type,
+        model=model,
+    )
+
+    return jsonify(result), 200
 
 
 @app.route("/prompt.txt", methods=["POST"])
