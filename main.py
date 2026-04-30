@@ -1156,6 +1156,7 @@ def compare_docs():
     language = request.form.get("language")
     files = request.files.getlist("files")
     text_documents_raw = request.form.get("text_documents")
+    file_roles_raw = request.form.get("file_roles")
 
     if not prompt:
         return (
@@ -1187,12 +1188,22 @@ def compare_docs():
     try:
         normalized_documents = []
         text_documents = []
+        file_roles = []
 
         if text_documents_raw:
             text_documents = json.loads(text_documents_raw)
 
             if not isinstance(text_documents, list):
                 raise ValueError("text_documents must be a JSON array")
+
+        if file_roles_raw:
+            file_roles = json.loads(file_roles_raw)
+
+            if not isinstance(file_roles, list):
+                raise ValueError("file_roles must be a JSON array")
+
+        if file_roles and len(file_roles) != len(files):
+            raise ValueError("file_roles length must match number of files")
 
         if len(files) + len(text_documents) < 2:
             return (
@@ -1223,12 +1234,14 @@ def compare_docs():
             normalized = extract_and_normalize_document(doc_input)
             normalized_documents.append(normalized)
 
-        for file in files:
+        for index, file in enumerate(files):
+            role = file_roles[index] if file_roles else None
+
             doc_input: DocumentInput = {
                 "content": file,
                 "filename": file.filename,
                 "source_type": "file",
-                "role": None,
+                "role": role,
             }
 
             normalized = extract_and_normalize_document(doc_input)
