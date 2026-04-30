@@ -1193,28 +1193,37 @@ def compare_docs():
             400,
         )
 
-    normalized_documents = []
+    try:
+        normalized_documents = []
 
-    for file in files:
+        for file in files:
+            doc_input: DocumentInput = {
+                "content": file,
+                "filename": file.filename,
+                "source_type": "file",
+                "role": None,
+            }
 
-        doc_input: DocumentInput = {
-            "content": file,
-            "filename": file.filename,
-            "source_type": "file",
-            "role": None,
-        }
+            normalized = extract_and_normalize_document(doc_input)
+            normalized_documents.append(normalized)
 
-        normalized = extract_and_normalize_document(doc_input)
-        normalized_documents.append(normalized)
+        result = compare_documents(
+            documents=normalized_documents,
+            prompt=prompt,
+            llm_type=llm_type,
+            model=model,
+            additional_context=additional_context,
+            language=language,
+        )
 
-    result = compare_documents(
-        documents=normalized_documents,
-        prompt=prompt,
-        llm_type=llm_type,
-        model=model,
-        additional_context=additional_context,
-        language=language,
-    )
+    except ValueError as error:
+        return jsonify({"error": "Invalid request", "details": str(error)}), 400
+
+    except NotImplementedError as error:
+        return (
+            jsonify({"error": "Unsupported document format", "details": str(error)}),
+            415,
+        )
 
     return jsonify(result), 200
 
