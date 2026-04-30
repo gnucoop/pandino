@@ -47,6 +47,7 @@ from datachat.engine_output_adapter import (
 from vector_store import MauiVectorStore
 from rag_ingestion_service import process_rag_file
 from document_comparison_service import compare_documents
+from document_text_service import extract_and_normalize_document, DocumentInput
 import database_pg
 from database_pg import (
     edit_tokens,
@@ -1190,7 +1191,21 @@ def compare_docs():
             400,
         )
 
-    return jsonify({"status": "ok", "message": "compare_docs endpoint reached"}), 200
+    normalized_documents = []
+
+    for file in files:
+
+        doc_input: DocumentInput = {
+            "content": file,
+            "filename": file.filename,
+            "source_type": "file",
+            "role": None,
+        }
+
+        normalized = extract_and_normalize_document(doc_input)
+        normalized_documents.append(normalized)
+
+    return jsonify({"status": "ok", "documents_count": len(normalized_documents)}), 200
 
 
 @app.route("/prompt.txt", methods=["POST"])
