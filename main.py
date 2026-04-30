@@ -109,7 +109,6 @@ from utils.agent_logging import log_runresult, setup_agent_logger
 from utils.runtime_logging import setup_datachat_runtime_logger
 from dotenv import load_dotenv
 
-
 load_dotenv()  # Load environment variables from .env file
 
 # Initialize the Flask application
@@ -967,8 +966,7 @@ def agentchat() -> Response | tuple[Response, int]:
 
         # === DYNAMIC PROMPT (COMPASS AI TUTOR) ===
 
-        default_agentchat_prompt = textwrap.dedent(
-            """\
+        default_agentchat_prompt = textwrap.dedent("""\
             You are "Compass AI Tutor", an assistant embedded in the Compass training platform.
 
             PURPOSE
@@ -992,8 +990,7 @@ def agentchat() -> Response | tuple[Response, int]:
 
             LANGUAGE
             - Always respond in the language indicated by the variable {language}.
-        """
-        )
+        """)
 
         # === MODEL AND PROVIDER NORMALIZATION ===
 
@@ -1160,6 +1157,21 @@ def agentchat() -> Response | tuple[Response, int]:
         app.logger.error(f"[agentchat] Unexpected error: {str(e)}")
         app.logger.error(traceback.format_exc())
         return jsonify({"error": "An unexpected error occurred"}), 500
+
+
+@app.route("/compare_docs", methods=["POST"])
+def compare_docs():
+    prompt = request.form.get("prompt")
+
+    if not prompt:
+        return (
+            jsonify(
+                {"error": "Invalid request", "details": "The prompt field is required."}
+            ),
+            400,
+        )
+
+    return jsonify({"status": "ok", "message": "compare_docs endpoint reached"}), 200
 
 
 @app.route("/prompt.txt", methods=["POST"])
