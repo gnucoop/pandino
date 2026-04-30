@@ -1184,28 +1184,33 @@ def compare_docs():
             400,
         )
 
-    text_documents_count = 0
-
-    if text_documents_raw:
-        text_documents_count = len(json.loads(text_documents_raw))
-
-    if len(files) + text_documents_count < 2:
-        return (
-            jsonify(
-                {
-                    "error": "Invalid request",
-                    "details": "At least two documents are required.",
-                }
-            ),
-            400,
-        )
-
     try:
         normalized_documents = []
         text_documents = []
 
         if text_documents_raw:
             text_documents = json.loads(text_documents_raw)
+
+            if not isinstance(text_documents, list):
+                raise ValueError("text_documents must be a JSON array")
+
+        if len(files) + len(text_documents) < 2:
+            return (
+                jsonify(
+                    {
+                        "error": "Invalid request",
+                        "details": "At least two documents are required.",
+                    }
+                ),
+                400,
+            )
+
+        for item in text_documents:
+            if not isinstance(item, dict):
+                raise ValueError("Each text document must be an object")
+
+            if "content" not in item or not isinstance(item["content"], str):
+                raise ValueError("Each text document must have a string 'content'")
 
         for text_document in text_documents:
             doc_input: DocumentInput = {
