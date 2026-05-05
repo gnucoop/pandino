@@ -148,6 +148,7 @@ DATACHAT_LOG_LEVEL = os.environ.get("DATACHAT_LOG_LEVEL", "INFO")
 COMPLETION_TOKEN_COST = os.environ.get("COMPLETION_TOKEN_COST")
 PROMPT_TOKEN_COST = os.environ.get("PROMPT_TOKEN_COST")
 AUDIO_FORM_TOKEN_COST = os.environ.get("AUDIO_FORM_TOKEN_COST")
+COMPARE_DOCS_TOKEN_COST = int(os.environ.get("COMPARE_DOCS_TOKEN_COST", "1"))
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH", "").encode("utf-8")
 
@@ -1163,7 +1164,7 @@ def compare_docs():
     if user_tokens is None:
         return jsonify({"error": "Could not retrieve user tokens"}), 500
 
-    token_cost = int(os.getenv("COMPARE_DOCS_TOKEN_COST", "1"))
+    token_cost = COMPARE_DOCS_TOKEN_COST
     if token_cost > user_tokens:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 403
 
@@ -1277,6 +1278,7 @@ def compare_docs():
             additional_context=additional_context,
             language=language,
         )
+        edit_tokens(user_email, -token_cost)
 
     except ValueError as error:
         return jsonify({"error": "Invalid request", "details": str(error)}), 400
