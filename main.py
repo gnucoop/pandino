@@ -1149,6 +1149,24 @@ def agentchat() -> Response | tuple[Response, int]:
 
 @app.route("/compare_docs", methods=["POST"])
 def compare_docs():
+    api_key = request.headers.get("X-API-KEY")
+    user_email = request.headers.get("X-USER-EMAIL")
+
+    if not api_key:
+        return jsonify({"error": "Missing X-API-KEY header"}), 400
+    if not user_email:
+        return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
+
+    assert_valid_api_key(api_key, user_email)
+
+    user_tokens = database_pg.get_user_tokens(user_email)
+    if user_tokens is None:
+        return jsonify({"error": "Could not retrieve user tokens"}), 500
+
+    token_cost = int(os.getenv("COMPARE_DOCS_TOKEN_COST", "1"))
+    if token_cost > user_tokens:
+        return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 403
+
     prompt = request.form.get("prompt")
     llm_type = request.form.get("llm_type")
     model = request.form.get("model")
