@@ -2,6 +2,7 @@ import json
 from typing import TypedDict
 from ai import choose_llm
 from document_text_service import NormalizedDocument
+from prompt_utils import load_prompt
 
 
 class ComparisonResult(TypedDict):
@@ -120,7 +121,10 @@ def compare_documents(
     if not model or not model.strip():
         raise ValueError("LLM model is required")
 
-    system_prompt = DEFAULT_COMPARE_DOCS_SYSTEM_PROMPT
+    system_prompt = load_prompt(
+        "compare_docs_system",
+        default_text=DEFAULT_COMPARE_DOCS_SYSTEM_PROMPT,
+    )
 
     user_prompt = _build_comparison_prompt(
         documents=documents,
