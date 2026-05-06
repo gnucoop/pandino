@@ -155,6 +155,9 @@ def compare_documents(
     if not isinstance(score, int):
         raise ValueError("Invalid or missing 'score'")
 
+    if score < 1 or score > 100:
+        raise ValueError("Invalid 'score': must be between 1 and 100")
+
     if not isinstance(summary, str) or not summary.strip():
         raise ValueError("Invalid or missing 'summary'")
 
