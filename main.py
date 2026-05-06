@@ -135,6 +135,8 @@ COMPLETION_EMBEDDING_MODEL = os.environ.get("COMPLETION_EMBEDDING_MODEL")
 COMPLETION_EMBEDDING_MODEL_PROVIDER = os.environ.get(
     "COMPLETION_EMBEDDING_MODEL_PROVIDER"
 )
+COMPARE_DOCS_MODEL = os.environ.get("COMPARE_DOCS_MODEL")
+COMPARE_DOCS_PROVIDER = os.environ.get("COMPARE_DOCS_PROVIDER")
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL")
 VISION_PROVIDER = os.environ.get("VISION_PROVIDER")
 VISION_MODEL = os.environ.get("VISION_MODEL")
@@ -1169,37 +1171,19 @@ def compare_docs():
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 403
 
     prompt = request.form.get("prompt")
-    llm_type = request.form.get("llm_type")
-    model = request.form.get("model")
     additional_context = request.form.get("additional_context")
     language = request.form.get("language")
     files = request.files.getlist("files")
     text_documents_raw = request.form.get("text_documents")
     file_roles_raw = request.form.get("file_roles")
 
+    llm_type = COMPARE_DOCS_PROVIDER or "Google"
+    model = COMPARE_DOCS_MODEL or "gemini-2.5-flash"
+
     if not prompt:
         return (
             jsonify(
                 {"error": "Invalid request", "details": "The prompt field is required."}
-            ),
-            400,
-        )
-
-    if not llm_type:
-        return (
-            jsonify(
-                {
-                    "error": "Invalid request",
-                    "details": "The llm_type field is required.",
-                }
-            ),
-            400,
-        )
-
-    if not model:
-        return (
-            jsonify(
-                {"error": "Invalid request", "details": "The model field is required."}
             ),
             400,
         )
