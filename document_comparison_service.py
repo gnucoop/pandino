@@ -87,6 +87,24 @@ def _build_comparison_prompt(
     return "\n\n".join(sections)
 
 
+def _strip_json_code_fence(content: str) -> str:
+    """
+    Remove Markdown code fences from an LLM JSON response, if present.
+    """
+    stripped = content.strip()
+
+    if stripped.startswith("```json"):
+        stripped = stripped.removeprefix("```json").strip()
+
+    if stripped.startswith("```"):
+        stripped = stripped.removeprefix("```").strip()
+
+    if stripped.endswith("```"):
+        stripped = stripped.removesuffix("```").strip()
+
+    return stripped
+
+
 def compare_documents(
     documents: list[NormalizedDocument],
     prompt: str,
@@ -140,9 +158,12 @@ def compare_documents(
 
     llm = choose_llm(llm_type, model)
     response = llm.invoke(messages)
+
     content = (
         response.content if isinstance(response.content, str) else str(response.content)
     )
+
+    content = _strip_json_code_fence(content)
 
     try:
         parsed = json.loads(content)
