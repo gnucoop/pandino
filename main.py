@@ -1254,7 +1254,7 @@ def compare_docs():
             normalized = extract_and_normalize_document(doc_input)
             normalized_documents.append(normalized)
 
-        result = compare_documents(
+        service_result = compare_documents(
             documents=normalized_documents,
             prompt=prompt,
             llm_type=llm_type,
@@ -1262,6 +1262,30 @@ def compare_docs():
             additional_context=additional_context,
             language=language,
         )
+
+        result = service_result["comparison"]
+        token_usage = service_result["token_usage"]
+
+        try:
+            user = database_pg.get_user_by_username(user_email)
+            if not user:
+                raise ValueError(f"User '{user_email}' not found in DB")
+
+            user_id = user.get("id")
+            if not isinstance(user_id, int):
+                raise TypeError(f"Invalid user_id: {user_id}")
+
+            log_token_usage(
+                user_id=user_id,
+                token_input=token_usage.get("input_tokens", 0),
+                token_output=token_usage.get("output_tokens", 0),
+                model=model,
+                provider=llm_type,
+            )
+
+        except Exception as error:
+            app.logger.error(f"[compare_docs] Failed to log token usage: {error}")
+
         edit_tokens(user_email, -token_cost)
 
     except ValueError as error:
