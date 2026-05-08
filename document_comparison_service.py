@@ -18,6 +18,29 @@ class ComparisonResult(TypedDict):
     reasoning: str
 
 
+class TokenUsage(TypedDict):
+    """
+    Represents token usage metadata returned by the LLM provider,
+    when available through response metadata.
+    """
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+
+
+class ComparisonServiceResult(TypedDict):
+    """
+    Represents the full internal result returned by the comparison service.
+
+    It includes both the validated comparison output and technical metadata
+    needed by the route for logging/accounting.
+    """
+
+    comparison: ComparisonResult
+    token_usage: TokenUsage
+
+
 DEFAULT_COMPARE_DOCS_SYSTEM_PROMPT = """
 You are a document comparison assistant.
 
@@ -112,7 +135,7 @@ def compare_documents(
     model: str,
     additional_context: str | None = None,
     language: str | None = None,
-) -> ComparisonResult:
+) -> ComparisonServiceResult:
     """
     Compare multiple normalized documents using an LLM and return a validated result.
 
@@ -159,6 +182,14 @@ def compare_documents(
     llm = choose_llm(llm_type, model)
     response = llm.invoke(messages)
 
+    usage_metadata = getattr(response, "usage_metadata", None) or {}
+
+    token_usage: TokenUsage = {
+        "input_tokens": int(usage_metadata.get("input_tokens", 0) or 0),
+        "output_tokens": int(usage_metadata.get("output_tokens", 0) or 0),
+        "total_tokens": int(usage_metadata.get("total_tokens", 0) or 0),
+    }
+
     content = (
         response.content if isinstance(response.content, str) else str(response.content)
     )
@@ -190,7 +221,10 @@ def compare_documents(
         raise ValueError("Invalid or missing 'reasoning'")
 
     return {
-        "score": score,
-        "summary": summary,
-        "reasoning": reasoning,
+        "comparison": {
+            "score": score,
+            "summary": summary,
+            "reasoning": reasoning,
+        },
+        "token_usage": token_usage,
     }
