@@ -148,7 +148,7 @@ def compare_documents(
     :param model: Model name/version
     :param additional_context: Optional extra context
     :param language: Optional language preference
-    :return: ComparisonResult with validated fields
+    :return: ComparisonServiceResult with validated comparison output and token usage metadata
     """
     if len(documents) < 2:
         raise ValueError("At least two documents are required")
