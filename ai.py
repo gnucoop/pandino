@@ -71,7 +71,7 @@ def choose_llm(
         return ChatGroq(
             model=model,
             temperature=temperature,
-            api_key=SecretStr(os.getenv("GROQ_API_KEY") or ""),
+            api_key=SecretStr(api_key or os.getenv("GROQ_API_KEY") or ""),
             model_kwargs={"seed": seed},
         )
     elif llm_type == "Deepseek":
@@ -80,7 +80,7 @@ def choose_llm(
             temperature=temperature,
             seed=seed,
             base_url="https://api.deepseek.com",
-            api_key=SecretStr(os.getenv("DEEPSEEK_API_KEY") or ""),
+            api_key=SecretStr(api_key or os.getenv("DEEPSEEK_API_KEY") or ""),
         )
     elif llm_type == "Deepinfra":
         return ChatOpenAI(
@@ -88,7 +88,7 @@ def choose_llm(
             temperature=temperature,
             seed=seed,
             base_url="https://api.deepinfra.com/v1/openai",
-            api_key=SecretStr(os.getenv("DEEPINFRA_API_KEY") or ""),
+            api_key=SecretStr(api_key or os.getenv("DEEPINFRA_API_KEY") or ""),
         )
     elif llm_type == "Together":
         return ChatOpenAI(
@@ -96,27 +96,27 @@ def choose_llm(
             temperature=temperature,
             seed=seed,
             base_url="https://api.together.xyz/v1",
-            api_key=SecretStr(os.getenv("TOGETHER_API_KEY") or ""),
+            api_key=SecretStr(api_key or os.getenv("TOGETHER_API_KEY") or ""),
         )
     elif llm_type == "Google":
         return ChatGoogleGenerativeAI(
             model=model,
             temperature=temperature,
             seed=seed,
-            google_api_key=os.getenv("GOOGLE_API_KEY"),
+            google_api_key=api_key or os.getenv("GOOGLE_API_KEY"),
         )
     elif llm_type == "Mistral":
         logging.info("Note: ChatMistralAI does not support seed parameter")
         return ChatMistralAI(
             model_name=model,
             temperature=temperature,
-            api_key=SecretStr(os.getenv("MISTRAL_API_KEY") or ""),
+            api_key=SecretStr(api_key or os.getenv("MISTRAL_API_KEY") or ""),
         )
     elif llm_type == "Anthropic":
         return ChatAnthropic(
             model_name=model,
             temperature=temperature,
-            api_key=SecretStr(os.getenv("ANTHROPIC_API_KEY") or ""),
+            api_key=SecretStr(api_key or os.getenv("ANTHROPIC_API_KEY") or ""),
             model_kwargs={"seed": seed},
             stop=None,
             timeout=None,
@@ -126,7 +126,7 @@ def choose_llm(
             model=model,
             temperature=temperature,
             seed=seed,
-            api_key=SecretStr(os.getenv("OPENAI_API_KEY") or ""),
+            api_key=SecretStr(api_key or os.getenv("OPENAI_API_KEY") or ""),
         )
     elif llm_type == "OpenRouter":
         return ChatOpenAI(
@@ -134,7 +134,7 @@ def choose_llm(
             temperature=temperature,
             seed=seed,
             base_url="https://openrouter.ai/api/v1",
-            api_key=SecretStr(os.getenv("OPENROUTER_API_KEY") or ""),
+            api_key=SecretStr(api_key or os.getenv("OPENROUTER_API_KEY") or ""),
         )
     elif llm_type == "Ollama":
         return ChatOpenAI(
