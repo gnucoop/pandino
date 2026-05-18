@@ -97,6 +97,7 @@ from utils.agent_logging import log_runresult, setup_agent_logger
 from utils.runtime_logging import setup_datachat_runtime_logger
 from dotenv import load_dotenv
 from config import load_config, AppConfig
+from llm.litellm_factory import build_litellm_model
 
 load_dotenv()  # Load environment variables from .env file
 config: AppConfig = load_config()
@@ -123,6 +124,7 @@ print(f"Matplotlib backend: {matplotlib.get_backend()}")
 pd.set_option("display.max_columns", None)
 pd.set_option("display.width", None)
 pd.set_option("display.max_colwidth", None)
+
 
 # Admin authentication decorator
 def admin_required(f):
@@ -464,7 +466,9 @@ def startChat() -> Response | tuple[Response, int]:
     request_llm_type = request.form.get("llm_type")
     request_file = request.files.get("file")
     request_lang = request.form.get("lang")
-    model_name = request_model_name if request_model_name else config.models.datachat_model
+    model_name = (
+        request_model_name if request_model_name else config.models.datachat_model
+    )
     llm_type = request_llm_type if request_llm_type else config.models.datachat_provider
     lang = request_lang if request_lang else "ENG"
     # Check if all required parameters are present
@@ -827,7 +831,8 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
         model = config.models.completion_model or "gemini-2.5-flash"
         emb_llm_type = config.models.completion_embedding_model_provider or "Deepinfra"
         emb_model = (
-            config.models.completion_embedding_model or "intfloat/multilingual-e5-large-instruct"
+            config.models.completion_embedding_model
+            or "intfloat/multilingual-e5-large-instruct"
         )
 
         embeddings = choose_emb_model(emb_llm_type, emb_model)
@@ -906,9 +911,9 @@ def agentchat() -> Response | tuple[Response, int]:
         if not isinstance(chat, list) or not chat:
             return jsonify({"error": "Invalid 'chat': expected non-empty list"}), 400
 
-        namespace = r.get("namespace") or os.getenv("RAG_DEFAULT_NAMESPACE", "Dino")
+        namespace = r.get("namespace") or config.rag.default_namespace
         language = r.get("language") or "ITA"
-        token_cost = int(os.getenv("COMPLETION_TOKEN_COST", "1"))
+        token_cost = config.completion_token_cost
 
         app.logger.info(
             f"[agentchat] user={r['username']} ns={namespace} lang={language}"
@@ -954,43 +959,20 @@ def agentchat() -> Response | tuple[Response, int]:
 
         # === MODEL AND PROVIDER NORMALIZATION ===
 
-        provider = os.getenv("COMPLETION_MODEL_PROVIDER", "Deepinfra").strip()
-        configured_model = os.getenv("COMPLETION_MODEL_AGENT_CHAT", "").strip()
+        provider = config.models.completion_model_provider
+        configured_model = config.models.completion_model_agent_chat
 
         if not configured_model:
-            raise ValueError(
-                "Environment variable COMPLETION_MODEL_AGENT_CHAT is not set."
-            )
+            raise ValueError("COMPLETION_MODEL_AGENT_CHAT is not configured.")
 
         # Model used in database logs and cost accounting
         model_clean = configured_model
 
-        # Model passed to LiteLLM (provider prefix required)
-        model_id_for_llm = f"{provider.lower()}/{configured_model}"
-
         # === MODEL AND TOOL INITIALIZATION ===
 
-        # Determine the API key based on the provider
-        provider_env_var_map = {
-            "Deepinfra": "DEEPINFRA_API_KEY",
-            "Mistral": "MISTRAL_API_KEY",
-            "Google": "GOOGLE_API_KEY",
-            "OpenAI": "OPENAI_API_KEY",
-            "OpenRouter": "OPENROUTER_API_KEY",
-            "Anthropic": "ANTHROPIC_API_KEY",
-            "Groq": "GROQ_API_KEY",
-        }
-
-        # Default fallback to standard naming convention {PROVIDER}_API_KEY
-        env_var_name = provider_env_var_map.get(provider, f"{provider.upper()}_API_KEY")
-        provider_api_key = os.getenv(env_var_name)
-
-        # If specific key not found, try fallback to DEEPINFRA if provider is Deepinfra (redundant but safe)
-        # or logging a warning could be useful, but for now we follow the pattern.
-
-        llm = LiteLLMModel(
-            model_id=model_id_for_llm,
-            api_key=provider_api_key,
+        llm = build_litellm_model(
+            provider=provider,
+            configured_model=configured_model,
             temperature=0,
         )
 
@@ -1482,7 +1464,9 @@ def whisper_parse() -> Union[Response, tuple[Response, int]]:
         if not config.models.whisper_model or not config.api_keys.deepinfra_api_key:
             return jsonify({"error": "Missing Whisper configuration"}), 500
 
-        response = whisper_response(file, config.models.whisper_model, config.api_keys.deepinfra_api_key)
+        response = whisper_response(
+            file, config.models.whisper_model, config.api_keys.deepinfra_api_key
+        )
         if response.status_code == 200:
             try:
                 return jsonify(response.json()), 200
@@ -1507,7 +1491,11 @@ def whisper_parse() -> Union[Response, tuple[Response, int]]:
         try:
             b64 = base64.b64encode(file.read()).decode()
             dataurl = f"data:{file.mimetype};base64,{b64}"
-            text = describe_image(dataurl, config.models.vision_provider or "", config.models.vision_model or "")
+            text = describe_image(
+                dataurl,
+                config.models.vision_provider or "",
+                config.models.vision_model or "",
+            )
             return jsonify({"text": text}), 200
         except Exception as e:
             return (
