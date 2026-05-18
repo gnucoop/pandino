@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass
+from typing import Optional
 
 from smolagents import LiteLLMModel
 
@@ -16,12 +17,15 @@ def build_litellm_model(
     provider: str,
     configured_model: str,
     temperature: float = 0.0,
+    api_key: Optional[str] = None,
 ) -> LiteLLMModel:
     """
     Build a LiteLLMModel using Maui's provider->envvar convention.
 
     - model_id_for_llm must be: "{provider_lower}/{configured_model}"
-    - api_key is read from provider-specific env var (map) or fallback "{PROVIDER}_API_KEY"
+    - api_key: explicit key to use. When None, the key is resolved from the
+      environment via PROVIDER_API_KEY_MAP (imported from config) or the
+      fallback pattern "{PROVIDER}_API_KEY".
     """
     provider_clean = (provider or "").strip()
     model_clean = (configured_model or "").strip()
@@ -31,18 +35,11 @@ def build_litellm_model(
     if not model_clean:
         raise ValueError("configured_model is empty")
 
-    provider_env_var_map = {
-        "Deepinfra": "DEEPINFRA_API_KEY",
-        "Mistral": "MISTRAL_API_KEY",
-        "Google": "GOOGLE_API_KEY",
-        "OpenAI": "OPENAI_API_KEY",
-        "OpenRouter": "OPENROUTER_API_KEY",
-        "Anthropic": "ANTHROPIC_API_KEY",
-        "Groq": "GROQ_API_KEY",
-    }
-
-    env_var_name = provider_env_var_map.get(provider_clean, f"{provider_clean.upper()}_API_KEY")
-    api_key = os.getenv(env_var_name)
+    env_var_name: Optional[str] = None
+    if api_key is None:
+        from config import PROVIDER_API_KEY_MAP
+        env_var_name = PROVIDER_API_KEY_MAP.get(provider_clean, f"{provider_clean.upper()}_API_KEY")
+        api_key = os.getenv(env_var_name)
 
     if not api_key:
         raise ValueError(f"API key not found in env var: {env_var_name}")
