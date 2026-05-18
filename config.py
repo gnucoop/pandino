@@ -11,7 +11,6 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-
 # ---------------------------------------------------------------------------
 # Provider → environment-variable name map
 # Used by litellm_factory and agentchat handler to resolve API keys.
@@ -41,8 +40,8 @@ class DatabaseConfig:
     password: str
     host: str
     db: str
-    port: str = "5432"
-    schema: str = "public"
+    port: str
+    schema: str
 
 
 @dataclass(frozen=True)
@@ -100,8 +99,8 @@ class ApiKeysConfig:
     # LangChain / LangSmith
     langchain_api_key: Optional[str] = None
     langchain_project: Optional[str] = None
-    langchain_endpoint: str = "https://api.smith.langchain.com"
-    langchain_tracing_v2: str = "true"
+    langchain_endpoint: Optional[str] = None
+    langchain_tracing_v2: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -141,15 +140,15 @@ class AppConfig:
     rag: RagConfig
     datachat: DatachatConfig
 
-    auth_gateway_url: str = "http://localhost:3000/validate"
-    stripe_key: Optional[str] = None
+    auth_gateway_url: str
+    stripe_key: Optional[str]
 
     # Token costs
-    datachat_token_cost: int = 1
-    completion_token_cost: int = 1
-    prompt_token_cost: int = 1
-    audio_form_token_cost: int = 1
-    compare_docs_token_cost: int = 1
+    datachat_token_cost: int
+    completion_token_cost: int
+    prompt_token_cost: int
+    audio_form_token_cost: int
+    compare_docs_token_cost: int
 
 
 # ---------------------------------------------------------------------------
@@ -203,16 +202,23 @@ def load_config() -> AppConfig:
     )
 
     models = ModelConfig(
-        datachat_model=os.environ.get("DATACHAT_MODEL", "Qwen/Qwen2.5-Coder-32B-Instruct"),
+        datachat_model=os.environ.get(
+            "DATACHAT_MODEL", "Qwen/Qwen2.5-Coder-32B-Instruct"
+        ),
         datachat_provider=os.environ.get("DATACHAT_PROVIDER", "Deepinfra"),
         prompt_model=os.environ.get("PROMPT_MODEL", "Qwen/Qwen2.5-72B-Instruct"),
         prompt_provider=os.environ.get("PROMPT_PROVIDER", "Deepinfra"),
         completion_model=os.environ.get("COMPLETION_MODEL", "google/gemma-3-4b-it"),
-        completion_model_provider=os.environ.get("COMPLETION_MODEL_PROVIDER", "Deepinfra"),
-        completion_model_agent_chat=os.environ.get(
-            "COMPLETION_MODEL_AGENT_CHAT", "mistralai/Mistral-Small-3.2-24B-Instruct-2506"
+        completion_model_provider=os.environ.get(
+            "COMPLETION_MODEL_PROVIDER", "Deepinfra"
         ),
-        completion_embedding_model=os.environ.get("COMPLETION_EMBEDDING_MODEL", "BAAI/bge-m3"),
+        completion_model_agent_chat=os.environ.get(
+            "COMPLETION_MODEL_AGENT_CHAT",
+            "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+        ),
+        completion_embedding_model=os.environ.get(
+            "COMPLETION_EMBEDDING_MODEL", "BAAI/bge-m3"
+        ),
         completion_embedding_model_provider=os.environ.get(
             "COMPLETION_EMBEDDING_MODEL_PROVIDER", "Deepinfra"
         ),
@@ -266,7 +272,9 @@ def load_config() -> AppConfig:
         api_keys=api_keys,
         rag=rag,
         datachat=datachat,
-        auth_gateway_url=os.environ.get("AUTH_GATEWAY_URL", "http://localhost:3000/validate"),
+        auth_gateway_url=os.environ.get(
+            "AUTH_GATEWAY_URL", "http://localhost:3000/validate"
+        ),
         stripe_key=os.environ.get("STRIPE_SK_KEY"),
         datachat_token_cost=int(os.environ.get("DATACHAT_TOKEN_COST", "1")),
         completion_token_cost=int(os.environ.get("COMPLETION_TOKEN_COST", "1")),
