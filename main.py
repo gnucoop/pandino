@@ -96,8 +96,10 @@ from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult, setup_agent_logger
 from utils.runtime_logging import setup_datachat_runtime_logger
 from dotenv import load_dotenv
+from config import load_config, AppConfig
 
 load_dotenv()  # Load environment variables from .env file
+config: AppConfig = load_config()
 
 # Initialize the Flask application
 app = Flask(__name__)
@@ -121,39 +123,6 @@ print(f"Matplotlib backend: {matplotlib.get_backend()}")
 pd.set_option("display.max_columns", None)
 pd.set_option("display.width", None)
 pd.set_option("display.max_colwidth", None)
-
-DATACHAT_MODEL = os.environ.get("DATACHAT_MODEL")
-DATACHAT_PROVIDER = os.environ.get("DATACHAT_PROVIDER")
-PROMPT_MODEL = os.environ.get("PROMPT_MODEL")
-PROMPT_PROVIDER = os.environ.get("PROMPT_PROVIDER")
-AUDIO_MODEL = os.environ.get("AUDIO_MODEL")
-AUDIO_PROVIDER = os.environ.get("AUDIO_PROVIDER")
-COMPLETION_MODEL = os.environ.get("COMPLETION_MODEL")
-COMPLETION_MODEL_PROVIDER = os.environ.get("COMPLETION_MODEL_PROVIDER")
-COMPLETION_MODEL_AGENT_CHAT = os.environ.get("COMPLETION_MODEL_AGENT_CHAT")
-COMPLETION_EMBEDDING_MODEL = os.environ.get("COMPLETION_EMBEDDING_MODEL")
-COMPLETION_EMBEDDING_MODEL_PROVIDER = os.environ.get(
-    "COMPLETION_EMBEDDING_MODEL_PROVIDER"
-)
-COMPARE_DOCS_MODEL = os.environ.get("COMPARE_DOCS_MODEL")
-COMPARE_DOCS_PROVIDER = os.environ.get("COMPARE_DOCS_PROVIDER")
-WHISPER_MODEL = os.environ.get("WHISPER_MODEL")
-VISION_PROVIDER = os.environ.get("VISION_PROVIDER")
-VISION_MODEL = os.environ.get("VISION_MODEL")
-DEEPINFRA_API_KEY = os.environ.get("DEEPINFRA_API_KEY")
-STRIPE_KEY = os.environ.get("STRIPE_SK_KEY")
-DATACHAT_TOKEN_COST = int(os.environ.get("DATACHAT_TOKEN_COST", "1"))
-DATACHAT_MAX_STEPS = int(os.environ.get("DATACHAT_MAX_STEPS", "12"))
-DATACHAT_RATE_LIMIT_PER_MIN = int(os.environ.get("DATACHAT_RATE_LIMIT_PER_MIN", "0"))
-DATACHAT_SESSION_TTL_MIN = int(os.environ.get("DATACHAT_SESSION_TTL_MIN", "60"))
-DATACHAT_LOG_LEVEL = os.environ.get("DATACHAT_LOG_LEVEL", "INFO")
-COMPLETION_TOKEN_COST = os.environ.get("COMPLETION_TOKEN_COST")
-PROMPT_TOKEN_COST = os.environ.get("PROMPT_TOKEN_COST")
-AUDIO_FORM_TOKEN_COST = os.environ.get("AUDIO_FORM_TOKEN_COST")
-COMPARE_DOCS_TOKEN_COST = int(os.environ.get("COMPARE_DOCS_TOKEN_COST", "1"))
-ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD_HASH = os.environ.get("ADMIN_PASSWORD_HASH", "").encode("utf-8")
-
 
 # Admin authentication decorator
 def admin_required(f):
@@ -203,7 +172,7 @@ def editTokens() -> tuple[Response, int]:
         if not stripe_key:
             return jsonify({"error": "Missing X-STRIPE-KEY header"}), 400
 
-        if stripe_key != STRIPE_KEY:
+        if stripe_key != config.stripe_key:
             return jsonify({"error": "Invalid STRIPE KEY"}), 403
 
         r = request.get_json()
@@ -495,8 +464,8 @@ def startChat() -> Response | tuple[Response, int]:
     request_llm_type = request.form.get("llm_type")
     request_file = request.files.get("file")
     request_lang = request.form.get("lang")
-    model_name = request_model_name if request_model_name else DATACHAT_MODEL
-    llm_type = request_llm_type if request_llm_type else DATACHAT_PROVIDER
+    model_name = request_model_name if request_model_name else config.models.datachat_model
+    llm_type = request_llm_type if request_llm_type else config.models.datachat_provider
     lang = request_lang if request_lang else "ENG"
     # Check if all required parameters are present
     if (
@@ -514,7 +483,7 @@ def startChat() -> Response | tuple[Response, int]:
     if user_tokens is None:
         return jsonify({"error": "Could not retrieve user tokens"}), 500
 
-    if int(DATACHAT_TOKEN_COST) > user_tokens:
+    if int(config.datachat_token_cost) > user_tokens:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
     # Read the data from the provided CSV file
@@ -542,7 +511,7 @@ def startChat() -> Response | tuple[Response, int]:
             agentResponse["suggested_questions"] = bootstrap.suggested_questions_html
 
         # Spends User's tokens
-        edit_tokens(user_email, -int(DATACHAT_TOKEN_COST))
+        edit_tokens(user_email, -int(config.datachat_token_cost))
 
         return jsonify(agentResponse)
     except Exception as e:
@@ -636,7 +605,7 @@ def dataChat() -> Response | tuple[Response, int]:
         )
         return jsonify({"error": "Could not retrieve user tokens"}), 500
 
-    if int(DATACHAT_TOKEN_COST) > user_tokens:
+    if int(config.datachat_token_cost) > user_tokens:
         DATACHAT_RUNTIME_LOGGER.info(
             "datachat_request_end request_id=%s status=error http_status=500 duration_ms_total=%.2f user=%s engine=%s error_code=NOT_ENOUGH_TOKENS",
             request_id,
@@ -716,8 +685,8 @@ def dataChat() -> Response | tuple[Response, int]:
                 user_id=user_id,
                 token_input=token_input,
                 token_output=token_output,
-                model=DATACHAT_MODEL,
-                provider=DATACHAT_PROVIDER,
+                model=config.models.datachat_model,
+                provider=config.models.datachat_provider,
             )
             db_log_ok = True
             app.logger.info(f"[datachat] token usage logged log_id={log_id}")
@@ -759,7 +728,7 @@ def dataChat() -> Response | tuple[Response, int]:
         return jsonify({"error": str(e)}), 500
 
     # Spends User's tokens
-    edit_tokens(user_email, -int(DATACHAT_TOKEN_COST))
+    edit_tokens(user_email, -int(config.datachat_token_cost))
 
     response_payload: dict[str, Any] = {
         "response": response_dict,
@@ -838,7 +807,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
         if user_tokens is None:
             return jsonify({"error": "Could not retrieve user tokens"}), 500
 
-        token_cost = int(COMPLETION_TOKEN_COST or "1")
+        token_cost = int(config.completion_token_cost or "1")
         if token_cost > user_tokens:
             return (
                 jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
@@ -854,11 +823,11 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
         namespace = r.get("namespace", "")
 
         # Scelta modelli
-        llm_type = COMPLETION_MODEL_PROVIDER or "google"
-        model = COMPLETION_MODEL or "gemini-2.5-flash"
-        emb_llm_type = COMPLETION_EMBEDDING_MODEL_PROVIDER or "Deepinfra"
+        llm_type = config.models.completion_model_provider or "google"
+        model = config.models.completion_model or "gemini-2.5-flash"
+        emb_llm_type = config.models.completion_embedding_model_provider or "Deepinfra"
         emb_model = (
-            COMPLETION_EMBEDDING_MODEL or "intfloat/multilingual-e5-large-instruct"
+            config.models.completion_embedding_model or "intfloat/multilingual-e5-large-instruct"
         )
 
         embeddings = choose_emb_model(emb_llm_type, emb_model)
@@ -1166,7 +1135,7 @@ def compare_docs():
     if user_tokens is None:
         return jsonify({"error": "Could not retrieve user tokens"}), 500
 
-    token_cost = COMPARE_DOCS_TOKEN_COST
+    token_cost = config.compare_docs_token_cost
     if token_cost > user_tokens:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 403
 
@@ -1177,8 +1146,8 @@ def compare_docs():
     text_documents_raw = request.form.get("text_documents")
     file_roles_raw = request.form.get("file_roles")
 
-    llm_type = COMPARE_DOCS_PROVIDER or "Google"
-    model = COMPARE_DOCS_MODEL or "gemini-2.5-flash"
+    llm_type = config.models.compare_docs_provider or "Google"
+    model = config.models.compare_docs_model or "gemini-2.5-flash"
 
     if not prompt:
         return (
@@ -1418,12 +1387,12 @@ def admin_delete_cost(cost_id: int) -> Response:
     if user_tokens is None:
         return "Could not retrieve user tokens", 500, textContentType
 
-    token_cost = int(PROMPT_TOKEN_COST or "1")
+    token_cost = int(config.prompt_token_cost or "1")
     if token_cost > user_tokens:
         return f"Not enough tokens, user_tokens: {user_tokens}", 400, textContentType
 
-    model_name = PROMPT_MODEL or "gpt-3.5-turbo"
-    llm_type = PROMPT_PROVIDER or "openai"
+    model_name = config.models.prompt_model or "gpt-3.5-turbo"
+    llm_type = config.models.prompt_provider or "openai"
 
     try:
         resp = reply_to_prompt(prompt, username, llm_type, model_name)
@@ -1476,12 +1445,12 @@ def store_rag_file() -> tuple[Response, int] | tuple[str, int, dict[str, str]]:
             url,
             namespace,
             language,
-            whisper_model=WHISPER_MODEL,
-            deepinfra_api_key=DEEPINFRA_API_KEY,
-            vision_provider=VISION_PROVIDER,
-            vision_model=VISION_MODEL,
-            embedding_provider=COMPLETION_EMBEDDING_MODEL_PROVIDER,
-            embedding_model=COMPLETION_EMBEDDING_MODEL,
+            whisper_model=config.models.whisper_model,
+            deepinfra_api_key=config.api_keys.deepinfra_api_key,
+            vision_provider=config.models.vision_provider,
+            vision_model=config.models.vision_model,
+            embedding_provider=config.models.completion_embedding_model_provider,
+            embedding_model=config.models.completion_embedding_model,
         )
 
         return (
@@ -1529,10 +1498,10 @@ def whisper_parse() -> Union[Response, tuple[Response, int]]:
     lang = request.form.get("lang") or "ENG"
 
     if file.mimetype.startswith("audio"):
-        if not WHISPER_MODEL or not DEEPINFRA_API_KEY:
+        if not config.models.whisper_model or not config.api_keys.deepinfra_api_key:
             return jsonify({"error": "Missing Whisper configuration"}), 500
 
-        response = whisper_response(file, WHISPER_MODEL, DEEPINFRA_API_KEY)
+        response = whisper_response(file, config.models.whisper_model, config.api_keys.deepinfra_api_key)
         if response.status_code == 200:
             try:
                 return jsonify(response.json()), 200
@@ -1557,7 +1526,7 @@ def whisper_parse() -> Union[Response, tuple[Response, int]]:
         try:
             b64 = base64.b64encode(file.read()).decode()
             dataurl = f"data:{file.mimetype};base64,{b64}"
-            text = describe_image(dataurl, VISION_PROVIDER or "", VISION_MODEL or "")
+            text = describe_image(dataurl, config.models.vision_provider or "", config.models.vision_model or "")
             return jsonify({"text": text}), 200
         except Exception as e:
             return (
@@ -1600,12 +1569,12 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
     if user_tokens is None:
         return jsonify({"error": "Could not retrieve user tokens"}), 500
 
-    token_cost = int(AUDIO_FORM_TOKEN_COST or "1")
+    token_cost = int(config.audio_form_token_cost or "1")
     if token_cost > user_tokens:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
-    model_name = AUDIO_MODEL or "gpt-3.5-turbo"
-    llm_type = AUDIO_PROVIDER or "openai"
+    model_name = config.models.audio_model or "gpt-3.5-turbo"
+    llm_type = config.models.audio_provider or "openai"
 
     prompts = audioFormPromptBuild(
         formSchemaExampleData,
@@ -1657,9 +1626,9 @@ def admin_login():
         password = request.form.get("password")
 
         if (
-            username == ADMIN_USERNAME
+            username == config.admin.username
             and password
-            and bcrypt.checkpw(password.encode("utf-8"), ADMIN_PASSWORD_HASH)
+            and bcrypt.checkpw(password.encode("utf-8"), config.admin.password_hash)
         ):
             session["admin_logged_in"] = True
             session["admin_username"] = username
@@ -1683,28 +1652,28 @@ def admin_logout():
 @admin_required
 def admin_dashboard():
     env_vars = {
-        "DATACHAT_MODEL": DATACHAT_MODEL,
-        "DATACHAT_PROVIDER": DATACHAT_PROVIDER,
-        "PROMPT_MODEL": PROMPT_MODEL,
-        "PROMPT_PROVIDER": PROMPT_PROVIDER,
-        "AUDIO_MODEL": AUDIO_MODEL,
-        "AUDIO_PROVIDER": AUDIO_PROVIDER,
-        "COMPLETION_MODEL": COMPLETION_MODEL,
-        "COMPLETION_MODEL_PROVIDER": COMPLETION_MODEL_PROVIDER,
-        "COMPLETION_MODEL_AGENT_CHAT": COMPLETION_MODEL_AGENT_CHAT,
-        "COMPLETION_EMBEDDING_MODEL": COMPLETION_EMBEDDING_MODEL,
-        "COMPLETION_EMBEDDING_MODEL_PROVIDER": COMPLETION_EMBEDDING_MODEL_PROVIDER,
-        "WHISPER_MODEL": WHISPER_MODEL,
-        "VISION_PROVIDER": VISION_PROVIDER,
-        "VISION_MODEL": VISION_MODEL,
-        "DATACHAT_TOKEN_COST": DATACHAT_TOKEN_COST,
-        "DATACHAT_MAX_STEPS": DATACHAT_MAX_STEPS,
-        "DATACHAT_RATE_LIMIT_PER_MIN": DATACHAT_RATE_LIMIT_PER_MIN,
-        "DATACHAT_SESSION_TTL_MIN": DATACHAT_SESSION_TTL_MIN,
-        "DATACHAT_LOG_LEVEL": DATACHAT_LOG_LEVEL,
-        "COMPLETION_TOKEN_COST": COMPLETION_TOKEN_COST,
-        "PROMPT_TOKEN_COST": PROMPT_TOKEN_COST,
-        "AUDIO_FORM_TOKEN_COST": AUDIO_FORM_TOKEN_COST,
+        "DATACHAT_MODEL": config.models.datachat_model,
+        "DATACHAT_PROVIDER": config.models.datachat_provider,
+        "PROMPT_MODEL": config.models.prompt_model,
+        "PROMPT_PROVIDER": config.models.prompt_provider,
+        "AUDIO_MODEL": config.models.audio_model,
+        "AUDIO_PROVIDER": config.models.audio_provider,
+        "COMPLETION_MODEL": config.models.completion_model,
+        "COMPLETION_MODEL_PROVIDER": config.models.completion_model_provider,
+        "COMPLETION_MODEL_AGENT_CHAT": config.models.completion_model_agent_chat,
+        "COMPLETION_EMBEDDING_MODEL": config.models.completion_embedding_model,
+        "COMPLETION_EMBEDDING_MODEL_PROVIDER": config.models.completion_embedding_model_provider,
+        "WHISPER_MODEL": config.models.whisper_model,
+        "VISION_PROVIDER": config.models.vision_provider,
+        "VISION_MODEL": config.models.vision_model,
+        "DATACHAT_TOKEN_COST": config.datachat_token_cost,
+        "DATACHAT_MAX_STEPS": config.datachat.max_steps,
+        "DATACHAT_RATE_LIMIT_PER_MIN": config.datachat.rate_limit_per_min,
+        "DATACHAT_SESSION_TTL_MIN": config.datachat.session_ttl_min,
+        "DATACHAT_LOG_LEVEL": config.datachat.log_level,
+        "COMPLETION_TOKEN_COST": config.completion_token_cost,
+        "PROMPT_TOKEN_COST": config.prompt_token_cost,
+        "AUDIO_FORM_TOKEN_COST": config.audio_form_token_cost,
     }
 
     try:
@@ -2057,12 +2026,12 @@ def admin_upload_rag_file():
             url,
             namespace,
             language,
-            whisper_model=WHISPER_MODEL,
-            deepinfra_api_key=DEEPINFRA_API_KEY,
-            vision_provider=VISION_PROVIDER,
-            vision_model=VISION_MODEL,
-            embedding_provider=COMPLETION_EMBEDDING_MODEL_PROVIDER,
-            embedding_model=COMPLETION_EMBEDDING_MODEL,
+            whisper_model=config.models.whisper_model,
+            deepinfra_api_key=config.api_keys.deepinfra_api_key,
+            vision_provider=config.models.vision_provider,
+            vision_model=config.models.vision_model,
+            embedding_provider=config.models.completion_embedding_model_provider,
+            embedding_model=config.models.completion_embedding_model,
         )
 
         if result.chunk_count > 0:
