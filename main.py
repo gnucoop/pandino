@@ -72,6 +72,7 @@ from database_pg import (
     get_daily_stats,
     get_recent_activity,
     log_token_usage,
+    get_user_by_username,
     get_feedback_for_admin,
     get_feedback_stats,
     get_all_rag_files,
@@ -82,15 +83,13 @@ from external_auth import external_authenticate
 from ai import (
     audioFormCompilation,
     audioFormPromptBuild,
-    CompletionResponse,
-    CompletionRequest,
     describe_image,
-    complete_chat,
     reply_to_prompt,
     choose_llm,
     choose_emb_model,
     whisper_response,
 )
+from completion_service import complete_chat, CompletionRequest
 from prompt_utils import load_prompt, render_prompt
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult, setup_agent_logger
@@ -838,33 +837,43 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
         embeddings = choose_emb_model(emb_llm_type, emb_model)
 
         store = MauiVectorStore(embeddings, namespace)
-        resp = complete_chat(chat_request, store, llm_type, model)
-        if resp and hasattr(resp, "vectors") and resp.vectors:
-            for vec in resp.vectors:
-                vec["similarity"] += 0.3
+        language = r.get("language", "ENG")
+        resp = complete_chat(chat_request, store, llm_type, model, language)
 
-        if isinstance(resp, CompletionResponse):
-            if resp.error:
-                return jsonify({"error": f"Chat completion error: {resp.error}"}), 200
+        if resp["answer"] or resp["vectors"]:
+            edit_tokens(r["username"], -token_cost)
 
-            # Token deduction
-            if resp.answer or resp.vectors:
-                edit_tokens(r["username"], -token_cost)
+            log_id = None
+
+            user = get_user_by_username(r["username"])
+            if user:
+                user_id = user.get("id")
+                token_in = resp["token_usage"]["input_tokens"]
+                token_out = resp["token_usage"]["output_tokens"]
+                if isinstance(user_id, int) and (token_in > 0 or token_out > 0):
+                    log_id = log_token_usage(
+                        user_id=user_id,
+                        token_input=token_in,
+                        token_output=token_out,
+                        model=model,
+                        provider=llm_type,
+                    )
+
+            if resp["vectors"]:
+                for vec in resp["vectors"]:
+                    vec["similarity"] += 0.3
 
             response_payload = {
-                "answer": resp.answer,
-                "vectors": resp.vectors,
+                "answer": resp["answer"],
+                "vectors": resp["vectors"],
             }
 
-            if resp.log_id is not None:
-                response_payload["log_id"] = resp.log_id
+            if log_id is not None:
+                response_payload["log_id"] = log_id
 
             return jsonify(response_payload), 200
 
-        elif resp is None:
-            return jsonify({"error": "No response from chat completion"}), 500
-        else:
-            return jsonify({"error": "Unexpected response format"}), 500
+        return jsonify({"error": "No response from chat completion"}), 500
 
     except Exception as e:
         app.logger.error(f"Unexpected error in completion_handler: {str(e)}")
