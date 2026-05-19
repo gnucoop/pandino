@@ -43,6 +43,8 @@ def process_rag_file(
     vision_model: str | None,
     embedding_provider: str | None,
     embedding_model: str | None,
+    vision_api_key: str | None = None,
+    embedding_api_key: str | None = None,
 ) -> RagIngestionResult:
     """Process a file for RAG: extract text, split it into chunks, store embeddings, and track the file.
 
@@ -56,6 +58,8 @@ def process_rag_file(
     :param vision_model: Vision model name for image description.
     :param embedding_provider: Embedding provider name.
     :param embedding_model: Embedding model name.
+    :param vision_api_key: Optional API key override for the vision provider. Falls back to environment variables if not provided.
+    :param embedding_api_key: Optional API key override for the embedding provider. Falls back to environment variables if not provided.
     :return: Structured ingestion result.
     :raises ValueError: For unsupported file types, missing configuration, or whisper errors.
     """
@@ -117,7 +121,7 @@ def process_rag_file(
         paragraphs = merge_segments(segments, chunk_size)
 
     elif file.mimetype.startswith("image"):
-        text = describe_image(url, vision_provider or "", vision_model or "")
+        text = describe_image(url, vision_provider or "", vision_model or "", api_key=vision_api_key)
         paragraphs = [
             Document(
                 page_content=text,
@@ -156,6 +160,7 @@ def process_rag_file(
     embeddings = choose_emb_model(
         embedding_provider or "",
         embedding_model or "",
+        api_key=embedding_api_key,
     )
 
     ensure_pgvector_namespace_ready(
