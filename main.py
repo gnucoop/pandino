@@ -95,7 +95,7 @@ from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult, setup_agent_logger
 from utils.runtime_logging import setup_datachat_runtime_logger
 from dotenv import load_dotenv
-from config import load_config, AppConfig
+from config import load_config, AppConfig, PROVIDER_API_KEY_MAP
 from llm.litellm_factory import build_litellm_model
 
 load_dotenv()  # Load environment variables from .env file
@@ -828,6 +828,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
         # Scelta modelli
         llm_type = config.models.completion_model_provider or "google"
         model = config.models.completion_model or "gemini-2.5-flash"
+        provider_api_key = os.getenv(PROVIDER_API_KEY_MAP.get(llm_type, ""))
         emb_llm_type = config.models.completion_embedding_model_provider or "Deepinfra"
         emb_model = (
             config.models.completion_embedding_model
@@ -838,7 +839,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
 
         store = MauiVectorStore(embeddings, namespace)
         language = r.get("language", "ENG")
-        resp = complete_chat(chat_request, store, llm_type, model, language)
+        resp = complete_chat(chat_request, store, llm_type, model, language, api_key=provider_api_key)
 
         if resp["answer"] or resp["vectors"]:
             edit_tokens(r["username"], -token_cost)
@@ -1139,6 +1140,7 @@ def compare_docs():
 
     llm_type = config.models.compare_docs_provider or "Google"
     model = config.models.compare_docs_model or "gemini-2.5-flash"
+    provider_api_key = os.getenv(PROVIDER_API_KEY_MAP.get(llm_type, ""))
 
     if not prompt:
         return (
@@ -1221,6 +1223,7 @@ def compare_docs():
             model=model,
             additional_context=additional_context,
             language=language,
+            api_key=provider_api_key,
         )
 
         result = service_result["comparison"]

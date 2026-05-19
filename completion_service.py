@@ -66,6 +66,7 @@ def complete_chat(
     llm_type: str,
     model: str,
     language: str = "ENG",
+    api_key: str | None = None,
 ) -> CompletionServiceResult:
     """
     Perform a RAG-based chat completion using a vector store for contextual retrieval.
@@ -81,6 +82,7 @@ def complete_chat(
     :param model: Model name/version to invoke.
     :param language: ISO 3166-1 alpha-3 language code for the reply language.
         Defaults to "ENG".
+    :param api_key: Optional API key override. Falls back to environment variables if not provided.
     :return: CompletionServiceResult with the answer, source vectors, token usage,
         and a flag indicating whether the model reported no relevant information.
     :raises RuntimeError: If the chat history is empty or invalid, if vector
@@ -200,7 +202,7 @@ def complete_chat(
     )
 
     try:
-        llm = choose_llm(llm_type, model)
+        llm = choose_llm(llm_type, model, api_key=api_key)
         resp = llm.invoke(messages)
         answer = resp.content
 

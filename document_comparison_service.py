@@ -135,6 +135,7 @@ def compare_documents(
     model: str,
     additional_context: str | None = None,
     language: str | None = None,
+    api_key: str | None = None,
 ) -> ComparisonServiceResult:
     """
     Compare multiple normalized documents using an LLM and return a validated result.
@@ -148,6 +149,7 @@ def compare_documents(
     :param model: Model name/version
     :param additional_context: Optional extra context
     :param language: Optional language preference
+    :param api_key: Optional API key override. Falls back to environment variables if not provided.
     :return: ComparisonServiceResult with validated comparison output and token usage metadata
     """
     if len(documents) < 2:
@@ -179,7 +181,7 @@ def compare_documents(
         {"role": "user", "content": user_prompt},
     ]
 
-    llm = choose_llm(llm_type, model)
+    llm = choose_llm(llm_type, model, api_key=api_key)
     response = llm.invoke(messages)
 
     usage_metadata = getattr(response, "usage_metadata", None) or {}
