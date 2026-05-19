@@ -87,7 +87,6 @@ from ai import (
     choose_llm,
     choose_emb_model,
     whisper_response,
-    # reply_to_prompt,
 )
 from completion_service import complete_chat, CompletionRequest
 from prompt_utils import load_prompt, render_prompt
@@ -1310,7 +1309,7 @@ def admin_add_cost() -> Response:
 # Define a route for the '/admin/costs/edit/<int:cost_id>' endpoint
 @app.route("/admin/costs/edit/<int:cost_id>", methods=["GET", "POST"])
 @admin_required
-def admin_edit_cost(cost_id: int) -> str | Response:
+def admin_edit_cost(cost_id: int):
     if request.method == "POST":
         model = request.form.get("model")
         provider = request.form.get("provider")
@@ -1342,41 +1341,15 @@ def admin_edit_cost(cost_id: int) -> str | Response:
 
 
 # Define a route for the '/admin/costs/delete/<int:cost_id>' endpoint
-# @app.route("/admin/costs/delete/<int:cost_id>", methods=["POST"])
-# @admin_required
-# def admin_delete_cost(cost_id: int) -> Response:
-#     error = delete_cost(cost_id)
-#     if error:
-#         flash(error, "danger")
-#     else:
-#         flash("Cost deleted successfully", "success")
-#     return redirect(url_for("admin_costs"))
-
-#     if not api_key:
-#         return "Missing API key", 400, textContentType
-#     if not prompt:
-#         return "No prompt provided", 400, textContentType
-#     if not username:
-#         return "Username not provided", 400, textContentType
-
-#     assert_valid_api_key(api_key, username)
-
-#     user_tokens = database_pg.get_user_tokens(username)
-#     if user_tokens is None:
-#         return "Could not retrieve user tokens", 500, textContentType
-
-#     token_cost = int(config.prompt_token_cost or "1")
-#     if token_cost > user_tokens:
-#         return f"Not enough tokens, user_tokens: {user_tokens}", 400, textContentType
-
-#     model_name = config.models.prompt_model or "gpt-3.5-turbo"
-#     llm_type = config.models.prompt_provider or "openai"
-
-#     try:
-#         resp = reply_to_prompt(prompt, username, llm_type, model_name)
-#         return resp, 200, textContentType
-#     except Exception as e:
-#         return str(e), 500, textContentType
+@app.route("/admin/costs/delete/<int:cost_id>", methods=["POST"])
+@admin_required
+def admin_delete_cost(cost_id: int):
+    error = delete_cost(cost_id)
+    if error:
+        flash(error, "danger")
+    else:
+        flash("Cost deleted successfully", "success")
+    return redirect(url_for("admin_costs"))
 
 
 @app.route("/storeragfile", methods=["POST"])
@@ -1429,8 +1402,14 @@ def store_rag_file() -> tuple[Response, int] | tuple[str, int, dict[str, str]]:
             vision_model=config.models.vision_model,
             embedding_provider=config.models.completion_embedding_model_provider,
             embedding_model=config.models.completion_embedding_model,
-            vision_api_key=os.getenv(PROVIDER_API_KEY_MAP.get(config.models.vision_provider or "", "")),
-            embedding_api_key=os.getenv(PROVIDER_API_KEY_MAP.get(config.models.completion_embedding_model_provider or "", "")),
+            vision_api_key=os.getenv(
+                PROVIDER_API_KEY_MAP.get(config.models.vision_provider or "", "")
+            ),
+            embedding_api_key=os.getenv(
+                PROVIDER_API_KEY_MAP.get(
+                    config.models.completion_embedding_model_provider or "", ""
+                )
+            ),
         )
 
         return (
@@ -1512,7 +1491,9 @@ def whisper_parse() -> Union[Response, tuple[Response, int]]:
                 dataurl,
                 config.models.vision_provider or "",
                 config.models.vision_model or "",
-                api_key=os.getenv(PROVIDER_API_KEY_MAP.get(config.models.vision_provider or "", "")),
+                api_key=os.getenv(
+                    PROVIDER_API_KEY_MAP.get(config.models.vision_provider or "", "")
+                ),
             )
             return jsonify({"text": text}), 200
         except Exception as e:
@@ -2021,8 +2002,14 @@ def admin_upload_rag_file():
             vision_model=config.models.vision_model,
             embedding_provider=config.models.completion_embedding_model_provider,
             embedding_model=config.models.completion_embedding_model,
-            vision_api_key=os.getenv(PROVIDER_API_KEY_MAP.get(config.models.vision_provider or "", "")),
-            embedding_api_key=os.getenv(PROVIDER_API_KEY_MAP.get(config.models.completion_embedding_model_provider or "", "")),
+            vision_api_key=os.getenv(
+                PROVIDER_API_KEY_MAP.get(config.models.vision_provider or "", "")
+            ),
+            embedding_api_key=os.getenv(
+                PROVIDER_API_KEY_MAP.get(
+                    config.models.completion_embedding_model_provider or "", ""
+                )
+            ),
         )
 
         if result.chunk_count > 0:
