@@ -23,7 +23,7 @@ PROVIDER_API_KEY_MAP: dict[str, str] = {
     "OpenRouter": "OPENROUTER_API_KEY",
     "Anthropic": "ANTHROPIC_API_KEY",
     "Groq": "GROQ_API_KEY",
-    "DeepSeek": "DEEPSEEK_API_KEY",
+    "Deepseek": "DEEPSEEK_API_KEY",
 }
 
 
