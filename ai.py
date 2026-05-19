@@ -19,7 +19,6 @@ from langchain_mistralai import ChatMistralAI
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_anthropic import ChatAnthropic
 
-
 # Import specific embeddings models from their respective libraries
 from langchain_mistralai import MistralAIEmbeddings
 from langchain_openai import OpenAIEmbeddings
@@ -27,14 +26,6 @@ from langchain_ollama import OllamaEmbeddings
 from langchain_community.embeddings import DeepInfraEmbeddings
 
 load_dotenv()  # Load environment variables from .env file
-
-
-@dataclass
-class CompletionRequest:
-    username: str
-    info: list[str]
-    chat: list[str]
-    language: str = "ENG"
 
 
 @dataclass
@@ -203,201 +194,6 @@ def choose_emb_model(
         raise ValueError(f"Unsupported emb_llm_type: {emb_llm_type}")
 
 
-def complete_chat(
-    req: CompletionRequest,
-    store: VectorStore,
-    llm_type: str,
-    model: str,
-    language: str = "ENG",
-) -> CompletionResponse:
-    """
-    Perform a chat completion using a vector store for contextual information.
-
-    :param req: CompletionRequest object containing user info and chat history.
-    :param store: VectorStore instance used to retrieve relevant context.
-    :param llm_type: Provider type (e.g., 'OpenAI', 'Anthropic', etc.).
-    :param model: Model name/version to be used for completion.
-    :param language: The language for the prompt.
-    :return: CompletionResponse containing the generated answer and optional vectors.
-    """
-
-    if not req.chat or not isinstance(req.chat, list):
-        return CompletionResponse(error="No chat history provided.")
-
-    question = req.chat[-1].strip()
-    if not question:
-        return CompletionResponse(error="No question found in chat history.")
-
-    logging.info(f"Starting chat completion with llm_type: {llm_type}, model: {model}")
-    logging.info(f"Processing question: {question}")
-
-    vectors: list[dict[str, Any]] = []
-
-    try:
-        vectors = store.find_similar_vectors(text=question, top_k=5, min_similarity=0.5)
-        logging.info(f"Found {len(vectors)} relevant paragraphs")
-    except Exception as e:
-        error_msg = f"Vector retrieval failed: {str(e)}"
-        logging.error(error_msg)
-        return CompletionResponse(error=error_msg)
-
-    if not req.info and not vectors:
-        return CompletionResponse(answer="No relevant information available.")
-
-    # Language instruction + fallback delegato all'LLM
-    language_instruction = (
-        f"Please answer using the official language of the country corresponding to the following ISO 3166-1 alpha-3 code: {language}. "
-        f"If you can't match the language, please answer in English."
-    )
-
-    default_complete_chat_prompt = textwrap.dedent(
-        """\
-            You are Dino, an assistant who helps users by answering questions concisely.
-            You will receive information divided by
-            BACKGROUND INFORMATION:
-            Here you will find the context of previous reply
-            RELEVANT CONTENT
-            Here you will find context to reply to CURRENT QUESTION
-            PREVIUOS CONVERSATION CONTEXT
-            you will find here the chat history
-            CURRENT QUESTION
-            the question that you should reply following the important instruction below
-
-            IMPORTANT INSTRUCTIONS:
-            1. You MUST ALWAYS check the provided context and information to answer questions
-            2. You MUST ONLY use information from the provided context to answer
-            3. You MUST NOT make up or infer information not present in the context
-            4. You MUST NEVER say 'I have no information about this' if there is ANY relevant information in the context
-            5. If you find ANY relevant information in the context, use it to provide a partial answer
-            6. Only say 'I have no information about this' if the context contains ABSOLUTELY NOTHING relevant to the question
-    """
-    )
-
-    base_prompt_template = load_prompt(
-        "complete_chat_system", default_text=default_complete_chat_prompt
-    )
-
-    base_prompt = render_prompt(base_prompt_template)
-
-    full_prompt = f"{language_instruction}\n\n{base_prompt.strip()}"
-
-    messages = [{"role": "system", "content": full_prompt}]
-
-    # Format context with clear sections and metadata
-    context = ""
-    # if req.info:
-    #    context_parts.append("BACKGROUND INFORMATION:\n-------------------\n" + "\n".join(req.info))
-    if vectors:
-        context += "RELEVANT CONTEXT:\n----------------"
-    for vec in vectors:
-        context += "\n" + vec["metadata"]["text"]
-
-    if context:
-        messages.append(
-            {
-                "role": "user",
-                "content": "Here is the context you MUST use to answer questions:\n\n"
-                + context,
-            }
-        )
-        messages.append(
-            {
-                "role": "assistant",
-                "content": "I have received the context and will ONLY use this information to answer questions. I will not make up or infer information not present in this context.",
-            }
-        )
-
-    # Add the chat history if it exists
-    if len(req.chat) > 1:
-        messages.append(
-            {
-                "role": "user",
-                "content": "PREVIUOS CONVERSATION CONTEXT:\n-------------------------",
-            }
-        )
-        for i in range(0, len(req.chat) - 1, 2):
-            messages.append(
-                {"role": "assistant", "content": f"ASSISTANT: {req.chat[i]}"}
-            )
-            messages.append({"role": "user", "content": f"USER: {req.chat[i+1]}"})
-
-    # Add the final user question with very explicit instructions
-    messages.append(
-        {
-            "role": "user",
-            "content": (
-                f"CURRENT QUESTION:\n"
-                f"----------------\n"
-                f"{req.chat[-1]}\n\n"
-                "IMPORTANT INSTRUCTIONS:\n"
-                "1. Search through ALL the context provided above\n"
-                "2. Find ANY relevant information that relates to this question\n"
-                "3. If you find ANY relevant information, use it to answer\n"
-                "4. Only say 'I have no information about this' if you find ABSOLUTELY NOTHING relevant\n"
-                "5. Your answer must ONLY use information from the provided context"
-            ),
-        }
-    )
-
-    log_id: Optional[int] = None
-
-    try:
-        llm = choose_llm(llm_type, model)
-        resp = llm.invoke(messages)
-        answer = resp.content
-
-        # Extract token usage if available
-        token_usage = getattr(resp, "response_metadata", {}).get("token_usage", {})
-        token_in = token_usage.get("prompt_tokens", 0)
-        token_out = token_usage.get("completion_tokens", 0)
-
-        user = get_user_by_username(req.username)
-        if not user:
-            raise ValueError(f"User '{req.username}' not found")
-
-        user_id = user.get("id")
-        if not isinstance(user_id, int):
-            raise TypeError(f"Invalid user_id: {user_id}")
-
-        if token_in > 0 or token_out > 0:
-            log_id = log_token_usage(
-                user_id=user_id,
-                token_input=token_in,
-                token_output=token_out,
-                model=model,
-                provider=llm_type,
-            )
-
-        # Ensure answer is string before running .lower()
-        answer_text = answer if isinstance(answer, str) else str(answer)
-
-        no_info_phrases = [
-            "Non ho informazioni",
-            "I have no information",
-            "I don't have any information",
-            "No information available",
-        ]
-        is_no_info = any(
-            phrase.lower() in answer_text.lower() for phrase in no_info_phrases
-        )
-
-        if is_no_info:
-            return CompletionResponse(
-                answer=answer_text,
-                log_id=log_id,
-            )
-        else:
-            return CompletionResponse(
-                answer=answer_text,
-                vectors=vectors,
-                log_id=log_id,
-            )
-
-    except Exception as e:
-        logging.exception("Error in chat completion")
-        return CompletionResponse(error=f"Chat completion failed: {str(e)}")
-
-
 def reply_to_prompt(
     prompt: str, username: str, llm_type: str, model: str, language: str = "ITA"
 ) -> str:
@@ -546,16 +342,13 @@ def audioFormPromptBuild(
 
     # Base prompts
 
-    default_audio_form_system = textwrap.dedent(
-        """\
+    default_audio_form_system = textwrap.dedent("""\
         You are an assistant specialized in extracting data from audio transcriptions.
         Respond EXCLUSIVELY in valid JSON format.
         Do not add comments, explanations, or additional text.
-    """
-    )
+    """)
 
-    default_audio_form_user = textwrap.dedent(
-        """\
+    default_audio_form_user = textwrap.dedent("""\
         INPUT DATA:
         Form schema name: {formSchemaName}
         Available options: {formSchemaChoices}
@@ -573,8 +366,7 @@ def audioFormPromptBuild(
         - text/string: text extracted from the transcription
         - range/number: numeric value
         OUTPUT: Compiled JSON following the provided template.
-    """
-    )
+    """)
 
     system_base_template = load_prompt(
         "audio_form_system", default_text=default_audio_form_system
