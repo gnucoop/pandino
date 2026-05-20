@@ -81,13 +81,12 @@ from database_pg import (
 from dino import dino_authenticate
 from external_auth import external_authenticate
 from ai import (
-    audioFormCompilation,
-    audioFormPromptBuild,
     describe_image,
     choose_llm,
     choose_emb_model,
     whisper_response,
 )
+from audio_form_service import audioFormCompilation, audioFormPromptBuild
 from completion_service import complete_chat, CompletionRequest
 from prompt_utils import load_prompt, render_prompt
 from utils.agent_serialization import serialize_runresult
@@ -1574,20 +1573,32 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
     if not prompts:
         return jsonify({"error": "Failed to build prompts"}), 500
 
-    invocation = audioFormCompilation(
-        prompts["userprompt"],
-        prompts["systemprompt"],
-        user_email,
-        llm_type,
-        model_name,
-        api_key=provider_api_key,
-    )
+    try:
+        result = audioFormCompilation(
+            prompts["userprompt"],
+            prompts["systemprompt"],
+            llm_type,
+            model_name,
+            api_key=provider_api_key,
+        )
+    except RuntimeError as e:
+        return jsonify({"error": str(e)}), 500
 
-    if invocation:
-        edit_tokens(user_email, -token_cost)
+    token_usage = result["token_usage"]
+    user = database_pg.get_user_by_username(user_email)
+    if user and (token_usage["input_tokens"] > 0 or token_usage["output_tokens"] > 0):
+        log_token_usage(
+            user_id=user["id"],
+            token_input=token_usage["input_tokens"],
+            token_output=token_usage["output_tokens"],
+            model=model_name,
+            provider=llm_type,
+        )
 
-    app.logger.debug(f"Audio form compilation result: {invocation}")
-    return jsonify(invocation), 200
+    edit_tokens(user_email, -token_cost)
+
+    app.logger.debug(f"Audio form compilation result: {result['content']}")
+    return jsonify(result["content"]), 200
 
 
 # Define a route for the '/summarize' endpoint that returns a "not yet implemented" message

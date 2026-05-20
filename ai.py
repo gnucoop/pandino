@@ -1,13 +1,9 @@
 import logging
 import os
 import requests
-import textwrap
 from dotenv import load_dotenv
-from database_pg import get_user_by_username, log_token_usage, get_prompt_from_db
 from prompt_utils import load_prompt, render_prompt
-from vector_store import VectorStore
-from dataclasses import dataclass
-from typing import Optional, Union, Any
+from typing import Optional
 from pydantic import SecretStr
 
 # Import specific chat models from their respective libraries
@@ -26,14 +22,6 @@ from langchain_ollama import OllamaEmbeddings
 from langchain_community.embeddings import DeepInfraEmbeddings
 
 load_dotenv()  # Load environment variables from .env file
-
-
-@dataclass
-class CompletionResponse:
-    error: Optional[str] = None
-    answer: Optional[str] = None
-    vectors: Optional[list[dict]] = None
-    log_id: Optional[int] = None
 
 
 def choose_llm(
@@ -253,158 +241,6 @@ def describe_image(
     except Exception as e:
         logging.exception("Error while describing image")
         raise
-
-
-def audioFormPromptBuild(
-    formSchemaExampleData: dict[str, Any],
-    formSchemaName: str,
-    formSchemaChoices: list[dict[str, Any]],
-    transcribedAudio: str,
-    language: str = "ITA",
-) -> dict[str, str]:
-    """
-    Builds a pair of prompts (system and user) to instruct an LLM to populate a JSON form
-    based on a given schema, example data, available choices, and a transcribed audio input.
-
-    :param formSchemaExampleData: Dictionary with an example of the form compiled with empty/default values.
-    :param formSchemaName: Name of the form, used in the prompts.
-    :param formSchemaChoices: List of dictionaries representing selectable choices for choice-based fields.
-    :param transcribedAudio: Transcribed user audio input, from which field values will be extracted.
-    :param language: The language for the prompts.
-    :return: A dictionary with 'systemprompt' and 'userprompt' keys, both containing formatted strings.
-    :raises ValueError: If any required input is missing.
-    """
-    if not formSchemaExampleData or not formSchemaName or not transcribedAudio:
-        raise ValueError(
-            "Missing one or more required inputs for building audio form prompts"
-        )
-
-    fieldTypes = formSchemaExampleData["fieldTypes"]
-    fieldDescriptions = formSchemaExampleData["fieldDescriptions"]
-
-    logging.info("Building audio form prompts for schema: %s", formSchemaName)
-
-    # Language instruction
-    language_instruction = (
-        f"Please answer using the official language of the country corresponding to the following ISO 3166-1 alpha-3 code: {language}. "
-        f"If you can't match the language, please answer in English."
-    )
-
-    # Base prompts
-
-    default_audio_form_system = textwrap.dedent("""\
-        You are an assistant specialized in extracting data from audio transcriptions.
-        Respond EXCLUSIVELY in valid JSON format.
-        Do not add comments, explanations, or additional text.
-    """)
-
-    default_audio_form_user = textwrap.dedent("""\
-        INPUT DATA:
-        Form schema name: {formSchemaName}
-        Available options: {formSchemaChoices}
-        Output template and field types: {fieldTypes}
-        Field descriptions: {fieldDescriptions}
-        Audio transcription: {transcribedAudio}
-        
-        INSTRUCTIONS:
-        Fill out the JSON template using ONLY information from the transcription.
-        RULES PER FIELD:
-        - boolean: true/false based on the transcription
-        - multiplechoice: array of values from "Available options". If a mentioned option is not present and if "other" exists among the Available options, include "other"
-        - singlechoice: array of values from "Available options". If a mentioned option is not present and if "other" exists among the Available options, include "other"
-        - date: YYYY-MM-DD format
-        - text/string: text extracted from the transcription
-        - range/number: numeric value
-        OUTPUT: Compiled JSON following the provided template.
-    """)
-
-    system_base_template = load_prompt(
-        "audio_form_system", default_text=default_audio_form_system
-    )
-    system_base = render_prompt(system_base_template)
-
-    user_base_template = load_prompt(
-        "audio_form_user", default_text=default_audio_form_user
-    )
-    user_base = render_prompt(
-        user_base_template,
-        formSchemaName=formSchemaName,
-        formSchemaChoices=formSchemaChoices,
-        fieldTypes=fieldTypes,
-        fieldDescriptions=fieldDescriptions,
-        transcribedAudio=transcribedAudio,
-    )
-
-    system = f"{language_instruction}\n\n{system_base.strip()}"
-    user = f"{language_instruction}\n\n{user_base.strip()}"
-
-    return {"systemprompt": system, "userprompt": user}
-
-
-def audioFormCompilation(
-    userprompt: str,
-    systemprompt: str,
-    username: str,
-    llm_type: str,
-    model: str,
-    api_key: str | None = None,
-) -> Union[str, CompletionResponse]:
-    """
-    Sends a user/system prompt pair to a selected LLM and returns the generated content.
-
-    :param userprompt: Prompt containing audio-derived user input instructions.
-    :param systemprompt: Prompt defining rules and expected structure of response.
-    :param username: User requesting the form completion.
-    :param llm_type: Type/provider of the language model (e.g., 'OpenAI', 'Anthropic').
-    :param model: Specific model name to invoke.
-    :param api_key: Optional API key override. Falls back to environment variables if not provided.
-    :return: A string (LLM response content) on success, or a CompletionResponse on failure.
-    """
-    if not all([userprompt, systemprompt, llm_type, model, username]):
-        raise ValueError(
-            "Missing one or more required parameters for audioFormCompilation"
-        )
-
-    logging.info(
-        f"Invoking audio form compilation with model={model} (provider={llm_type}) for user={username}"
-    )
-
-    messages = [
-        {"role": "system", "content": systemprompt},
-        {"role": "user", "content": userprompt},
-    ]
-
-    llm = choose_llm(llm_type, model, temperature=0, api_key=api_key)
-
-    try:
-        resp = llm.invoke(messages)
-
-        token_usage = getattr(resp, "response_metadata", {}).get("token_usage", {})
-        token_in = token_usage.get("prompt_tokens", 0)
-        token_out = token_usage.get("completion_tokens", 0)
-
-        user = get_user_by_username(username)
-        if not user:
-            raise ValueError(f"User '{username}' not found")
-
-        user_id = user.get("id")
-        if not isinstance(user_id, int):
-            raise TypeError(f"Invalid user_id: {user_id}")
-
-        if token_in > 0 or token_out > 0:
-            log_token_usage(
-                user_id=user_id,
-                token_input=token_in,
-                token_output=token_out,
-                model=model,
-                provider=llm_type,
-            )
-
-        return resp.content if isinstance(resp.content, str) else str(resp.content)
-
-    except Exception as e:
-        logging.exception("Error in audio form compilation")
-        return CompletionResponse(error=f"Audio form compilation failed: {str(e)}")
 
 
 def whisper_response(file, whisper_model: str, deepinfra_api_key: str):
