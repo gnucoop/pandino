@@ -9,13 +9,9 @@ it exposes *only* the question and delegates all retrieval configuration
 
 import logging
 from typing import Any, Dict
-from dotenv import load_dotenv
 
 from smolagents import Tool
 from retrieval_service import retrieve_from_collection
-
-
-load_dotenv()
 
 
 class RetrieverTool(Tool):
@@ -44,9 +40,20 @@ class RetrieverTool(Tool):
         }
     }
 
-    def __init__(self, namespace: str) -> None:
+    def __init__(
+        self,
+        namespace: str,
+        embedding_provider: str,
+        embedding_model: str,
+        top_k: int,
+        min_sim: float,
+    ) -> None:
         super().__init__()
         self.default_namespace = namespace  # pre-bound namespace
+        self.embedding_provider = embedding_provider
+        self.embedding_model = embedding_model
+        self.top_k = top_k
+        self.min_sim = min_sim
 
     def forward(self, question: str) -> Dict[str, Any]:
         """
@@ -66,6 +73,10 @@ class RetrieverTool(Tool):
             vectors = retrieve_from_collection(
                 question=question,
                 namespace=effective_namespace,  # always enforced
+                embedding_provider=self.embedding_provider,
+                embedding_model=self.embedding_model,
+                top_k=self.top_k,
+                min_sim=self.min_sim,
             )
 
             result = {
