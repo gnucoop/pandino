@@ -9,23 +9,24 @@ This module defines the *only* component responsible for deciding:
 - the minimum similarity threshold,
 - and how to query the underlying vector store.
 
-All RAG configuration is fully centralized here and managed via environment
-variables. No external component (endpoint, agent, tool, or LLM) can override
-these parameters.
+All configuration parameters must be passed explicitly by the caller.
 """
 
-import os
 import logging
 from typing import List, Dict, Any
-from dotenv import load_dotenv
 
 from vector_store import MauiVectorStore
 from ai import choose_emb_model
 
-load_dotenv()
 
-
-def retrieve_from_collection(question: str, namespace: str) -> List[Dict[str, Any]]:
+def retrieve_from_collection(
+    question: str,
+    namespace: str,
+    embedding_provider: str,
+    embedding_model: str,
+    top_k: int,
+    min_sim: float,
+) -> List[Dict[str, Any]]:
     """
     Retrieve vector context for a given question within a specific namespace.
 
@@ -36,6 +37,14 @@ def retrieve_from_collection(question: str, namespace: str) -> List[Dict[str, An
     namespace : str
         The PGVector collection name (e.g. "Dino", "Farm", or course-specific namespaces).
         This must be explicitly provided by the calling component (typically a RetrieverTool).
+    embedding_provider : str
+        The provider to use for the embedding model.
+    embedding_model : str
+        The embedding model identifier.
+    top_k : int
+        Number of top similar vectors to retrieve.
+    min_sim : float
+        Minimum similarity threshold for returned vectors.
 
     Returns
     -------
@@ -45,20 +54,13 @@ def retrieve_from_collection(question: str, namespace: str) -> List[Dict[str, An
         - "metadata": dict (original stored metadata).
     """
 
-    # === Centralized retrieval configuration ===
-    top_k = int(os.getenv("RAG_TOP_K", "3"))
-    min_sim = float(os.getenv("RAG_MIN_SIM", "0.5"))
-
     logging.info(
         f"[retrieval] Query started. namespace={namespace}, top_k={top_k}, min_sim={min_sim}"
     )
 
     try:
         # === Load embedding model once per call ===
-        emb = choose_emb_model(
-            os.getenv("COMPLETION_EMBEDDING_MODEL_PROVIDER", "Deepinfra"),
-            os.getenv("COMPLETION_EMBEDDING_MODEL", "BAAI/bge-m3"),
-        )
+        emb = choose_emb_model(embedding_provider, embedding_model)
 
         # === Initialize vector store ===
         store = MauiVectorStore(embeddings=emb, table_name=namespace)

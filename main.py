@@ -987,7 +987,13 @@ def agentchat() -> Response | tuple[Response, int]:
             temperature=0,
         )
 
-        retriever_tool = RetrieverTool(namespace)
+        retriever_tool = RetrieverTool(
+            namespace=namespace,
+            embedding_provider=config.models.completion_embedding_model_provider,
+            embedding_model=config.models.completion_embedding_model,
+            top_k=config.rag.top_k,
+            min_sim=config.rag.min_sim,
+        )
 
         agent = CodeAgent(
             tools=[retriever_tool],
