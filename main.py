@@ -93,6 +93,7 @@ from agentchat_service import run_agentchat
 
 load_dotenv()  # Load environment variables from .env file
 config: AppConfig = load_config()
+database_pg.init(config)
 
 # Initialize the Flask application
 app = Flask(__name__)
