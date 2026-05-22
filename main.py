@@ -1301,10 +1301,29 @@ def compare_docs():
 
 
 @app.route("/prompt.txt", methods=["POST"])
-def prompt_handler() -> Union[str, tuple[str, int, dict[str, str]]]:
+def prompt_handler():
     prompt = request.form.get("prompt")
     username = request.form.get("username")
+    model_name = PROMPT_MODEL
+    llm_type = PROMPT_PROVIDER
     api_key = request.headers.get("X-API-KEY")
+
+    if not prompt:
+        return "No prompt provided", 400, textContentType
+    if not username:
+        return "Username not provided", 400, textContentType
+
+    assert_valid_api_key(api_key, username)
+
+    user_tokens = database_pg.get_user_tokens(username)
+    if int(PROMPT_TOKEN_COST) > user_tokens:
+        return f"Not enough tokens, user_tokens: {user_tokens}", 400, textContentType
+
+    try:
+        resp = reply_to_prompt(prompt, username, llm_type, model_name)
+        return resp, 200, textContentType
+    except Exception as e:
+        return str(e), 500, textContentType
 
 
 # Define a route for the '/admin/costs' endpoint
