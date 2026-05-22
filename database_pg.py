@@ -9,6 +9,7 @@ from typing import Optional, Tuple, Dict, Any
 import logging
 import pandas as pd
 
+from config import AppConfig
 from database_methods import (
     build_get_user_by_username_query,
     build_add_user_query,
@@ -54,45 +55,52 @@ from database_methods import (
     build_get_all_rag_files_query,
 )
 
-# Generate a key for encryption and decryption
-# Store the key in an environment variable or a secure file
-from dotenv import load_dotenv
+KEY: Optional[bytes] = None
+PGUSER: Optional[str] = None
+PGPWD: Optional[str] = None
+PGHOST: Optional[str] = None
+PGDB: Optional[str] = None
+PGPORT: Optional[str] = None
+schema: Optional[str] = None
+cipher_suite: Optional[Fernet] = None
 
-load_dotenv()  # Load environment variables from .env file
 
-KEY = os.environ.get("ENCRYPTION_KEY")
-PGUSER = os.environ["PGUSER"]
-PGPWD = os.environ["PGPWD"]
-PGHOST = os.environ["PGHOST"]
-PGDB = os.environ["PGDB"]
-PGPORT = os.getenv("PG_PORT", "5432")
-schema = os.environ.get("MAUI_SCHEMA", "public")
+def init(config: AppConfig) -> None:
+    """Initialise module-level globals from AppConfig. Must be called once at startup."""
+    global KEY, PGUSER, PGPWD, PGHOST, PGDB, PGPORT, schema, cipher_suite
+    raw_key = config.encryption_key
+    if not raw_key:
+        raise ValueError("ENCRYPTION_KEY is required but not set.")
+    try:
+        KEY = base64.urlsafe_b64encode(
+            base64.urlsafe_b64decode(raw_key + "=" * (-len(raw_key) % 4))
+        )
+    except Exception as e:
+        raise ValueError(f"Invalid ENCRYPTION_KEY: {e}")
+    cipher_suite = Fernet(KEY)
+    PGUSER = config.database.user
+    PGPWD = config.database.password
+    PGHOST = config.database.host
+    PGDB = config.database.db
+    PGPORT = config.database.port
+    schema = config.database.schema
 
-if not KEY:
-    print("Error: ENCRYPTION_KEY not found in environment variables.")
-    sys.exit(1)
 
-try:
-    # Ensure the key is properly formatted
-    KEY = base64.urlsafe_b64encode(
-        base64.urlsafe_b64decode(KEY + "=" * (-len(KEY) % 4))
-    )
-    print("Using ENCRYPTION_KEY from environment variables.")
-except Exception as e:
-    print(f"Error with ENCRYPTION_KEY: {e}")
-    sys.exit(1)
-
-cipher_suite = Fernet(KEY)
+def get_cipher_suite() -> Fernet:
+    """Return the initialised Fernet instance or raise RuntimeError if init() was not called."""
+    if cipher_suite is None:
+        raise RuntimeError("database_pg.init() must be called before use.")
+    return cipher_suite
 
 
 def connect():
+    if PGHOST is None or schema is None:
+        raise RuntimeError("database_pg.init() must be called before connect().")
     conn = psycopg.connect(
         host=PGHOST, dbname=PGDB, user=PGUSER, password=PGPWD, port=PGPORT
     )
-
     with conn.cursor() as cur:
         cur.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
-
     return conn
 
 
@@ -193,7 +201,7 @@ def add_user(
 
     conn = connect()
     cursor = conn.cursor()
-    encrypted_api_key = cipher_suite.encrypt(api_key.encode()).decode()
+    encrypted_api_key = get_cipher_suite().encrypt(api_key.encode()).decode()
 
     try:
         query, params = build_add_user_query(
@@ -291,7 +299,7 @@ def list_users():
         print("Existing users:")
         for id, user, api_key, date_valid_until, tokens in users:
             try:
-                decrypted_api_key = cipher_suite.decrypt(api_key).decode()
+                decrypted_api_key = get_cipher_suite().decrypt(api_key).decode()
                 print(
                     f"ID: {id}, Username: {user}, ApiKey: {decrypted_api_key}, Date Valid Until: {date_valid_until}, Tokens: {tokens}"
                 )
@@ -325,7 +333,7 @@ def get_user_by_username(user_name: str) -> Optional[dict[str, str | int]]:
 
     if user:
         try:
-            decrypted_key = cipher_suite.decrypt(user[2]).decode("utf-8")
+            decrypted_key = get_cipher_suite().decrypt(user[2]).decode("utf-8")
         except Exception as e:
             logging.error(f"Failed to decrypt API key for user {user_name}: {str(e)}")
             decrypted_key = "DECRYPTION_FAILED"
@@ -407,7 +415,7 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
             continue
 
         try:
-            decrypted_key = cipher_suite.decrypt(encrypted_key).decode().strip()
+            decrypted_key = get_cipher_suite().decrypt(encrypted_key).decode().strip()
             if decrypted_key == api_key.strip():
                 return True, "API key match found"
         except InvalidToken:
@@ -444,7 +452,7 @@ def print_stored_keys() -> None:
     for username, encrypted_key in users:
         print(f"Username: {username}, Encrypted key: {encrypted_key}")
         try:
-            decrypted_key = cipher_suite.decrypt(encrypted_key).decode()
+            decrypted_key = get_cipher_suite().decrypt(encrypted_key).decode()
             print(f"  Decrypted key: {decrypted_key}")
         except Exception as e:
             print(f"  Error decrypting key: {str(e)}")
@@ -570,14 +578,16 @@ def get_all_rag_files() -> list:
         else:
             formatted_date = str(created_at) if created_at else "N/A"
 
-        rag_files.append({
-            "id": file_id,
-            "file_name": file_name,
-            "namespace": namespace,
-            "chunk_count": chunk_count,
-            "language": language or "-",
-            "created_at": formatted_date,
-        })
+        rag_files.append(
+            {
+                "id": file_id,
+                "file_name": file_name,
+                "namespace": namespace,
+                "chunk_count": chunk_count,
+                "language": language or "-",
+                "created_at": formatted_date,
+            }
+        )
 
     return rag_files
 
@@ -728,7 +738,7 @@ def get_users_for_admin(page=1, limit=50, search=None):
     if users_raw:
         for id, username, api_key, date_valid_until, tokens in users_raw:
             try:
-                decrypted_api_key = cipher_suite.decrypt(api_key).decode()
+                decrypted_api_key = get_cipher_suite().decrypt(api_key).decode()
             except InvalidToken:
                 decrypted_api_key = "Decryption failed"
 
@@ -1021,7 +1031,7 @@ def get_user_by_id(user_id):
             id, username, api_key, date_valid_until, tokens = user_data
 
             try:
-                decrypted_api_key = cipher_suite.decrypt(api_key).decode()
+                decrypted_api_key = get_cipher_suite().decrypt(api_key).decode()
             except InvalidToken:
                 decrypted_api_key = "Decryption failed"
 
