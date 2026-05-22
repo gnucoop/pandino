@@ -8,7 +8,6 @@ import tempfile
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from typing import Any, List, Union, Optional
-import textwrap
 import logging
 import time
 import json
@@ -29,8 +28,6 @@ from flask import (
 )
 from flask_cors import CORS
 import pandas as pd
-from smolagents import CodeAgent
-from smolagents.models import LiteLLMModel
 import matplotlib
 import pymupdf4llm
 import bcrypt
@@ -38,7 +35,6 @@ import psutil
 
 # === Local modules ===
 from agent_manager import getAgent, createAgent, deleteAgent
-from retriever_tool import RetrieverTool
 from datachat.output_normalizer import normalize_datachat_response
 from datachat.dataset_loader import load_csv_to_dataframe
 from datachat.engine_output_adapter import (
@@ -88,13 +84,12 @@ from ai import (
 )
 from audio_form_service import audioFormCompilation, audioFormPromptBuild
 from completion_service import complete_chat, CompletionRequest
-from prompt_utils import load_prompt, render_prompt
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult, setup_agent_logger
 from utils.runtime_logging import setup_datachat_runtime_logger
 from dotenv import load_dotenv
 from config import load_config, AppConfig, PROVIDER_API_KEY_MAP
-from llm.litellm_factory import build_litellm_model
+from agentchat_service import run_agentchat
 
 load_dotenv()  # Load environment variables from .env file
 config: AppConfig = load_config()
@@ -940,123 +935,17 @@ def agentchat() -> Response | tuple[Response, int]:
                 403,
             )
 
-        # === DYNAMIC PROMPT (COMPASS AI TUTOR) ===
-
-        default_agentchat_prompt = textwrap.dedent("""\
-            You are "Compass AI Tutor", an assistant embedded in the Compass training platform.
-
-            PURPOSE
-            - Answer user questions about topics available in the selected namespace: "{namespace}".
-            - Use ONLY the information retrieved via the `retriever` tool. Do NOT rely on your general pre-trained knowledge.
-            - Always call the retriever BEFORE answering. If the first retrieval is insufficient, try again with semantically different queries.
-
-            INPUTS
-            - User question: "{user_question}"
-
-            INSTRUCTIONS
-            1) Read all retrieved context passages and synthesize a clear, technically-accurate answer in the language indicated by the variable {language}.
-            2) Maintain a cordial but neutral and technical tone (no hype, no speculation).
-            3) After the answer, produce 2–3 suggested follow-up questions (in the language indicated by the variable {language}) that the user might ask to deepen understanding.
-            4) OUTPUT FORMAT: return a VALID JSON object with exactly these top-level fields:
-            - "answer": string
-            - "follow_ups": array of strings
-            5) If no context passages are retrieved or they are empty, return a valid JSON object with the following structure:
-            - "answer": "Mi dispiace, non ho trovato informazioni sufficienti nel materiale disponibile per rispondere con precisione.",
-            - "follow_ups": []
-
-            LANGUAGE
-            - Always respond in the language indicated by the variable {language}.
-        """)
-
-        # === MODEL AND PROVIDER NORMALIZATION ===
-
-        provider = config.models.completion_model_provider
-        configured_model = config.models.completion_model_agent_chat
-
-        if not configured_model:
-            raise ValueError("COMPLETION_MODEL_AGENT_CHAT is not configured.")
-
-        # Model used in database logs and cost accounting
-        model_clean = configured_model
-
-        # === MODEL AND TOOL INITIALIZATION ===
-
-        llm = build_litellm_model(
-            provider=provider,
-            configured_model=configured_model,
-            temperature=0,
-        )
-
-        retriever_tool = RetrieverTool(
-            namespace=namespace,
-            embedding_provider=config.models.completion_embedding_model_provider,
-            embedding_model=config.models.completion_embedding_model,
-            top_k=config.rag.top_k,
-            min_sim=config.rag.min_sim,
-        )
-
-        agent = CodeAgent(
-            tools=[retriever_tool],
-            model=llm,
-            max_steps=5,
-            additional_authorized_imports=["json"],
-        )
-
-        # EXTRACTING LAST USER MESSAGE
-        user_message = chat[-1]
-
-        # Dynamic prompt retrieval:
-        base_prompt_template = load_prompt(
-            "compass_agentchat_system", default_text=default_agentchat_prompt
-        )
-
-        # Rendering the prompt with dynamic variables (namespace, user_question, language)
-        system_prompt = render_prompt(
-            base_prompt_template,
-            namespace=namespace,
-            user_question=user_message,
-            language=language,
-        )
-
-        # === AGENT EXECUTION AND TIME MEASUREMENT ===
-        start_time = time.time()
-        app.logger.info(f"[agentchat] Executing agent message='{user_message[:60]}...'")
-
-        result = agent.run(
-            user_message,
-            additional_args={"system_prompt": system_prompt},
-            return_full_result=True,
-        )
-
-        duration_ms = round((time.time() - start_time) * 1000, 2)
-        app.logger.debug(f"[agentchat] Run completed in {duration_ms} ms")
-
-        # === RESULT SERIALIZATION ===
-
-        payload = serialize_runresult(result)
-
-        # Ensure the frontend never receives an empty answer on exhausted runs.
-
-        no_answer_fallback = (
-            "Mi dispiace, non ho trovato informazioni sufficienti nel "
-            "materiale disponibile per rispondere con precisione."
-        )
-
-        if not str(payload.get("answer", "")).strip():
-            payload["answer"] = no_answer_fallback
-        payload["metrics"][
-            "duration_ms"
-        ] = duration_ms  # aggiunta durata misurata lato Flask
-
-        # === STRUCTURED LOGGING ===
-
-        log_runresult(
-            result,
-            user=r["username"],
+        result = run_agentchat(
+            chat=chat,
             namespace=namespace,
             language=language,
-            question=user_message,
+            username=r["username"],
+            config=config,
         )
+        payload = result["payload"]
+        model_clean = result["model"]
+        provider = result["provider"]
+        duration_ms = payload.get("metrics", {}).get("duration_ms", 0)
 
         log_id: Optional[int] = None
 
@@ -1109,6 +998,10 @@ def agentchat() -> Response | tuple[Response, int]:
             payload["log_id"] = log_id
 
         return jsonify(payload), 200
+
+    except RuntimeError as e:
+        app.logger.error(f"[agentchat] Runtime error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
     except Exception as e:
         import traceback
