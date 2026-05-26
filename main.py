@@ -46,6 +46,7 @@ from rag_ingestion_service import process_rag_file
 from document_comparison_service import compare_documents
 from document_text_service import extract_and_normalize_document, DocumentInput
 import database_pg
+import vector_store
 from database_pg import (
     edit_tokens,
     validate_api_key,
@@ -94,6 +95,7 @@ from agentchat_service import run_agentchat
 load_dotenv()  # Load environment variables from .env file
 config: AppConfig = load_config()
 database_pg.init(config)
+vector_store.init(config)
 
 # Initialize the Flask application
 app = Flask(__name__)
@@ -486,8 +488,10 @@ def startChat() -> Response | tuple[Response, int]:
     # Read the data from the provided CSV file
     data = load_csv_to_dataframe(request_file)
 
+    provider_api_key = os.getenv(PROVIDER_API_KEY_MAP.get(llm_type, ""))
+
     # Initialize the language model based on the provided type
-    llm = choose_llm(llm_type, model_name)
+    llm = choose_llm(llm_type, model_name, api_key=provider_api_key)
 
     # Initialize the agent with the data and configuration
     try:

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Any, cast
+from typing import List, Any, cast, Optional
 import base64
 import hashlib
 import os
@@ -7,21 +7,19 @@ import re
 import logging
 import uuid
 from pinecone import Pinecone
-from dotenv import load_dotenv
 
+from config import AppConfig
 from database_pg import table_exists, pgvector_maui_id_exists
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_postgres import PGEngine, PGVectorStore
 
-load_dotenv()
-
-PGUSER = os.environ["PGUSER"]
-PGPWD = os.environ["PGPWD"]
-PGHOST = os.environ["PGHOST"]
-PGDB = os.environ["PGDB"]
-PGPORT = os.getenv("PG_PORT", "5432")
-schema = os.environ.get("MAUI_SCHEMA", "public")
+PGUSER: Optional[str] = None
+PGPWD: Optional[str] = None
+PGHOST: Optional[str] = None
+PGDB: Optional[str] = None
+PGPORT: Optional[str] = None
+schema: Optional[str] = None
 
 
 class VectorStore(ABC):
@@ -39,7 +37,20 @@ class VectorStore(ABC):
         pass
 
 
+def init(config: AppConfig) -> None:
+    """Initialise module-level globals from AppConfig. Must be called once at startup."""
+    global PGUSER, PGPWD, PGHOST, PGDB, PGPORT, schema
+    PGUSER = config.database.user
+    PGPWD = config.database.password
+    PGHOST = config.database.host
+    PGDB = config.database.db
+    PGPORT = config.database.port
+    schema = config.database.schema
+
+
 def create_pgvector_engine() -> PGEngine:
+    if PGHOST is None:
+        raise RuntimeError("vector_store.init() must be called before use.")
     connection_string = (
         f"postgresql+psycopg://{PGUSER}:{PGPWD}@{PGHOST}:{PGPORT}/{PGDB}"
     )
@@ -50,6 +61,8 @@ def ensure_pgvector_namespace_ready(
     embeddings: Embeddings,
     table_name: str,
 ) -> None:
+    if schema is None:
+        raise RuntimeError("vector_store.init() must be called before use.")
     normalized_table_name = normalize_table_name(table_name)
 
     engine = create_pgvector_engine()
