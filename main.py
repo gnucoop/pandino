@@ -817,7 +817,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
             info=r.get("info", []),
             chat=r["chat"],
         )
-        namespace = r.get("namespace", "")
+        namespace = r.get("namespace") or config.rag.default_namespace
 
         # Scelta modelli
         llm_type = config.models.completion_model_provider or "google"
@@ -835,7 +835,14 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
         store = MauiVectorStore(embeddings, namespace)
         language = r.get("language", "ENG")
         resp = complete_chat(
-            chat_request, store, llm_type, model, language, api_key=provider_api_key
+            chat_request,
+            store,
+            llm_type,
+            model,
+            language,
+            api_key=provider_api_key,
+            top_k=config.rag.top_k,
+            min_sim=config.rag.min_sim,
         )
 
         if resp["answer"] or resp["vectors"]:
