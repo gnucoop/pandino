@@ -67,6 +67,8 @@ def complete_chat(
     model: str,
     language: str = "ENG",
     api_key: str | None = None,
+    top_k: int = 5,
+    min_sim: float = 0.5,
 ) -> CompletionServiceResult:
     """
     Perform a RAG-based chat completion using a vector store for contextual retrieval.
@@ -83,6 +85,8 @@ def complete_chat(
     :param language: ISO 3166-1 alpha-3 language code for the reply language.
         Defaults to "ENG".
     :param api_key: Optional API key override. Falls back to environment variables if not provided.
+    :param top_k: Number of top similar vectors to retrieve. Defaults to 5.
+    :param min_sim: Minimum similarity threshold for returned vectors. Defaults to 0.5.
     :return: CompletionServiceResult with the answer, source vectors, token usage,
         and a flag indicating whether the model reported no relevant information.
     :raises RuntimeError: If the chat history is empty or invalid, if vector
@@ -101,7 +105,9 @@ def complete_chat(
     vectors: list[dict[str, Any]] = []
 
     try:
-        vectors = store.find_similar_vectors(text=question, top_k=5, min_similarity=0.5)
+        vectors = store.find_similar_vectors(
+            text=question, top_k=top_k, min_similarity=min_sim
+        )
         logging.info(f"Found {len(vectors)} relevant paragraphs")
     except Exception as e:
         raise RuntimeError(f"Vector retrieval failed: {str(e)}")
