@@ -10,7 +10,7 @@ import logging
 import pandas as pd
 
 from config import AppConfig
-from database_methods import (
+from infrastructure.database_methods import (
     build_get_user_by_username_query,
     build_add_user_query,
     build_remove_user_query,

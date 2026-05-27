@@ -4,7 +4,7 @@ from typing import Any
 
 import pandas as pd
 
-from file_manager import fileToBase64, isImageFilePath
+from infrastructure.file_manager import fileToBase64, isImageFilePath
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -6,8 +6,8 @@ from smolagents import CodeAgent
 
 from config import AppConfig
 from llm.litellm_factory import build_litellm_model
-from retriever_tool import RetrieverTool
-from prompt_utils import load_prompt, render_prompt
+from infrastructure.retriever_tool import RetrieverTool
+from infrastructure.prompt_utils import load_prompt, render_prompt
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult
 

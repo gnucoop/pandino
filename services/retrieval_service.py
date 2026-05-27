@@ -15,8 +15,8 @@ All configuration parameters must be passed explicitly by the caller.
 import logging
 from typing import List, Dict, Any
 
-from vector_store import MauiVectorStore
-from ai import choose_emb_model
+from infrastructure.vector_store import MauiVectorStore
+from infrastructure.ai import choose_emb_model
 
 
 def retrieve_from_collection(

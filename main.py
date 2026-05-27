@@ -34,20 +34,20 @@ import bcrypt
 import psutil
 
 # === Local modules ===
-from agent_manager import getAgent, createAgent, deleteAgent
+from infrastructure.agent_manager import getAgent, createAgent, deleteAgent
 from datachat.output_normalizer import normalize_datachat_response
 from datachat.dataset_loader import load_csv_to_dataframe
 from datachat.engine_output_adapter import (
     adapt_engine_output,
     consume_adapter_fallback_used,
 )
-from vector_store import MauiVectorStore
-from rag_ingestion_service import process_rag_file
-from document_comparison_service import compare_documents
-from document_text_service import extract_and_normalize_document, DocumentInput
-import database_pg
-import vector_store
-from database_pg import (
+from infrastructure.vector_store import MauiVectorStore
+from services.rag_ingestion_service import process_rag_file
+from services.document_comparison_service import compare_documents
+from services.document_text_service import extract_and_normalize_document, DocumentInput
+import infrastructure.database_pg as database_pg
+import infrastructure.vector_store as vector_store
+from infrastructure.database_pg import (
     edit_tokens,
     validate_api_key,
     get_users_for_admin,
@@ -75,23 +75,23 @@ from database_pg import (
     get_all_rag_files,
 )
 
-from dino import dino_authenticate
-from external_auth import external_authenticate
-from ai import (
+from infrastructure.dino import dino_authenticate
+from infrastructure.external_auth import external_authenticate
+from infrastructure.ai import (
     describe_image,
     choose_llm,
     choose_emb_model,
     whisper_response,
 )
-from audio_form_service import audioFormCompilation, audioFormPromptBuild
-from completion_service import complete_chat, CompletionRequest
+from services.audio_form_service import audioFormCompilation, audioFormPromptBuild
+from services.completion_service import complete_chat, CompletionRequest
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult, setup_agent_logger
 from utils.runtime_logging import setup_datachat_runtime_logger
 from dotenv import load_dotenv
 from config import load_config, AppConfig, PROVIDER_API_KEY_MAP
-from agentchat_service import run_agentchat
-from prompt_service import reply_to_prompt
+from services.agentchat_service import run_agentchat
+from services.prompt_service import reply_to_prompt
 
 load_dotenv()  # Load environment variables from .env file
 config: AppConfig = load_config()

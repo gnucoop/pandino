@@ -9,7 +9,7 @@ import uuid
 from pinecone import Pinecone
 
 from config import AppConfig
-from database_pg import table_exists, pgvector_maui_id_exists
+from infrastructure.database_pg import table_exists, pgvector_maui_id_exists
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_postgres import PGEngine, PGVectorStore

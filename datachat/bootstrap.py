@@ -1,7 +1,7 @@
 
 import textwrap
 import pandas as pd
-from prompt_utils import load_prompt, render_prompt
+from infrastructure.prompt_utils import load_prompt, render_prompt
 
 
 def build_language_instruction(lang: str) -> str:

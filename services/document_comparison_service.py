@@ -1,8 +1,8 @@
 import json
 from typing import TypedDict
-from ai import choose_llm
-from document_text_service import NormalizedDocument
-from prompt_utils import load_prompt
+from infrastructure.ai import choose_llm
+from services.document_text_service import NormalizedDocument
+from infrastructure.prompt_utils import load_prompt
 
 
 class ComparisonResult(TypedDict):
