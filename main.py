@@ -92,6 +92,7 @@ from dotenv import load_dotenv
 from config import load_config, AppConfig, PROVIDER_API_KEY_MAP
 from services.agentchat_service import run_agentchat
 from services.prompt_service import reply_to_prompt
+from routes.system import system_bp
 
 load_dotenv()  # Load environment variables from .env file
 config: AppConfig = load_config()
@@ -100,6 +101,7 @@ vector_store.init(config)
 
 # Initialize the Flask application
 app = Flask(__name__)
+app.register_blueprint(system_bp)
 # origins=["http://localhost:4200"]
 CORS(app)
 
@@ -1544,23 +1546,6 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
     return jsonify(result["content"]), 200
 
 
-# Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
-@app.route("/summarize", methods=["GET"])
-def summarize():
-    return "The /summarize endpoint is not yet implemented.", 501
-
-
-# Define a route for the '/summarize' endpoint that returns a "not yet implemented" message
-@app.route("/categorize", methods=["GET"])
-def categorize():
-    return "The /categorize endpoint is not yet implemented.", 501
-
-
-# Define a route for the '/img-comparison' endpoint that returns a "not yet implemented" message
-@app.route("/img-comparison", methods=["GET"])
-def img_comparison():
-    return "The /img-comparison endpoint is not yet implemented.", 501
-
 
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
@@ -1996,15 +1981,6 @@ def admin_upload_rag_file():
         flash(f"Error processing file: {str(e)}", "danger")
 
     return redirect(url_for("admin_rag_files"))
-
-
-@app.route("/health")
-def health():
-    # Stato base
-    status = {
-        "status": "ok",
-    }
-    return jsonify(status)
 
 
 if __name__ == "__main__":
