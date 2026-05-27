@@ -10,9 +10,9 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 
-from ai import choose_emb_model, describe_image, whisper_response
-from database_pg import insert_rag_file
-from vector_store import (
+from infrastructure.ai import choose_emb_model, describe_image, whisper_response
+from infrastructure.database_pg import insert_rag_file
+from infrastructure.vector_store import (
     MauiVectorStore,
     ensure_pgvector_namespace_ready,
     file_id_from_text,

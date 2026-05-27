@@ -2,7 +2,7 @@ import logging
 import os
 import requests
 from dotenv import load_dotenv
-from prompt_utils import load_prompt, render_prompt
+from infrastructure.prompt_utils import load_prompt, render_prompt
 from typing import Optional
 from pydantic import SecretStr
 

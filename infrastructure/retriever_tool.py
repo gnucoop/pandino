@@ -11,7 +11,7 @@ import logging
 from typing import Any, Dict
 
 from smolagents import Tool
-from retrieval_service import retrieve_from_collection
+from services.retrieval_service import retrieve_from_collection
 
 
 class RetrieverTool(Tool):

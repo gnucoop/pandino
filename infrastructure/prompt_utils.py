@@ -1,7 +1,7 @@
 import os
 import logging
 from typing import Optional
-from database_pg import get_prompt_from_db
+from infrastructure.database_pg import get_prompt_from_db
 
 
 def load_prompt(

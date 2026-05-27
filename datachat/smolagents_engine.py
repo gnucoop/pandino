@@ -26,7 +26,7 @@ from datachat.tools.top_rows_tool import TopRowsTool
 from datachat.tools.trend_tool import TrendTool
 from datachat.tools.unique_values_tool import UniqueValuesTool
 from llm.litellm_factory import build_litellm_model
-from prompt_utils import load_prompt, render_prompt
+from infrastructure.prompt_utils import load_prompt, render_prompt
 
 runtime_logger = logging.getLogger("datachat.runtime")
 

@@ -3,10 +3,10 @@ import textwrap
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
-from vector_store import VectorStore
+from infrastructure.vector_store import VectorStore
 
-from ai import choose_llm
-from prompt_utils import load_prompt, render_prompt
+from infrastructure.ai import choose_llm
+from infrastructure.prompt_utils import load_prompt, render_prompt
 
 
 class TokenUsage(TypedDict):
