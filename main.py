@@ -37,7 +37,6 @@ from datachat.engine_output_adapter import (
     adapt_engine_output,
     consume_adapter_fallback_used,
 )
-from infrastructure.vector_store import MauiVectorStore
 from services.rag_ingestion_service import process_rag_file
 import infrastructure.database_pg as database_pg
 import infrastructure.vector_store as vector_store
@@ -68,17 +67,12 @@ from infrastructure.database_pg import (
     get_all_rag_files,
 )
 
-from infrastructure.ai import (
-    choose_llm,
-    choose_emb_model,
-)
-from services.completion_service import complete_chat, CompletionRequest
+from infrastructure.ai import choose_llm
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult, setup_agent_logger
 from utils.runtime_logging import setup_datachat_runtime_logger
 from dotenv import load_dotenv
 from config import load_config, AppConfig, PROVIDER_API_KEY_MAP
-from services.agentchat_service import run_agentchat
 from routes.system import system_bp
 from routes.auth import auth_bp
 from routes.users import users_bp
@@ -86,6 +80,7 @@ from routes.reporting import reporting_bp
 from routes.documents import documents_bp
 from routes.multimodal import multimodal_bp
 from routes.ingestion import ingestion_bp
+from routes.rag import rag_bp
 from routes.utils import assert_valid_api_key
 
 load_dotenv()  # Load environment variables from .env file
@@ -108,6 +103,7 @@ app.register_blueprint(reporting_bp)
 app.register_blueprint(documents_bp)
 app.register_blueprint(multimodal_bp)
 app.register_blueprint(ingestion_bp)
+app.register_blueprint(rag_bp)
 app.config["MAUI_CONFIG"] = (
     config  # Make Maui config available to all Blueprints via current_app
 )
@@ -497,247 +493,6 @@ def dataChat() -> Response | tuple[Response, int]:
     )
 
     return jsonify(response_payload)
-
-
-@app.route("/completion.json", methods=["POST"])
-def completion_handler() -> Union[Response, tuple[Response, int]]:
-    try:
-        r = request.get_json()
-        if not r:
-            return jsonify({"error": "No JSON data provided"}), 400
-
-        required_keys = ["chat", "username"]
-        missing_keys = [key for key in required_keys if key not in r]
-        if missing_keys:
-            return (
-                jsonify({"error": f"Missing required keys: {', '.join(missing_keys)}"}),
-                400,
-            )
-
-        api_key = request.headers.get("X-API-KEY")
-        if not api_key:
-            return jsonify({"error": "Missing X-API-KEY header"}), 400
-
-        assert_valid_api_key(api_key, r["username"])
-
-        # Token check
-        user_tokens = database_pg.get_user_tokens(r["username"])
-        if user_tokens is None:
-            return jsonify({"error": "Could not retrieve user tokens"}), 500
-
-        token_cost = int(config.completion_token_cost or "1")
-        if token_cost > user_tokens:
-            return (
-                jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
-                500,
-            )
-
-        # Request assembly
-        chat_request = CompletionRequest(
-            username=r["username"],
-            info=r.get("info", []),
-            chat=r["chat"],
-        )
-        namespace = r.get("namespace") or config.rag.default_namespace
-
-        # Scelta modelli
-        llm_type = config.models.completion_model_provider or "google"
-        model = config.models.completion_model or "gemini-2.5-flash"
-        provider_api_key = os.getenv(PROVIDER_API_KEY_MAP.get(llm_type, ""))
-        emb_llm_type = config.models.completion_embedding_model_provider or "Deepinfra"
-        emb_model = (
-            config.models.completion_embedding_model
-            or "intfloat/multilingual-e5-large-instruct"
-        )
-        emb_api_key = os.getenv(PROVIDER_API_KEY_MAP.get(emb_llm_type, ""))
-
-        embeddings = choose_emb_model(emb_llm_type, emb_model, api_key=emb_api_key)
-
-        store = MauiVectorStore(embeddings, namespace)
-        language = r.get("language", "ENG")
-        resp = complete_chat(
-            chat_request,
-            store,
-            llm_type,
-            model,
-            language,
-            api_key=provider_api_key,
-            top_k=config.rag.top_k,
-            min_sim=config.rag.min_sim,
-        )
-
-        if resp["answer"] or resp["vectors"]:
-            edit_tokens(r["username"], -token_cost)
-
-            log_id = None
-
-            user = get_user_by_username(r["username"])
-            if user:
-                user_id = user.get("id")
-                token_in = resp["token_usage"]["input_tokens"]
-                token_out = resp["token_usage"]["output_tokens"]
-                if isinstance(user_id, int) and (token_in > 0 or token_out > 0):
-                    log_id = log_token_usage(
-                        user_id=user_id,
-                        token_input=token_in,
-                        token_output=token_out,
-                        model=model,
-                        provider=llm_type,
-                    )
-
-            if resp["vectors"]:
-                for vec in resp["vectors"]:
-                    vec["similarity"] += 0.3
-
-            response_payload = {
-                "answer": resp["answer"],
-                "vectors": resp["vectors"],
-            }
-
-            if log_id is not None:
-                response_payload["log_id"] = log_id
-
-            return jsonify(response_payload), 200
-
-        return jsonify({"error": "No response from chat completion"}), 500
-
-    except Exception as e:
-        app.logger.error(f"Unexpected error in completion_handler: {str(e)}")
-        return jsonify({"error": "An unexpected error occurred"}), 500
-
-
-textContentType = {"Content-Type": "text/plain"}
-
-
-@app.route("/agentchat", methods=["POST"])
-def agentchat() -> Response | tuple[Response, int]:
-    """
-    AI endpoint based on Smolagents.
-    The agent must always use DinoRetrieverTool to retrieve context
-    before generating the response.
-    """
-    try:
-
-        # === INPUT VALIDATION ===
-
-        r = request.get_json()
-        if not r:
-            return jsonify({"error": "No JSON data provided"}), 400
-
-        required = ["chat", "username"]
-        missing = [k for k in required if k not in r]
-        if missing:
-            return (
-                jsonify({"error": f"Missing required keys: {', '.join(missing)}"}),
-                400,
-            )
-
-        api_key = request.headers.get("X-API-KEY")
-        if not api_key:
-            return jsonify({"error": "Missing X-API-KEY header"}), 400
-
-        # === Validate the provided API key for the given user email ===
-
-        assert_valid_api_key(api_key, r["username"])
-
-        # === PARAMETERS WITH FALLBACK ===
-
-        chat = r["chat"]
-        if not isinstance(chat, list) or not chat:
-            return jsonify({"error": "Invalid 'chat': expected non-empty list"}), 400
-
-        namespace = r.get("namespace") or config.rag.default_namespace
-        language = r.get("language") or "ITA"
-        token_cost = config.completion_token_cost
-
-        app.logger.info(
-            f"[agentchat] user={r['username']} ns={namespace} lang={language}"
-        )
-
-        # === TOKEN CHECK ===
-        user_tokens = database_pg.get_user_tokens(r["username"])
-        if user_tokens is None:
-            return jsonify({"error": "Could not retrieve user tokens"}), 500
-        if token_cost > user_tokens:
-            return (
-                jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
-                403,
-            )
-
-        result = run_agentchat(
-            chat=chat,
-            namespace=namespace,
-            language=language,
-            username=r["username"],
-            config=config,
-        )
-        payload = result["payload"]
-        model_clean = result["model"]
-        provider = result["provider"]
-        duration_ms = payload.get("metrics", {}).get("duration_ms", 0)
-
-        log_id: Optional[int] = None
-
-        # === DATABASE TOKEN USAGE LOGGING ===
-
-        try:
-            # Retrieve user_id from username
-            user = database_pg.get_user_by_username(r["username"])
-            if not user:
-                raise ValueError(f"User '{r['username']}' not found in DB")
-
-            user_id = user.get("id")
-            if not isinstance(user_id, int):
-                raise TypeError(f"Invalid user_id: {user_id}")
-
-            # Extract token usage from payload
-            token_metrics = payload.get("metrics", {}).get("token_usage", {})
-            token_input = token_metrics.get("input", 0)
-            token_output = token_metrics.get("output", 0)
-
-            # Use clean model name from earlier normalization
-            model = model_clean
-
-            # Log into PostgreSQL
-            log_id = log_token_usage(
-                user_id=user_id,
-                token_input=token_input,
-                token_output=token_output,
-                model=model,
-                provider=provider,
-            )
-
-        except Exception as e:
-            app.logger.error(f"[agentchat] Failed to log token usage: {e}")
-
-        # === TOKEN MANAGEMENT ===
-
-        answer_text = payload.get("answer", "")
-        if answer_text:
-            edit_tokens(r["username"], -token_cost)
-
-        app.logger.info(
-            f"[agentchat] done user={r['username']} duration={duration_ms}ms "
-            f"tools={len(payload.get('tool_calls', []))} "
-            f"vectors={len(payload.get('vectors', []))} "
-            f"fu={len(payload.get('follow_ups', []))}"
-        )
-
-        if log_id is not None:
-            payload["log_id"] = log_id
-
-        return jsonify(payload), 200
-
-    except RuntimeError as e:
-        app.logger.error(f"[agentchat] Runtime error: {str(e)}")
-        return jsonify({"error": str(e)}), 500
-
-    except Exception as e:
-        import traceback
-
-        app.logger.error(f"[agentchat] Unexpected error: {str(e)}")
-        app.logger.error(traceback.format_exc())
-        return jsonify({"error": "An unexpected error occurred"}), 500
 
 
 # Define a route for the '/admin/costs' endpoint
