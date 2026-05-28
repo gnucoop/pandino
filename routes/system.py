@@ -24,3 +24,8 @@ def categorize():
 @system_bp.route("/img-comparison", methods=["GET"])
 def img_comparison():
     return "The /img-comparison endpoint is not yet implemented.", 501
+
+
+@system_bp.route("/")
+def welcome() -> str:
+    return "Welcome to Pandino! This is the root endpoint."
