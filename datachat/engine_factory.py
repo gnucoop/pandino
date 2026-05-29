@@ -4,7 +4,6 @@ from typing import Any
 import pandas as pd
 
 from datachat.engine_interface import DataChatEngine
-from datachat.pandasai_engine import PandasAIEngine
 from datachat.smolagents_engine import SmolagentsEngine
 
 
@@ -17,23 +16,8 @@ def create_engine(
     data: pd.DataFrame,
     open_charts: bool = False,
 ) -> DataChatEngine:
-    """
-    Create a DataChatEngine instance.
-
-    AS-IS: only 'pandasai' is supported.
-    Future: add 'smolagents' here without touching endpoints or stores.
-    """
     normalized = (engine_type or "").lower().strip()
-    if normalized in ("pandasai", ""):
-        return PandasAIEngine(
-            api_key=api_key,
-            user_name=user_name,
-            llm=llm,
-            data=data,
-            open_charts=open_charts,
-        )
-
-    if normalized == "smolagents":
+    if normalized in ("smolagents", ""):
         return SmolagentsEngine(
             api_key=api_key,
             user_name=user_name,

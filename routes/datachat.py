@@ -111,7 +111,7 @@ def startChat() -> Response | tuple[Response, int]:
 
     # Initialize the agent with the data and configuration
     try:
-        engine = createAgent(api_key, data, llm, user_name)
+        engine = createAgent(api_key, data, llm, user_name, engine_type=current_app.config["MAUI_CONFIG"].datachat.engine)
 
         if engine is None:
             return jsonify({"error": "Agent creation failed"}), 500

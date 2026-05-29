@@ -19,7 +19,7 @@ def test_load_config_success():
         **REQUIRED_ENV,
         "DATACHAT_MODEL": "my/datachat-model",
         "RAG_TOP_K": "5",
-        "DATACHAT_ENGINE": "pandasai",
+        "DATACHAT_ENGINE": "smolagents",
         "COMPLETION_TOKEN_COST": "3",
         "PG_PORT": "5433",
     }
@@ -32,7 +32,7 @@ def test_load_config_success():
     assert cfg.admin.username == "admin"
     assert cfg.models.datachat_model == "my/datachat-model"
     assert cfg.rag.top_k == 5
-    assert cfg.datachat.engine == "pandasai"
+    assert cfg.datachat.engine == "smolagents"
     assert cfg.completion_token_cost == 3
 
 
