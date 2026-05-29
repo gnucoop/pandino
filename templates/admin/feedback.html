@@ -9,7 +9,7 @@
     <!-- Filter -->
     <!-- Filter -->
     <div class="btn-toolbar mb-2 mb-md-0">
-        <form action="{{ url_for('admin_feedback') }}" method="get" class="d-flex align-items-center gap-2">
+        <form action="{{ url_for('admin.admin_feedback') }}" method="get" class="d-flex align-items-center gap-2">
             <!-- Source Filter -->
             <div class="d-flex align-items-center">
                 <label class="me-2 small">Source:</label>
@@ -200,11 +200,11 @@
                         <ul class="pagination justify-content-center mb-0">
                             <li class="page-item {{ 'disabled' if pagination.page == 1 else '' }}">
                                 <a class="page-link"
-                                    href="{{ url_for('admin_feedback', page=1, source=current_filter, start_date=current_start_date, end_date=current_end_date) }}">&laquo; First</a>
+                                    href="{{ url_for('admin.admin_feedback', page=1, source=current_filter, start_date=current_start_date, end_date=current_end_date) }}">&laquo; First</a>
                             </li>
                             <li class="page-item {{ 'disabled' if pagination.page == 1 else '' }}">
                                 <a class="page-link"
-                                    href="{{ url_for('admin_feedback', page=pagination.page-1, source=current_filter, start_date=current_start_date, end_date=current_end_date) }}">Previous</a>
+                                    href="{{ url_for('admin.admin_feedback', page=pagination.page-1, source=current_filter, start_date=current_start_date, end_date=current_end_date) }}">Previous</a>
                             </li>
 
                             <li class="page-item disabled">
@@ -214,11 +214,11 @@
 
                             <li class="page-item {{ 'disabled' if pagination.page == pagination.total_pages else '' }}">
                                 <a class="page-link"
-                                    href="{{ url_for('admin_feedback', page=pagination.page+1, source=current_filter, start_date=current_start_date, end_date=current_end_date) }}">Next</a>
+                                    href="{{ url_for('admin.admin_feedback', page=pagination.page+1, source=current_filter, start_date=current_start_date, end_date=current_end_date) }}">Next</a>
                             </li>
                             <li class="page-item {{ 'disabled' if pagination.page == pagination.total_pages else '' }}">
                                 <a class="page-link"
-                                    href="{{ url_for('admin_feedback', page=pagination.total_pages, source=current_filter, start_date=current_start_date, end_date=current_end_date) }}">Last &raquo;</a>
+                                    href="{{ url_for('admin.admin_feedback', page=pagination.total_pages, source=current_filter, start_date=current_start_date, end_date=current_end_date) }}">Last &raquo;</a>
                             </li>
                         </ul>
                     </nav>

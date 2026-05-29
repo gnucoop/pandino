@@ -9,7 +9,7 @@
 
 <div class="card">
     <div class="card-body">
-        <form method="POST" action="{{ url_for('admin_edit_cost', cost_id=cost.id) }}">
+        <form method="POST" action="{{ url_for('admin.admin_edit_cost', cost_id=cost.id) }}">
             <div class="row mb-3">
                 <div class="col-md-6">
                     <label for="provider" class="form-label">Provider</label>
@@ -46,7 +46,7 @@
                 </div>
             </div>
             <div class="d-flex justify-content-between">
-                <a href="{{ url_for('admin_costs') }}" class="btn btn-secondary">Cancel</a>
+                <a href="{{ url_for('admin.admin_costs') }}" class="btn btn-secondary">Cancel</a>
                 <button type="submit" class="btn btn-primary">Save Changes</button>
             </div>
         </form>
