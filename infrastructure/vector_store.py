@@ -1,12 +1,9 @@
 from abc import ABC, abstractmethod
-from typing import List, Any, cast, Optional
+from typing import List, Optional
 import base64
 import hashlib
-import os
 import re
-import logging
 import uuid
-from pinecone import Pinecone
 
 from config import AppConfig
 from infrastructure.database_pg import table_exists, pgvector_maui_id_exists
@@ -162,86 +159,6 @@ class MauiVectorStore(VectorStore):
         except Exception as e:
             raise RuntimeError(f"Error in store_paragraphs (V2): {str(e)}")
 
-
-class PineconeStore(VectorStore):
-    def __init__(self, embeddings: Embeddings, index_name: str, namespace: str):
-        super().__init__(embeddings)
-        pc = Pinecone(api_key=os.environ.get("PINECONE_API_KEY"))
-        self.index = pc.Index(index_name)
-        self.namespace = namespace
-
-    def find_similar_vectors(
-        self, text: str, top_k: int, min_similarity: float
-    ) -> List[dict]:
-        try:
-            vec = self.embeddings.embed_query(text)
-            resp = self.index.query(
-                vector=vec,
-                top_k=top_k,
-                min_similarity=min_similarity,
-                namespace=self.namespace,
-                include_metadata=True,
-            )
-            matches = getattr(resp, "matches", [])
-            if not matches:
-                raise RuntimeError(
-                    "Pinecone query result does not contain 'matches' attribute."
-                )
-            logging.info(
-                f"Vector Database query completed, found {len(matches)} matches"
-            )
-
-            vectors = []
-            for vec in matches:
-                vectors.append(
-                    {
-                        "similarity": vec.score,
-                        "metadata": vec.metadata,
-                    }
-                )
-            return vectors
-        except Exception as e:
-            raise RuntimeError(f"Error in find_similar_vectors: {str(e)}")
-
-    def store_paragraphs(self, paragraphs: List[Document]) -> None:
-        batch_size = 100
-        for start in range(0, len(paragraphs), batch_size):
-            end = min(start + batch_size, len(paragraphs))
-            batch = paragraphs[start:end]
-
-            ids = [paragraph_id(par, self.namespace) for par in batch]
-
-            # Check if batch is already in index, to avoid recomputing embeddings
-            try:
-                fetch_response = self.index.fetch(ids=ids, namespace=self.namespace)
-                if fetch_response and len(fetch_response.vectors) == len(ids):
-                    print("Batch already present")
-                    continue
-            except Exception:
-                pass
-
-            vectors = self.embeddings.embed_documents(
-                [par.page_content for par in batch]
-            )
-            logging.info(f"Successfully created {len(vectors)} embeddings")
-
-            pc_vectors: list[dict] = [
-                {
-                    "id": ids[i],
-                    "values": vectors[i],
-                    "metadata": batch[i].metadata | {"text": batch[i].page_content},
-                }
-                for i in range(len(batch))
-            ]
-            try:
-                upsert_response = self.index.upsert(
-                    vectors=cast(Any, pc_vectors), namespace=self.namespace
-                )
-                logging.info(
-                    f"Successfully upserted {upsert_response['upserted_count']} vectors"
-                )
-            except Exception as e:
-                raise RuntimeError(f"Error upserting vectors: {e}")
 
 
 def split_text(document: str, paragraph_len: int = 900) -> list[str]:

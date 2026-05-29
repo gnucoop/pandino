@@ -94,8 +94,6 @@ class ApiKeysConfig:
     deepinfra_api_key: Optional[str] = None
     openrouter_api_key: Optional[str] = None
     pandasai_api_key: Optional[str] = None
-    pinecone_api_key: Optional[str] = None
-
     # LangChain / LangSmith
     langchain_api_key: Optional[str] = None
     langchain_project: Optional[str] = None
@@ -241,7 +239,6 @@ def load_config() -> AppConfig:
         deepinfra_api_key=os.environ.get("DEEPINFRA_API_KEY"),
         openrouter_api_key=os.environ.get("OPENROUTER_API_KEY"),
         pandasai_api_key=os.environ.get("PANDASAI_API_KEY"),
-        pinecone_api_key=os.environ.get("PINECONE_API_KEY"),
         langchain_api_key=os.environ.get("LANGCHAIN_API_KEY"),
         langchain_project=os.environ.get("LANGCHAIN_PROJECT"),
         langchain_endpoint=os.environ.get(
