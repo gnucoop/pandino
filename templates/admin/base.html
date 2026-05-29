@@ -44,48 +44,48 @@
           <ul class="nav flex-column">
             <li class="nav-item">
               <a class="nav-link {% if request.endpoint == 'admin_dashboard' %}active{% endif %}"
-                href="{{ url_for('admin_dashboard') }}">
+                href="{{ url_for('admin.admin_dashboard') }}">
                 <i class="fas fa-tachometer-alt me-2"></i> Dashboard
               </a>
             </li>
             <li class="nav-item">
               <a class="nav-link {% if request.endpoint == 'admin_users' %}active{% endif %}"
-                href="{{ url_for('admin_users') }}">
+                href="{{ url_for('admin.admin_users') }}">
                 <i class="fas fa-users me-2"></i> Users
               </a>
             </li>
             <li class="nav-item">
               <a class="nav-link {% if request.endpoint == 'admin_logs' %}active{% endif %}"
-                href="{{ url_for('admin_logs') }}">
+                href="{{ url_for('admin.admin_logs') }}">
                 <i class="fas fa-list me-2"></i> Logs
               </a>
             </li>
             <li class="nav-item">
               <a class="nav-link {% if request.endpoint == 'admin_feedback' %}active{% endif %}"
-                href="{{ url_for('admin_feedback') }}">
+                href="{{ url_for('admin.admin_feedback') }}">
                 <i class="fas fa-comments me-2"></i> Feedback
               </a>
             </li>
             <li class="nav-item">
               <a class="nav-link {% if request.endpoint == 'admin_prompts' %}active{% endif %}"
-                href="{{ url_for('admin_prompts') }}">
+                href="{{ url_for('admin.admin_prompts') }}">
                 <i class="fas fa-comment-alt me-2"></i> Prompts
               </a>
             </li>
             <li class="nav-item">
               <a class="nav-link {% if request.endpoint == 'admin_rag_files' %}active{% endif %}"
-                href="{{ url_for('admin_rag_files') }}">
+                href="{{ url_for('admin.admin_rag_files') }}">
                 <i class="fas fa-database me-2"></i> RAG Files
               </a>
             </li>
             <li class="nav-item">
               <a class="nav-link {% if request.endpoint == 'admin_costs' %}active{% endif %}"
-                href="{{ url_for('admin_costs') }}">
+                href="{{ url_for('admin.admin_costs') }}">
                 <i class="fas fa-dollar-sign me-2"></i> Costs
               </a>
             </li>
             <li class="nav-item">
-              <a class="nav-link" href="{{ url_for('admin_logout') }}">
+              <a class="nav-link" href="{{ url_for('admin.admin_logout') }}">
                 <i class="fas fa-sign-out-alt me-2"></i> Logout
               </a>
             </li>

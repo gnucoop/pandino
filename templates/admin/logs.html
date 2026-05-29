@@ -5,7 +5,7 @@
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h1 class="mb-0">API Usage Logs</h1>
-    <form class="d-flex gap-2 align-items-center" method="GET" action="{{ url_for('admin_logs') }}">
+    <form class="d-flex gap-2 align-items-center" method="GET" action="{{ url_for('admin.admin_logs') }}">
         <input type="hidden" name="search" value="{{ current_search }}">
         <div class="input-group">
             <span class="input-group-text">Start</span>
@@ -98,7 +98,7 @@
                 <h5 class="mb-0"><i class="fas fa-list me-2"></i>Recent Logs</h5>
             </div>
             <div class="col-md-6">
-                <form method="GET" action="{{ url_for('admin_logs') }}" class="input-group">
+                <form method="GET" action="{{ url_for('admin.admin_logs') }}" class="input-group">
                     <input type="hidden" name="start_date" value="{{ current_start_date }}">
                     <input type="hidden" name="end_date" value="{{ current_end_date }}">
                     <span class="input-group-text"><i class="fas fa-search"></i></span>
@@ -159,11 +159,11 @@
             <ul class="pagination justify-content-center">
                 <li class="page-item {{ 'disabled' if pagination.page == 1 else '' }}">
                     <a class="page-link"
-                        href="{{ url_for('admin_logs', page=1, start_date=current_start_date, end_date=current_end_date, search=current_search) }}">&laquo; First</a>
+                        href="{{ url_for('admin.admin_logs', page=1, start_date=current_start_date, end_date=current_end_date, search=current_search) }}">&laquo; First</a>
                 </li>
                 <li class="page-item {{ 'disabled' if pagination.page == 1 else '' }}">
                     <a class="page-link"
-                        href="{{ url_for('admin_logs', page=pagination.page-1, start_date=current_start_date, end_date=current_end_date, search=current_search) }}">Previous</a>
+                        href="{{ url_for('admin.admin_logs', page=pagination.page-1, start_date=current_start_date, end_date=current_end_date, search=current_search) }}">Previous</a>
                 </li>
 
                 <li class="page-item disabled">
@@ -172,11 +172,11 @@
 
                 <li class="page-item {{ 'disabled' if pagination.page == pagination.total_pages else '' }}">
                     <a class="page-link"
-                        href="{{ url_for('admin_logs', page=pagination.page+1, start_date=current_start_date, end_date=current_end_date, search=current_search) }}">Next</a>
+                        href="{{ url_for('admin.admin_logs', page=pagination.page+1, start_date=current_start_date, end_date=current_end_date, search=current_search) }}">Next</a>
                 </li>
                 <li class="page-item {{ 'disabled' if pagination.page == pagination.total_pages else '' }}">
                     <a class="page-link"
-                        href="{{ url_for('admin_logs', page=pagination.total_pages, start_date=current_start_date, end_date=current_end_date, search=current_search) }}">Last &raquo;</a>
+                        href="{{ url_for('admin.admin_logs', page=pagination.total_pages, start_date=current_start_date, end_date=current_end_date, search=current_search) }}">Last &raquo;</a>
                 </li>
             </ul>
         </nav>
