@@ -149,3 +149,5 @@ yarl==1.20.1
 zstandard==0.23.0
 bcrypt==4.2.0
 psutil==7.2.1
+python-docx==1.2.0
+striprtf==0.0.32
