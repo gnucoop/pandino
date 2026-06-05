@@ -1,12 +1,11 @@
 import base64
 import os
-import tempfile
 from typing import Union
 
 from flask import Blueprint, Response, current_app, jsonify, request
 
-import pymupdf4llm
 from config import PROVIDER_API_KEY_MAP
+from services.document_text_service import extract_and_normalize_document, DocumentInput
 import infrastructure.database_pg as database_pg
 from infrastructure.ai import describe_image, whisper_response
 from infrastructure.database_pg import edit_tokens, log_token_usage
@@ -59,14 +58,25 @@ def whisper_parse() -> Union[Response, tuple[Response, int]]:
             )
             return jsonify({"error": "Whisper transcription failed"}), 500
 
-    if file.mimetype == "application/pdf":
+    filename = file.filename or ""
+    ext = os.path.splitext(filename.lower())[1]
+
+    if ext in (".pdf", ".docx", ".rtf"):
         try:
-            with tempfile.NamedTemporaryFile(suffix=".pdf") as temp:
-                file.save(temp.name)
-                text = pymupdf4llm.to_markdown(temp.name)
-                return jsonify({"text": text}), 200
+            doc_input: DocumentInput = {
+                "source_type": "file",
+                "content": file,
+                "filename": filename,
+                "role": None,
+            }
+            result = extract_and_normalize_document(doc_input)
+            return jsonify({"text": result["text"]}), 200
+        except NotImplementedError:
+            return jsonify({"error": f"Unsupported file format: {filename}"}), 415
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 422
         except Exception as e:
-            return jsonify({"error": f"Error extracting text from pdf: {str(e)}"}), 422
+            return jsonify({"error": f"Error extracting text from file: {str(e)}"}), 422
 
     if file.mimetype.startswith("image"):
         try:
