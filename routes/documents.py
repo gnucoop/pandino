@@ -1,13 +1,14 @@
 import json
 import os
 
-from flask import Blueprint, Response, jsonify, request, current_app
+from flask import Blueprint, jsonify, request, current_app
 
 from config import PROVIDER_API_KEY_MAP
 from infrastructure.database_pg import edit_tokens, log_token_usage
 import infrastructure.database_pg as database_pg
 from services.document_comparison_service import compare_documents
-from services.document_text_service import extract_and_normalize_document, DocumentInput
+from services.document_extraction_service import extract_document_text
+from services.document_text_service import DocumentInput
 from routes.utils import assert_valid_api_key
 
 documents_bp = Blueprint("documents", __name__)
@@ -29,7 +30,8 @@ def compare_docs():
     if user_tokens is None:
         return jsonify({"error": "Could not retrieve user tokens"}), 500
 
-    token_cost = current_app.config["MAUI_CONFIG"].compare_docs_token_cost
+    config = current_app.config["MAUI_CONFIG"]
+    token_cost = config.compare_docs_token_cost
     if token_cost > user_tokens:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 403
 
@@ -40,8 +42,10 @@ def compare_docs():
     text_documents_raw = request.form.get("text_documents")
     file_roles_raw = request.form.get("file_roles")
 
-    llm_type = current_app.config["MAUI_CONFIG"].models.compare_docs_provider or "Google"
-    model = current_app.config["MAUI_CONFIG"].models.compare_docs_model or "gemini-2.5-flash"
+    llm_type = config.models.compare_docs_provider or "Google"
+    model = config.models.compare_docs_model or "gemini-2.5-flash"
+    ocr_provider = config.models.vision_provider
+    ocr_model = config.models.vision_model
     provider_api_key = os.getenv(PROVIDER_API_KEY_MAP.get(llm_type, ""))
 
     if not prompt:
@@ -102,7 +106,12 @@ def compare_docs():
                 "role": text_document.get("role"),
             }
 
-            normalized = extract_and_normalize_document(doc_input)
+            normalized = extract_document_text(
+                doc_input,
+                ocr_provider=ocr_provider,
+                ocr_model=ocr_model,
+                ocr_api_key=None,
+            )
             normalized_documents.append(normalized)
 
         for index, file in enumerate(files):
@@ -115,7 +124,12 @@ def compare_docs():
                 "role": role,
             }
 
-            normalized = extract_and_normalize_document(doc_input)
+            normalized = extract_document_text(
+                doc_input,
+                ocr_provider=ocr_provider,
+                ocr_model=ocr_model,
+                ocr_api_key=None,
+            )
             normalized_documents.append(normalized)
 
         service_result = compare_documents(
@@ -149,7 +163,9 @@ def compare_docs():
             )
 
         except Exception as error:
-            current_app.logger.error(f"[compare_docs] Failed to log token usage: {error}")
+            current_app.logger.error(
+                f"[compare_docs] Failed to log token usage: {error}"
+            )
 
         edit_tokens(user_email, -token_cost)
 
