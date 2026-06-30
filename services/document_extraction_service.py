@@ -14,8 +14,9 @@ changing the public NormalizedDocument contract.
 
 import io
 import os
+from typing import TypedDict
 
-from infrastructure.ai import extract_text_from_image
+from infrastructure.ai import TokenUsage, extract_text_from_image_with_usage
 from services.document_ocr_service import render_pdf_pages_to_png
 from werkzeug.datastructures import FileStorage
 
@@ -27,6 +28,25 @@ from services.document_text_service import (
 
 
 MIN_EXTRACTED_TEXT_CHARS = 50
+
+
+class DocumentExtractionResult(TypedDict):
+    document: NormalizedDocument
+    ocr_token_usage: TokenUsage
+
+
+def _zero_token_usage() -> TokenUsage:
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+    }
+
+
+def _add_token_usage(total: TokenUsage, usage: TokenUsage) -> None:
+    total["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
+    total["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
+    total["total_tokens"] += int(usage.get("total_tokens", 0) or 0)
 
 
 def _is_pdf_filename(filename: str | None) -> bool:
@@ -79,17 +99,19 @@ def _extract_pdf_text_with_ocr(
     ocr_provider: str,
     ocr_model: str,
     ocr_api_key: str | None,
-) -> NormalizedDocument:
+) -> DocumentExtractionResult:
     rendered_pages = render_pdf_pages_to_png(pdf_bytes)
     page_texts = []
+    ocr_token_usage = _zero_token_usage()
 
     for page in rendered_pages:
-        page_text = extract_text_from_image(
+        page_result = extract_text_from_image_with_usage(
             page.image_bytes,
             ocr_provider,
             ocr_model,
             api_key=ocr_api_key,
-        ).strip()
+        )
+        page_text = page_result["text"].strip()
 
         if not page_text:
             raise ValueError(
@@ -97,24 +119,28 @@ def _extract_pdf_text_with_ocr(
             )
 
         page_texts.append(page_text)
+        _add_token_usage(ocr_token_usage, page_result["token_usage"])
 
     text = "\n\n".join(page_texts).strip()
 
     if not text:
         raise ValueError("OCR did not extract text from PDF")
 
-    return {"text": text, "filename": filename, "role": role}
+    return {
+        "document": {"text": text, "filename": filename, "role": role},
+        "ocr_token_usage": ocr_token_usage,
+    }
 
 
-def extract_document_text(
+def extract_document_text_with_metadata(
     document_input: DocumentInput,
     *,
     ocr_provider: str | None = None,
     ocr_model: str | None = None,
     ocr_api_key: str | None = None,
-) -> NormalizedDocument:
+) -> DocumentExtractionResult:
     """
-    Return a NormalizedDocument using local extraction plus optional PDF OCR.
+    Return extracted document text plus OCR token metadata.
 
     Non-file inputs keep the current direct delegation path. File inputs are
     byte-captured once, delegated to document_text_service.py through a rebuilt
@@ -122,17 +148,26 @@ def extract_document_text(
     when both provider and model are configured.
     """
     if document_input["source_type"] != "file":
-        return extract_and_normalize_document(document_input)
+        return {
+            "document": extract_and_normalize_document(document_input),
+            "ocr_token_usage": _zero_token_usage(),
+        }
 
     file = document_input.get("content")
 
     if not isinstance(file, FileStorage):
-        return extract_and_normalize_document(document_input)
+        return {
+            "document": extract_and_normalize_document(document_input),
+            "ocr_token_usage": _zero_token_usage(),
+        }
 
     filename = document_input.get("filename") or file.filename
 
     if not filename:
-        return extract_and_normalize_document(document_input)
+        return {
+            "document": extract_and_normalize_document(document_input),
+            "ocr_token_usage": _zero_token_usage(),
+        }
 
     file_bytes = file.read()
     delegated_input: DocumentInput = {
@@ -172,4 +207,24 @@ def extract_document_text(
                 ocr_api_key=ocr_api_key,
             )
 
-    return normalized
+    return {"document": normalized, "ocr_token_usage": _zero_token_usage()}
+
+
+def extract_document_text(
+    document_input: DocumentInput,
+    *,
+    ocr_provider: str | None = None,
+    ocr_model: str | None = None,
+    ocr_api_key: str | None = None,
+) -> NormalizedDocument:
+    """
+    Return a NormalizedDocument using local extraction plus optional PDF OCR.
+
+    Compatibility wrapper for callers that do not need extraction metadata.
+    """
+    return extract_document_text_with_metadata(
+        document_input,
+        ocr_provider=ocr_provider,
+        ocr_model=ocr_model,
+        ocr_api_key=ocr_api_key,
+    )["document"]

@@ -18,6 +18,17 @@ def _rendered_page(page_number: int, image_bytes: bytes):
     return SimpleNamespace(page_number=page_number, image_bytes=image_bytes)
 
 
+def _ocr_result(text: str, input_tokens: int = 0, output_tokens: int = 0):
+    return {
+        "text": text,
+        "token_usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        },
+    }
+
+
 def _fail_render(*args, **kwargs):
     pytest.fail("PDF rendering should not be called")
 
@@ -41,7 +52,7 @@ def test_non_pdf_input_with_ocr_config_still_delegates_to_local_parser(monkeypat
 
     monkeypatch.setattr(service, "extract_and_normalize_document", fake_extract)
     monkeypatch.setattr(service, "render_pdf_pages_to_png", _fail_render)
-    monkeypatch.setattr(service, "extract_text_from_image", _fail_ocr)
+    monkeypatch.setattr(service, "extract_text_from_image_with_usage", _fail_ocr)
 
     assert (
         service.extract_document_text(
@@ -92,7 +103,7 @@ def test_pdf_with_sufficient_local_text_and_ocr_config_does_not_call_ocr(monkeyp
         service, "extract_and_normalize_document", lambda doc: local_result
     )
     monkeypatch.setattr(service, "render_pdf_pages_to_png", _fail_render)
-    monkeypatch.setattr(service, "extract_text_from_image", _fail_ocr)
+    monkeypatch.setattr(service, "extract_text_from_image_with_usage", _fail_ocr)
 
     assert (
         service.extract_document_text(
@@ -117,9 +128,42 @@ def test_short_pdf_without_ocr_config_returns_local_result_without_ocr(monkeypat
         service, "extract_and_normalize_document", lambda doc: local_result
     )
     monkeypatch.setattr(service, "render_pdf_pages_to_png", _fail_render)
-    monkeypatch.setattr(service, "extract_text_from_image", _fail_ocr)
+    monkeypatch.setattr(service, "extract_text_from_image_with_usage", _fail_ocr)
 
     assert service.extract_document_text(input_doc) == local_result
+
+
+def test_local_pdf_path_exposes_zero_ocr_usage_metadata(monkeypatch):
+    input_doc: DocumentInput = {
+        "content": _upload("text.pdf", b"%PDF bytes"),
+        "filename": "text.pdf",
+        "source_type": "file",
+        "role": "cv",
+    }
+    local_result = {
+        "text": "x" * service.MIN_EXTRACTED_TEXT_CHARS,
+        "filename": "text.pdf",
+        "role": "cv",
+    }
+
+    monkeypatch.setattr(
+        service, "extract_and_normalize_document", lambda doc: local_result
+    )
+    monkeypatch.setattr(service, "render_pdf_pages_to_png", _fail_render)
+    monkeypatch.setattr(service, "extract_text_from_image_with_usage", _fail_ocr)
+
+    assert service.extract_document_text_with_metadata(
+        input_doc,
+        ocr_provider="Deepinfra",
+        ocr_model="vision-model",
+    ) == {
+        "document": local_result,
+        "ocr_token_usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        },
+    }
 
 
 def test_short_pdf_with_ocr_config_renders_pages_and_returns_ocr_text(monkeypatch):
@@ -143,13 +187,13 @@ def test_short_pdf_with_ocr_config_renders_pages_and_returns_ocr_text(monkeypatc
             "model": model,
             "api_key": api_key,
         }
-        return "  OCR text  "
+        return _ocr_result("  OCR text  ", input_tokens=11, output_tokens=3)
 
     monkeypatch.setattr(
         service, "extract_and_normalize_document", lambda doc: local_result
     )
     monkeypatch.setattr(service, "render_pdf_pages_to_png", fake_render)
-    monkeypatch.setattr(service, "extract_text_from_image", fake_ocr)
+    monkeypatch.setattr(service, "extract_text_from_image_with_usage", fake_ocr)
 
     assert service.extract_document_text(
         input_doc,
@@ -166,6 +210,43 @@ def test_short_pdf_with_ocr_config_renders_pages_and_returns_ocr_text(monkeypatc
     }
 
 
+def test_single_page_ocr_exposes_usage_metadata(monkeypatch):
+    input_doc: DocumentInput = {
+        "content": _upload("scan.pdf", b"%PDF bytes"),
+        "filename": "scan.pdf",
+        "source_type": "file",
+        "role": "cv",
+    }
+    local_result = {"text": "short", "filename": "scan.pdf", "role": "cv"}
+
+    monkeypatch.setattr(
+        service, "extract_and_normalize_document", lambda doc: local_result
+    )
+    monkeypatch.setattr(
+        service,
+        "render_pdf_pages_to_png",
+        lambda pdf_bytes: [_rendered_page(1, b"page image")],
+    )
+    monkeypatch.setattr(
+        service,
+        "extract_text_from_image_with_usage",
+        lambda *args, **kwargs: _ocr_result("OCR text", 12, 4),
+    )
+
+    assert service.extract_document_text_with_metadata(
+        input_doc,
+        ocr_provider="Deepinfra",
+        ocr_model="vision-model",
+    ) == {
+        "document": {"text": "OCR text", "filename": "scan.pdf", "role": "cv"},
+        "ocr_token_usage": {
+            "input_tokens": 12,
+            "output_tokens": 4,
+            "total_tokens": 16,
+        },
+    }
+
+
 def test_empty_pdf_error_without_ocr_config_reraises_original_error(monkeypatch):
     input_doc: DocumentInput = {
         "content": _upload("scan.pdf", b"%PDF bytes"),
@@ -179,7 +260,7 @@ def test_empty_pdf_error_without_ocr_config_reraises_original_error(monkeypatch)
 
     monkeypatch.setattr(service, "extract_and_normalize_document", fake_extract)
     monkeypatch.setattr(service, "render_pdf_pages_to_png", _fail_render)
-    monkeypatch.setattr(service, "extract_text_from_image", _fail_ocr)
+    monkeypatch.setattr(service, "extract_text_from_image_with_usage", _fail_ocr)
 
     with pytest.raises(ValueError, match="File is empty"):
         service.extract_document_text(input_doc)
@@ -204,8 +285,8 @@ def test_empty_pdf_error_with_ocr_config_recovers_via_ocr(monkeypatch):
     )
     monkeypatch.setattr(
         service,
-        "extract_text_from_image",
-        lambda *args, **kwargs: "Recovered OCR text",
+        "extract_text_from_image_with_usage",
+        lambda *args, **kwargs: _ocr_result("Recovered OCR text"),
     )
 
     assert service.extract_document_text(
@@ -226,8 +307,8 @@ def test_multi_page_ocr_joins_text_in_render_order(monkeypatch):
 
     def fake_ocr(image_bytes, *args, **kwargs):
         return {
-            b"first page": "  First page text  ",
-            b"second page": "Second page text",
+            b"first page": _ocr_result("  First page text  ", 5, 1),
+            b"second page": _ocr_result("Second page text", 7, 2),
         }[image_bytes]
 
     monkeypatch.setattr(
@@ -241,7 +322,7 @@ def test_multi_page_ocr_joins_text_in_render_order(monkeypatch):
             _rendered_page(2, b"second page"),
         ],
     )
-    monkeypatch.setattr(service, "extract_text_from_image", fake_ocr)
+    monkeypatch.setattr(service, "extract_text_from_image_with_usage", fake_ocr)
 
     result = service.extract_document_text(
         input_doc,
@@ -250,6 +331,47 @@ def test_multi_page_ocr_joins_text_in_render_order(monkeypatch):
     )
 
     assert result["text"] == "First page text\n\nSecond page text"
+
+
+def test_multi_page_ocr_sums_usage_metadata(monkeypatch):
+    input_doc: DocumentInput = {
+        "content": _upload("scan.pdf", b"%PDF bytes"),
+        "filename": "scan.pdf",
+        "source_type": "file",
+        "role": None,
+    }
+    local_result = {"text": "short", "filename": "scan.pdf", "role": None}
+
+    def fake_ocr(image_bytes, *args, **kwargs):
+        return {
+            b"first page": _ocr_result("First page text", 5, 1),
+            b"second page": _ocr_result("Second page text", 7, 2),
+        }[image_bytes]
+
+    monkeypatch.setattr(
+        service, "extract_and_normalize_document", lambda doc: local_result
+    )
+    monkeypatch.setattr(
+        service,
+        "render_pdf_pages_to_png",
+        lambda pdf_bytes: [
+            _rendered_page(1, b"first page"),
+            _rendered_page(2, b"second page"),
+        ],
+    )
+    monkeypatch.setattr(service, "extract_text_from_image_with_usage", fake_ocr)
+
+    result = service.extract_document_text_with_metadata(
+        input_doc,
+        ocr_provider="Deepinfra",
+        ocr_model="vision-model",
+    )
+
+    assert result["ocr_token_usage"] == {
+        "input_tokens": 12,
+        "output_tokens": 3,
+        "total_tokens": 15,
+    }
 
 
 def test_empty_ocr_output_raises_page_value_error(monkeypatch):
@@ -269,7 +391,11 @@ def test_empty_ocr_output_raises_page_value_error(monkeypatch):
         "render_pdf_pages_to_png",
         lambda pdf_bytes: [_rendered_page(1, b"page image")],
     )
-    monkeypatch.setattr(service, "extract_text_from_image", lambda *args, **kwargs: "  ")
+    monkeypatch.setattr(
+        service,
+        "extract_text_from_image_with_usage",
+        lambda *args, **kwargs: _ocr_result("  "),
+    )
 
     with pytest.raises(ValueError, match="OCR did not extract text from PDF page 1"):
         service.extract_document_text(
@@ -292,8 +418,8 @@ def test_empty_ocr_output_on_one_page_fails_instead_of_returning_partial_text(
 
     def fake_ocr(image_bytes, *args, **kwargs):
         return {
-            b"first page": "First page text",
-            b"second page": "  ",
+            b"first page": _ocr_result("First page text"),
+            b"second page": _ocr_result("  "),
         }[image_bytes]
 
     monkeypatch.setattr(
@@ -307,7 +433,7 @@ def test_empty_ocr_output_on_one_page_fails_instead_of_returning_partial_text(
             _rendered_page(2, b"second page"),
         ],
     )
-    monkeypatch.setattr(service, "extract_text_from_image", fake_ocr)
+    monkeypatch.setattr(service, "extract_text_from_image_with_usage", fake_ocr)
 
     with pytest.raises(ValueError, match="OCR did not extract text from PDF page 2"):
         service.extract_document_text(
@@ -333,7 +459,7 @@ def test_render_value_error_propagates_before_ocr_calls(monkeypatch):
         service, "extract_and_normalize_document", lambda doc: local_result
     )
     monkeypatch.setattr(service, "render_pdf_pages_to_png", fake_render)
-    monkeypatch.setattr(service, "extract_text_from_image", _fail_ocr)
+    monkeypatch.setattr(service, "extract_text_from_image_with_usage", _fail_ocr)
 
     with pytest.raises(ValueError, match="exceeding max_pages=10"):
         service.extract_document_text(
@@ -355,7 +481,7 @@ def test_ocr_provider_exception_on_any_page_fails_whole_extraction(monkeypatch):
     def fake_ocr(image_bytes, *args, **kwargs):
         if image_bytes == b"second page":
             raise RuntimeError("provider down")
-        return "First page text"
+        return _ocr_result("First page text")
 
     monkeypatch.setattr(service, "extract_and_normalize_document", lambda doc: local_result)
     monkeypatch.setattr(
@@ -366,7 +492,7 @@ def test_ocr_provider_exception_on_any_page_fails_whole_extraction(monkeypatch):
             _rendered_page(2, b"second page"),
         ],
     )
-    monkeypatch.setattr(service, "extract_text_from_image", fake_ocr)
+    monkeypatch.setattr(service, "extract_text_from_image_with_usage", fake_ocr)
 
     with pytest.raises(RuntimeError, match="provider down"):
         service.extract_document_text(

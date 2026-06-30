@@ -7,11 +7,25 @@ from config import PROVIDER_API_KEY_MAP
 from infrastructure.database_pg import edit_tokens, log_token_usage
 import infrastructure.database_pg as database_pg
 from services.document_comparison_service import compare_documents
-from services.document_extraction_service import extract_document_text
+from services.document_extraction_service import extract_document_text_with_metadata
 from services.document_text_service import DocumentInput
 from routes.utils import assert_valid_api_key
 
 documents_bp = Blueprint("documents", __name__)
+
+
+def _zero_token_usage() -> dict[str, int]:
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+    }
+
+
+def _add_token_usage(total: dict[str, int], usage: dict) -> None:
+    total["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
+    total["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
+    total["total_tokens"] += int(usage.get("total_tokens", 0) or 0)
 
 
 @documents_bp.route("/compare_docs", methods=["POST"])
@@ -58,6 +72,7 @@ def compare_docs():
 
     try:
         normalized_documents = []
+        ocr_token_usage = _zero_token_usage()
         text_documents = []
         file_roles = []
 
@@ -106,13 +121,14 @@ def compare_docs():
                 "role": text_document.get("role"),
             }
 
-            normalized = extract_document_text(
+            extraction_result = extract_document_text_with_metadata(
                 doc_input,
                 ocr_provider=ocr_provider,
                 ocr_model=ocr_model,
                 ocr_api_key=None,
             )
-            normalized_documents.append(normalized)
+            normalized_documents.append(extraction_result["document"])
+            _add_token_usage(ocr_token_usage, extraction_result["ocr_token_usage"])
 
         for index, file in enumerate(files):
             role = file_roles[index] if file_roles else None
@@ -124,13 +140,14 @@ def compare_docs():
                 "role": role,
             }
 
-            normalized = extract_document_text(
+            extraction_result = extract_document_text_with_metadata(
                 doc_input,
                 ocr_provider=ocr_provider,
                 ocr_model=ocr_model,
                 ocr_api_key=None,
             )
-            normalized_documents.append(normalized)
+            normalized_documents.append(extraction_result["document"])
+            _add_token_usage(ocr_token_usage, extraction_result["ocr_token_usage"])
 
         service_result = compare_documents(
             documents=normalized_documents,
@@ -154,10 +171,16 @@ def compare_docs():
             if not isinstance(user_id, int):
                 raise TypeError(f"Invalid user_id: {user_id}")
 
+            # COOPI release: aggregate OCR into the single compare_docs log row
+            # because OCR and comparison share provider/model/cost basis there.
+            # Usage stays separate internally so operation-level logging can
+            # be introduced later if those models diverge.
             log_token_usage(
                 user_id=user_id,
-                token_input=token_usage.get("input_tokens", 0),
-                token_output=token_usage.get("output_tokens", 0),
+                token_input=token_usage.get("input_tokens", 0)
+                + ocr_token_usage["input_tokens"],
+                token_output=token_usage.get("output_tokens", 0)
+                + ocr_token_usage["output_tokens"],
                 model=model,
                 provider=llm_type,
             )
