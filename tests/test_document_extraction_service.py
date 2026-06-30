@@ -37,6 +37,11 @@ def _fail_ocr(*args, **kwargs):
     pytest.fail("Vision OCR should not be called")
 
 
+@pytest.fixture(autouse=True)
+def _default_rendered_pages_non_blank(monkeypatch):
+    monkeypatch.setattr(service, "is_rendered_page_blank", lambda image_bytes: False)
+
+
 def test_non_pdf_input_with_ocr_config_still_delegates_to_local_parser(monkeypatch):
     input_doc: DocumentInput = {
         "content": "hello",
@@ -372,6 +377,52 @@ def test_multi_page_ocr_sums_usage_metadata(monkeypatch):
         "output_tokens": 3,
         "total_tokens": 15,
     }
+
+
+def test_blank_rendered_page_fails_before_ocr_provider_call(monkeypatch):
+    input_doc: DocumentInput = {
+        "content": _upload("scan.pdf", b"%PDF bytes"),
+        "filename": "scan.pdf",
+        "source_type": "file",
+        "role": None,
+    }
+    local_result = {"text": "short", "filename": "scan.pdf", "role": None}
+    blank_checks = []
+    ocr_calls = []
+
+    def fake_blank_detector(image_bytes):
+        blank_checks.append(image_bytes)
+        return image_bytes == b"blank page"
+
+    def fake_ocr(image_bytes, *args, **kwargs):
+        ocr_calls.append(image_bytes)
+        return _ocr_result("First page text")
+
+    monkeypatch.setattr(
+        service, "extract_and_normalize_document", lambda doc: local_result
+    )
+    monkeypatch.setattr(
+        service,
+        "render_pdf_pages_to_png",
+        lambda pdf_bytes: [
+            _rendered_page(1, b"first page"),
+            _rendered_page(2, b"blank page"),
+            _rendered_page(3, b"third page"),
+        ],
+    )
+    monkeypatch.setattr(service, "is_rendered_page_blank", fake_blank_detector)
+    monkeypatch.setattr(service, "extract_text_from_image_with_usage", fake_ocr)
+
+    with pytest.raises(ValueError) as error:
+        service.extract_document_text(
+            input_doc,
+            ocr_provider="Deepinfra",
+            ocr_model="vision-model",
+        )
+
+    assert str(error.value) == "OCR did not extract text from PDF page 2"
+    assert blank_checks == [b"first page", b"blank page"]
+    assert ocr_calls == [b"first page"]
 
 
 def test_empty_ocr_output_raises_page_value_error(monkeypatch):

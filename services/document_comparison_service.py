@@ -41,6 +41,16 @@ class ComparisonServiceResult(TypedDict):
     token_usage: TokenUsage
 
 
+CONTEXT_WINDOW_ERROR_MESSAGE = (
+    "The extracted document text is too large for the configured comparison model. "
+    "Reduce document size or split the comparison."
+)
+
+
+class DocumentComparisonPayloadTooLargeError(Exception):
+    pass
+
+
 DEFAULT_COMPARE_DOCS_SYSTEM_PROMPT = """
 You are a document comparison assistant.
 
@@ -55,6 +65,35 @@ Return only valid JSON with the following required fields:
 - summary: short textual summary
 - reasoning: concise explanation of the score
 """.strip()
+
+
+_CONTEXT_WINDOW_EXPLICIT_SIGNALS = (
+    "maximum context length",
+    "context_length_exceeded",
+    "reduce the length of the input prompt",
+    "too many tokens",
+    "token limit",
+    "prompt is too long",
+    "input is too long",
+    "request too large",
+)
+
+_CONTEXT_WINDOW_SUBJECT_TERMS = (
+    "context length",
+    "context window",
+    "input_tokens",
+    "prompt",
+    "token",
+)
+
+_CONTEXT_WINDOW_LIMIT_TERMS = (
+    "limit",
+    "maximum",
+    "exceed",
+    "too large",
+    "too long",
+    "reduce",
+)
 
 
 def _format_documents_for_prompt(documents: list[NormalizedDocument]) -> str:
@@ -108,6 +147,76 @@ def _build_comparison_prompt(
     )
 
     return "\n\n".join(sections)
+
+
+def _collect_error_text(value: object, seen: set[int] | None = None) -> list[str]:
+    """
+    Extract provider error text from common exception shapes without depending
+    on provider-specific exception classes.
+    """
+    if value is None:
+        return []
+
+    if seen is None:
+        seen = set()
+
+    value_id = id(value)
+    if value_id in seen:
+        return []
+    seen.add(value_id)
+
+    if isinstance(value, str):
+        return [value]
+
+    if isinstance(value, bytes):
+        return [value.decode("utf-8", errors="ignore")]
+
+    if isinstance(value, dict):
+        parts = []
+        for key, item in value.items():
+            parts.extend(_collect_error_text(key, seen))
+            parts.extend(_collect_error_text(item, seen))
+        return parts
+
+    if isinstance(value, (list, tuple, set)):
+        parts = []
+        for item in value:
+            parts.extend(_collect_error_text(item, seen))
+        return parts
+
+    parts = [str(value)]
+
+    for attr_name in ("body", "response"):
+        attr = getattr(value, attr_name, None)
+        if attr is not None:
+            parts.extend(_collect_error_text(attr, seen))
+
+    for attr_name in ("text", "content"):
+        attr = getattr(value, attr_name, None)
+        if isinstance(attr, (str, bytes)):
+            parts.extend(_collect_error_text(attr, seen))
+
+    for attr_name in ("__cause__", "__context__"):
+        attr = getattr(value, attr_name, None)
+        if attr is not None:
+            parts.extend(_collect_error_text(attr, seen))
+
+    return parts
+
+
+def _is_context_window_error(error: Exception) -> bool:
+    haystack = " ".join(_collect_error_text(error)).lower()
+
+    if not haystack:
+        return False
+
+    if any(signal in haystack for signal in _CONTEXT_WINDOW_EXPLICIT_SIGNALS):
+        return True
+
+    has_subject = any(term in haystack for term in _CONTEXT_WINDOW_SUBJECT_TERMS)
+    has_limit = any(term in haystack for term in _CONTEXT_WINDOW_LIMIT_TERMS)
+
+    return has_subject and has_limit
 
 
 def _strip_json_code_fence(content: str) -> str:
@@ -182,7 +291,14 @@ def compare_documents(
     ]
 
     llm = choose_llm(llm_type, model, api_key=api_key)
-    response = llm.invoke(messages)
+    try:
+        response = llm.invoke(messages)
+    except Exception as error:
+        if _is_context_window_error(error):
+            raise DocumentComparisonPayloadTooLargeError(
+                CONTEXT_WINDOW_ERROR_MESSAGE
+            ) from error
+        raise
 
     usage_metadata = getattr(response, "usage_metadata", None) or {}
 

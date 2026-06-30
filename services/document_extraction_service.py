@@ -17,7 +17,10 @@ import os
 from typing import TypedDict
 
 from infrastructure.ai import TokenUsage, extract_text_from_image_with_usage
-from services.document_ocr_service import render_pdf_pages_to_png
+from services.document_ocr_service import (
+    is_rendered_page_blank,
+    render_pdf_pages_to_png,
+)
 from werkzeug.datastructures import FileStorage
 
 from services.document_text_service import (
@@ -25,7 +28,6 @@ from services.document_text_service import (
     NormalizedDocument,
     extract_and_normalize_document,
 )
-
 
 MIN_EXTRACTED_TEXT_CHARS = 50
 
@@ -105,6 +107,11 @@ def _extract_pdf_text_with_ocr(
     ocr_token_usage = _zero_token_usage()
 
     for page in rendered_pages:
+        if is_rendered_page_blank(page.image_bytes):
+            raise ValueError(
+                f"OCR did not extract text from PDF page {page.page_number}"
+            )
+
         page_result = extract_text_from_image_with_usage(
             page.image_bytes,
             ocr_provider,

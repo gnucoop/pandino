@@ -302,14 +302,88 @@ def test_compare_docs_with_zero_ocr_usage_logs_comparison_usage_once(monkeypatch
     assert edit_calls == [("user@example.com", -1)]
 
 
-def test_compare_docs_extraction_value_error_keeps_existing_400_mapping(
+def test_compare_docs_context_window_error_returns_413_without_accounting(
     monkeypatch,
 ):
     app = _make_app()
     _patch_success_dependencies(monkeypatch)
 
+    log_calls = []
+    edit_calls = []
+
+    def fake_extract_document_text_with_metadata(doc_input, **kwargs):
+        return {
+            "document": {
+                "text": f"normalized {doc_input['filename']}",
+                "filename": doc_input["filename"],
+                "role": doc_input["role"],
+            },
+            "ocr_token_usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
+
+    def fake_compare_documents(**kwargs):
+        raise documents_route.DocumentComparisonPayloadTooLargeError(
+            documents_route.CONTEXT_WINDOW_ERROR_MESSAGE
+        )
+
+    monkeypatch.setattr(
+        documents_route,
+        "extract_document_text_with_metadata",
+        fake_extract_document_text_with_metadata,
+    )
+    monkeypatch.setattr(documents_route, "compare_documents", fake_compare_documents)
+    monkeypatch.setattr(
+        documents_route, "log_token_usage", lambda **kwargs: log_calls.append(kwargs)
+    )
+    monkeypatch.setattr(
+        documents_route,
+        "edit_tokens",
+        lambda user_email, token_delta: edit_calls.append((user_email, token_delta)),
+    )
+
+    data = {
+        "prompt": "Compare these documents",
+        "text_documents": json.dumps(
+            [
+                {"content": "first document", "filename": "first.txt", "role": "a"},
+                {"content": "second document", "filename": "second.txt", "role": "b"},
+            ]
+        ),
+    }
+
+    response = app.test_client().post(
+        "/compare_docs",
+        data=data,
+        headers={"X-API-KEY": "test-key", "X-USER-EMAIL": "user@example.com"},
+    )
+
+    assert response.status_code == 413
+    assert response.get_json() == {
+        "error": "Payload too large",
+        "details": (
+            "The extracted document text is too large for the configured comparison "
+            "model. Reduce document size or split the comparison."
+        ),
+    }
+    assert log_calls == []
+    assert edit_calls == []
+
+
+def test_compare_docs_extraction_value_error_keeps_existing_400_mapping(
+    monkeypatch,
+):
+    app = _make_app()
+    _patch_success_dependencies(monkeypatch)
+    comparison_calls = []
+    log_calls = []
+    edit_calls = []
+
     def fake_extract_document_text_with_metadata(*args, **kwargs):
-        raise ValueError("File is empty")
+        raise ValueError("OCR did not extract text from PDF page 2")
 
     monkeypatch.setattr(
         documents_route,
@@ -319,7 +393,15 @@ def test_compare_docs_extraction_value_error_keeps_existing_400_mapping(
     monkeypatch.setattr(
         documents_route,
         "compare_documents",
-        lambda **kwargs: pytest.fail("comparison should not be called"),
+        lambda **kwargs: comparison_calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        documents_route, "log_token_usage", lambda **kwargs: log_calls.append(kwargs)
+    )
+    monkeypatch.setattr(
+        documents_route,
+        "edit_tokens",
+        lambda user_email, token_delta: edit_calls.append((user_email, token_delta)),
     )
 
     data = {
@@ -349,5 +431,8 @@ def test_compare_docs_extraction_value_error_keeps_existing_400_mapping(
     assert response.status_code == 400
     assert response.get_json() == {
         "error": "Invalid request",
-        "details": "File is empty",
+        "details": "OCR did not extract text from PDF page 2",
     }
+    assert comparison_calls == []
+    assert log_calls == []
+    assert edit_calls == []
