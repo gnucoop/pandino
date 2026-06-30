@@ -6,13 +6,17 @@ independent from Flask, database setup, and AI/Vision provider configuration.
 """
 
 import importlib
+import io
 from typing import Any, cast
 
+import numpy as np
 import pytest
 import pymupdf
+from PIL import Image, ImageDraw
 
 from services.document_ocr_service import (
     RenderedPdfPage,
+    is_rendered_page_blank,
     render_pdf_pages_to_png,
 )
 
@@ -28,6 +32,12 @@ def _make_pdf(page_count: int) -> bytes:
             page.insert_text((24, 48), f"Page {index + 1}")
 
         return document.tobytes()
+
+
+def _png_bytes(image: Image.Image) -> bytes:
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 def test_render_one_page_pdf_returns_one_rendered_page():
@@ -106,3 +116,41 @@ def test_service_imports_without_flask_db_or_ai_provider_configuration():
 
     assert module.RenderedPdfPage is RenderedPdfPage
     assert callable(module.render_pdf_pages_to_png)
+
+
+def test_pure_white_png_is_blank():
+    image = Image.new("RGB", (120, 80), "white")
+
+    assert is_rendered_page_blank(_png_bytes(image)) is True
+
+
+def test_off_white_lightly_noisy_png_is_blank():
+    rng = np.random.default_rng(123)
+    pixels = rng.integers(246, 252, size=(100, 140), dtype=np.uint8)
+    image = Image.fromarray(pixels, mode="L")
+
+    assert is_rendered_page_blank(_png_bytes(image)) is True
+
+
+def test_png_with_clear_dark_text_like_pixels_is_not_blank():
+    image = Image.new("L", (200, 120), 255)
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((30, 32, 150, 38), fill=20)
+    draw.rectangle((30, 48, 120, 54), fill=20)
+    draw.rectangle((30, 64, 170, 70), fill=20)
+
+    assert is_rendered_page_blank(_png_bytes(image)) is False
+
+
+def test_png_with_meaningful_sparse_marks_is_not_blank():
+    image = Image.new("L", (100, 100), 255)
+    draw = ImageDraw.Draw(image)
+    draw.line((45, 50, 54, 50), fill=0, width=1)
+
+    assert is_rendered_page_blank(_png_bytes(image)) is False
+
+
+@pytest.mark.parametrize("image_bytes", [b"", b"not an image"])
+def test_blank_page_detection_rejects_empty_or_invalid_bytes(image_bytes):
+    with pytest.raises(ValueError, match="image_bytes must"):
+        is_rendered_page_blank(image_bytes)

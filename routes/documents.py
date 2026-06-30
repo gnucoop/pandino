@@ -1,12 +1,15 @@
 import json
 import os
-
+from typing import TypedDict
 from flask import Blueprint, jsonify, request, current_app
-
 from config import PROVIDER_API_KEY_MAP
 from infrastructure.database_pg import edit_tokens, log_token_usage
 import infrastructure.database_pg as database_pg
-from services.document_comparison_service import compare_documents
+from services.document_comparison_service import (
+    CONTEXT_WINDOW_ERROR_MESSAGE,
+    DocumentComparisonPayloadTooLargeError,
+    compare_documents,
+)
 from services.document_extraction_service import extract_document_text_with_metadata
 from services.document_text_service import DocumentInput
 from routes.utils import assert_valid_api_key
@@ -14,7 +17,23 @@ from routes.utils import assert_valid_api_key
 documents_bp = Blueprint("documents", __name__)
 
 
-def _zero_token_usage() -> dict[str, int]:
+class TokenUsageDict(TypedDict):
+    """
+    Token usage counters shared by extraction and comparison steps.
+
+    The route uses this shape to aggregate OCR usage with final comparison
+    usage before writing the single compare_docs accounting log row.
+    """
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+
+
+def _zero_token_usage() -> TokenUsageDict:
+    """
+    Create an empty token usage accumulator for the current request.
+    """
     return {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -22,10 +41,16 @@ def _zero_token_usage() -> dict[str, int]:
     }
 
 
-def _add_token_usage(total: dict[str, int], usage: dict) -> None:
-    total["input_tokens"] += int(usage.get("input_tokens", 0) or 0)
-    total["output_tokens"] += int(usage.get("output_tokens", 0) or 0)
-    total["total_tokens"] += int(usage.get("total_tokens", 0) or 0)
+def _add_token_usage(total: TokenUsageDict, usage: TokenUsageDict) -> None:
+    """
+    Add one token usage record into the request-level accumulator.
+
+    This mutates total in place and keeps usage read-only from the caller's
+    perspective.
+    """
+    total["input_tokens"] += usage["input_tokens"]
+    total["output_tokens"] += usage["output_tokens"]
+    total["total_tokens"] += usage["total_tokens"]
 
 
 @documents_bp.route("/compare_docs", methods=["POST"])
@@ -194,6 +219,17 @@ def compare_docs():
 
     except ValueError as error:
         return jsonify({"error": "Invalid request", "details": str(error)}), 400
+
+    except DocumentComparisonPayloadTooLargeError:
+        return (
+            jsonify(
+                {
+                    "error": "Payload too large",
+                    "details": CONTEXT_WINDOW_ERROR_MESSAGE,
+                }
+            ),
+            413,
+        )
 
     except NotImplementedError as error:
         return (
