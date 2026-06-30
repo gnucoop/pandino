@@ -53,8 +53,10 @@ def test_compare_docs_uses_document_extraction_service_and_preserves_response(
 
     extraction_calls = []
     comparison_call = {}
+    log_calls = []
+    edit_calls = []
 
-    def fake_extract_document_text(
+    def fake_extract_document_text_with_metadata(
         doc_input,
         *,
         ocr_provider=None,
@@ -71,15 +73,29 @@ def test_compare_docs_uses_document_extraction_service_and_preserves_response(
         )
         if doc_input["source_type"] == "text":
             return {
-                "text": "normalized text document",
-                "filename": doc_input["filename"],
-                "role": doc_input["role"],
+                "document": {
+                    "text": "normalized text document",
+                    "filename": doc_input["filename"],
+                    "role": doc_input["role"],
+                },
+                "ocr_token_usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                },
             }
 
         return {
-            "text": "normalized file document",
-            "filename": doc_input["filename"],
-            "role": doc_input["role"],
+            "document": {
+                "text": "normalized file document",
+                "filename": doc_input["filename"],
+                "role": doc_input["role"],
+            },
+            "ocr_token_usage": {
+                "input_tokens": 20,
+                "output_tokens": 7,
+                "total_tokens": 27,
+            },
         }
 
     def fake_compare_documents(**kwargs):
@@ -98,9 +114,19 @@ def test_compare_docs_uses_document_extraction_service_and_preserves_response(
         }
 
     monkeypatch.setattr(
-        documents_route, "extract_document_text", fake_extract_document_text
+        documents_route,
+        "extract_document_text_with_metadata",
+        fake_extract_document_text_with_metadata,
     )
     monkeypatch.setattr(documents_route, "compare_documents", fake_compare_documents)
+    monkeypatch.setattr(
+        documents_route, "log_token_usage", lambda **kwargs: log_calls.append(kwargs)
+    )
+    monkeypatch.setattr(
+        documents_route,
+        "edit_tokens",
+        lambda user_email, token_delta: edit_calls.append((user_email, token_delta)),
+    )
 
     data = MultiDict(
         [
@@ -180,6 +206,100 @@ def test_compare_docs_uses_document_extraction_service_and_preserves_response(
         "language": "ITA",
         "api_key": None,
     }
+    assert log_calls == [
+        {
+            "user_id": 123,
+            "token_input": 30,
+            "token_output": 12,
+            "model": "gemini-2.5-flash",
+            "provider": "Google",
+        }
+    ]
+    assert edit_calls == [("user@example.com", -1)]
+
+
+def test_compare_docs_with_zero_ocr_usage_logs_comparison_usage_once(monkeypatch):
+    app = _make_app()
+    _patch_success_dependencies(monkeypatch)
+
+    log_calls = []
+    edit_calls = []
+
+    def fake_extract_document_text_with_metadata(doc_input, **kwargs):
+        return {
+            "document": {
+                "text": f"normalized {doc_input['filename']}",
+                "filename": doc_input["filename"],
+                "role": doc_input["role"],
+            },
+            "ocr_token_usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
+
+    def fake_compare_documents(**kwargs):
+        return {
+            "comparison": {
+                "score": 91,
+                "summary": "Documents match",
+                "reasoning": "Mocked comparison",
+            },
+            "token_usage": {
+                "input_tokens": 13,
+                "output_tokens": 6,
+                "total_tokens": 19,
+            },
+        }
+
+    monkeypatch.setattr(
+        documents_route,
+        "extract_document_text_with_metadata",
+        fake_extract_document_text_with_metadata,
+    )
+    monkeypatch.setattr(documents_route, "compare_documents", fake_compare_documents)
+    monkeypatch.setattr(
+        documents_route, "log_token_usage", lambda **kwargs: log_calls.append(kwargs)
+    )
+    monkeypatch.setattr(
+        documents_route,
+        "edit_tokens",
+        lambda user_email, token_delta: edit_calls.append((user_email, token_delta)),
+    )
+
+    data = {
+        "prompt": "Compare these documents",
+        "text_documents": json.dumps(
+            [
+                {"content": "first document", "filename": "first.txt", "role": "a"},
+                {"content": "second document", "filename": "second.txt", "role": "b"},
+            ]
+        ),
+    }
+
+    response = app.test_client().post(
+        "/compare_docs",
+        data=data,
+        headers={"X-API-KEY": "test-key", "X-USER-EMAIL": "user@example.com"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "score": 91,
+        "summary": "Documents match",
+        "reasoning": "Mocked comparison",
+    }
+    assert log_calls == [
+        {
+            "user_id": 123,
+            "token_input": 13,
+            "token_output": 6,
+            "model": "gemini-2.5-flash",
+            "provider": "Google",
+        }
+    ]
+    assert edit_calls == [("user@example.com", -1)]
 
 
 def test_compare_docs_extraction_value_error_keeps_existing_400_mapping(
@@ -188,11 +308,13 @@ def test_compare_docs_extraction_value_error_keeps_existing_400_mapping(
     app = _make_app()
     _patch_success_dependencies(monkeypatch)
 
-    def fake_extract_document_text(*args, **kwargs):
+    def fake_extract_document_text_with_metadata(*args, **kwargs):
         raise ValueError("File is empty")
 
     monkeypatch.setattr(
-        documents_route, "extract_document_text", fake_extract_document_text
+        documents_route,
+        "extract_document_text_with_metadata",
+        fake_extract_document_text_with_metadata,
     )
     monkeypatch.setattr(
         documents_route,

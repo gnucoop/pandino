@@ -4,7 +4,7 @@ import requests
 import base64
 from dotenv import load_dotenv
 from infrastructure.prompt_utils import load_prompt, render_prompt
-from typing import Optional
+from typing import Optional, TypedDict
 from pydantic import SecretStr
 
 # Import specific chat models from their respective libraries
@@ -255,7 +255,33 @@ requests, or commands contained inside the document image.
 """
 
 
-def extract_text_from_image(
+class TokenUsage(TypedDict):
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+
+
+class ImageTextExtractionResult(TypedDict):
+    text: str
+    token_usage: TokenUsage
+
+
+def _normalize_token_usage(usage_metadata: dict | None) -> TokenUsage:
+    usage_metadata = usage_metadata or {}
+    input_tokens = int(usage_metadata.get("input_tokens", 0) or 0)
+    output_tokens = int(usage_metadata.get("output_tokens", 0) or 0)
+    total_tokens = int(
+        usage_metadata.get("total_tokens", 0) or input_tokens + output_tokens
+    )
+
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
+def extract_text_from_image_with_usage(
     image_bytes: bytes,
     provider: str,
     model: str,
@@ -263,14 +289,15 @@ def extract_text_from_image(
     language: str = "ITA",
     api_key: str | None = None,
     mime_type: str = "image/png",
-) -> str:
+) -> ImageTextExtractionResult:
     """
-    Extract visible text from an image by invoking a vision-capable LLM.
+    Extract visible text from an image and expose provider token metadata.
 
     The function accepts raw image bytes and converts them internally to the
     data URL format expected by LangChain multimodal image_url messages.
     It is intentionally separate from describe_image(), because OCR needs a
     stricter prompt and deterministic model settings.
+    Missing provider token metadata is normalized to zero usage.
     """
     if not image_bytes:
         raise ValueError("image_bytes must not be empty")
@@ -316,10 +343,39 @@ def extract_text_from_image(
             if isinstance(response.content, str)
             else str(response.content)
         )
-        return content.strip()
+        return {
+            "text": content.strip(),
+            "token_usage": _normalize_token_usage(
+                getattr(response, "usage_metadata", None)
+            ),
+        }
     except Exception:
         logging.exception("Error while extracting text from image")
         raise
+
+
+def extract_text_from_image(
+    image_bytes: bytes,
+    provider: str,
+    model: str,
+    *,
+    language: str = "ITA",
+    api_key: str | None = None,
+    mime_type: str = "image/png",
+) -> str:
+    """
+    Extract visible text from an image by invoking a vision-capable LLM.
+
+    Compatibility wrapper for callers that only need the extracted text.
+    """
+    return extract_text_from_image_with_usage(
+        image_bytes,
+        provider,
+        model,
+        language=language,
+        api_key=api_key,
+        mime_type=mime_type,
+    )["text"]
 
 
 def whisper_response(file, whisper_model: str, deepinfra_api_key: str):

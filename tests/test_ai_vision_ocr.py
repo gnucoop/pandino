@@ -99,6 +99,81 @@ def test_extract_text_from_image_uses_custom_mime_type(monkeypatch):
     )
 
 
+def test_extract_text_from_image_with_usage_returns_text_and_token_usage(monkeypatch):
+    class FakeLlm:
+        def invoke(self, messages):
+            return SimpleNamespace(
+                content="  OCR text  ",
+                usage_metadata={
+                    "input_tokens": 42,
+                    "output_tokens": 8,
+                    "total_tokens": 50,
+                },
+            )
+
+    monkeypatch.setattr(ai, "choose_llm", lambda *args, **kwargs: FakeLlm())
+    monkeypatch.setattr(ai, "load_prompt", lambda *args, **kwargs: "OCR prompt")
+
+    assert ai.extract_text_from_image_with_usage(
+        b"image",
+        "Google",
+        "vision-model",
+    ) == {
+        "text": "OCR text",
+        "token_usage": {
+            "input_tokens": 42,
+            "output_tokens": 8,
+            "total_tokens": 50,
+        },
+    }
+
+
+def test_extract_text_from_image_with_usage_defaults_missing_usage_to_zero(
+    monkeypatch,
+):
+    class FakeLlm:
+        def invoke(self, messages):
+            return SimpleNamespace(content="OCR text")
+
+    monkeypatch.setattr(ai, "choose_llm", lambda *args, **kwargs: FakeLlm())
+    monkeypatch.setattr(ai, "load_prompt", lambda *args, **kwargs: "OCR prompt")
+
+    assert ai.extract_text_from_image_with_usage(
+        b"image",
+        "Google",
+        "vision-model",
+    )["token_usage"] == {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+    }
+
+
+def test_extract_text_from_image_with_usage_derives_missing_total_tokens(monkeypatch):
+    class FakeLlm:
+        def invoke(self, messages):
+            return SimpleNamespace(
+                content="OCR text",
+                usage_metadata={
+                    "input_tokens": 10,
+                    "output_tokens": 4,
+                },
+            )
+
+    monkeypatch.setattr(ai, "choose_llm", lambda *args, **kwargs: FakeLlm())
+    monkeypatch.setattr(ai, "load_prompt", lambda *args, **kwargs: "OCR prompt")
+
+    assert ai.extract_text_from_image_with_usage(
+        b"image",
+        "Google",
+        "vision-model",
+    )["token_usage"] == {
+        "input_tokens": 10,
+        "output_tokens": 4,
+        "total_tokens": 14,
+    }
+
+
 def test_extract_text_from_image_stringifies_non_string_content(monkeypatch):
     class FakeLlm:
         def invoke(self, messages):
