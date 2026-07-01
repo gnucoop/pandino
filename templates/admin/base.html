@@ -85,6 +85,12 @@
               </a>
             </li>
             <li class="nav-item">
+              <a class="nav-link {% if request.endpoint == 'admin_api_docs' %}active{% endif %}"
+                href="{{ url_for('admin.admin_api_docs') }}">
+                <i class="fas fa-book me-2"></i> API Docs
+              </a>
+            </li>
+            <li class="nav-item">
               <a class="nav-link" href="{{ url_for('admin.admin_logout') }}">
                 <i class="fas fa-sign-out-alt me-2"></i> Logout
               </a>

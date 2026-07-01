@@ -4,10 +4,12 @@ from functools import wraps
 
 import bcrypt
 import psutil
+import yaml
 from flask import (
     Blueprint,
     current_app,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -191,6 +193,27 @@ def admin_logout():
     session.pop("admin_username", None)
     flash("Successfully logged out", "info")
     return redirect(url_for("admin.admin_login"))
+
+
+@admin_bp.route("/admin/api-docs", methods=["GET"])
+@admin_required
+def admin_api_docs() -> str:
+    """Render the Swagger UI page for the Pandino HTTP API."""
+    return render_template("admin/api_docs.html")
+
+
+@admin_bp.route("/admin/openapi.json", methods=["GET"])
+@admin_required
+def admin_openapi_spec():
+    """Serve the hand-maintained OpenAPI spec (docs/openapi.yaml) as JSON.
+
+    Served behind admin_required so the spec is only reachable by logged-in
+    admins, and returned as JSON to avoid YAML content-type quirks in Swagger UI.
+    """
+    spec_path = os.path.join(current_app.root_path, "docs", "openapi.yaml")
+    with open(spec_path, "r", encoding="utf-8") as fh:
+        spec = yaml.safe_load(fh)
+    return jsonify(spec)
 
 
 @admin_bp.route("/admin")
