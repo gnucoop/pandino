@@ -227,6 +227,44 @@ def build_get_all_rag_files_query() -> Tuple[sql.Composed, Tuple[()]]:
     return query, ()
 
 
+def build_delete_rag_file_query(
+    file_id: str,
+) -> Tuple[sql.SQL, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to delete a record from the rag_files table by its id.
+
+    :param file_id: Unique identifier of the document (file-level, hash-based).
+    :return: Tuple with SQL query and parameters.
+    """
+    query = sql.SQL("DELETE FROM rag_files WHERE id = %s")
+    params = (file_id,)
+    return query, params
+
+
+def build_delete_pgvector_by_file_id_query(
+    table_name: str,
+    file_id: str,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to delete all chunks of a document from a PGVector
+    namespace table, matched by the file_id stored in chunk metadata.
+
+    :param table_name: Dynamic PGVector table name (normalized namespace).
+    :param file_id: File-level identifier stored in each chunk's metadata.
+    :return: Tuple with SQL query and parameters.
+    """
+    query = sql.SQL(
+        """
+        DELETE FROM {table}
+        WHERE langchain_metadata->>'file_id' = %s
+        """
+    ).format(
+        table=sql.Identifier(table_name),
+    )
+    params = (file_id,)
+    return query, params
+
+
 def build_print_stored_keys_query() -> Tuple[sql.Composed, Tuple[()]]:
     """
     Builds a SQL query to retrieve usernames and encrypted API keys from the 'users' table.

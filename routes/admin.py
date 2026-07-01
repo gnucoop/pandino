@@ -23,6 +23,7 @@ from infrastructure.database_pg import (
     add_prompt,
     delete_cost,
     delete_prompt,
+    delete_rag_file,
     get_all_costs,
     get_all_prompts,
     get_all_rag_files,
@@ -621,5 +622,30 @@ def admin_upload_rag_file():
             flash("File was empty, nothing indexed", "warning")
     except Exception as e:
         flash(f"Error processing file: {str(e)}", "danger")
+
+    return redirect(url_for("admin.admin_rag_files"))
+
+
+@admin_bp.route("/admin/rag-files/delete", methods=["POST"])
+@admin_required
+def admin_delete_rag_file():
+    file_id = request.form.get("file_id")
+    namespace = request.form.get("namespace")
+
+    if not file_id or not namespace:
+        flash("Missing file id or namespace", "danger")
+        return redirect(url_for("admin.admin_rag_files"))
+
+    try:
+        result = delete_rag_file(file_id, namespace)
+        if result["row_deleted"]:
+            flash(
+                f"RAG file deleted ({result['chunks_deleted']} chunks removed)",
+                "success",
+            )
+        else:
+            flash("RAG file not found", "warning")
+    except Exception as e:
+        flash(f"Error deleting RAG file: {str(e)}", "danger")
 
     return redirect(url_for("admin.admin_rag_files"))
