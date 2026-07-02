@@ -5,6 +5,7 @@ from functools import wraps
 import bcrypt
 import psutil
 import yaml
+from dotenv import dotenv_values
 from flask import (
     Blueprint,
     current_app,
@@ -56,6 +57,42 @@ def admin_required(f):
         return f(*args, **kwargs)
 
     return decorated_function
+
+
+_SECRET_MARKERS = ("SECRET", "PASSWORD", "PWD", "HASH", "KEY", "TOKEN")
+
+
+def _is_secret_var(name: str) -> bool:
+    """Return True for env vars whose values must be masked on the dashboard."""
+    upper = name.upper()
+    if upper.endswith("_COST"):  # DATACHAT_TOKEN_COST etc. are not secrets
+        return False
+    return any(marker in upper for marker in _SECRET_MARKERS)
+
+
+def _collect_env_vars(root_path: str) -> dict:
+    """Env-var name→value map for the dashboard.
+
+    Reads from the .env file when present (dev); otherwise falls back to live
+    os.environ filtered by the names catalogued in .env.example (Docker/prod,
+    where --env-file injects vars without shipping the file). Secret-looking
+    values are masked.
+    """
+    env_path = os.path.join(root_path, ".env")
+    if os.path.exists(env_path):
+        raw = dict(dotenv_values(env_path))
+    else:
+        example_path = os.path.join(root_path, ".env.example")
+        keys = dotenv_values(example_path).keys() if os.path.exists(example_path) else []
+        raw = {k: os.environ.get(k) for k in keys if k in os.environ}
+
+    display = {}
+    for key, value in raw.items():
+        if _is_secret_var(key):
+            display[key] = "•••••• (set)" if value else "not set"
+        else:
+            display[key] = value if value not in (None, "") else "not set"
+    return display
 
 
 # Define a route for the '/admin/costs' endpoint
@@ -220,31 +257,7 @@ def admin_openapi_spec():
 @admin_bp.route("/admin")
 @admin_required
 def admin_dashboard():
-    config = current_app.config["MAUI_CONFIG"]
-    env_vars = {
-        "DATACHAT_MODEL": config.models.datachat_model,
-        "DATACHAT_PROVIDER": config.models.datachat_provider,
-        "PROMPT_MODEL": config.models.prompt_model,
-        "PROMPT_PROVIDER": config.models.prompt_provider,
-        "AUDIO_MODEL": config.models.audio_model,
-        "AUDIO_PROVIDER": config.models.audio_provider,
-        "COMPLETION_MODEL": config.models.completion_model,
-        "COMPLETION_MODEL_PROVIDER": config.models.completion_model_provider,
-        "COMPLETION_MODEL_AGENT_CHAT": config.models.completion_model_agent_chat,
-        "COMPLETION_EMBEDDING_MODEL": config.models.completion_embedding_model,
-        "COMPLETION_EMBEDDING_MODEL_PROVIDER": config.models.completion_embedding_model_provider,
-        "WHISPER_MODEL": config.models.whisper_model,
-        "VISION_PROVIDER": config.models.vision_provider,
-        "VISION_MODEL": config.models.vision_model,
-        "DATACHAT_TOKEN_COST": config.datachat_token_cost,
-        "DATACHAT_MAX_STEPS": config.datachat.max_steps,
-        "DATACHAT_RATE_LIMIT_PER_MIN": config.datachat.rate_limit_per_min,
-        "DATACHAT_SESSION_TTL_MIN": config.datachat.session_ttl_min,
-        "DATACHAT_LOG_LEVEL": config.datachat.log_level,
-        "COMPLETION_TOKEN_COST": config.completion_token_cost,
-        "PROMPT_TOKEN_COST": config.prompt_token_cost,
-        "AUDIO_FORM_TOKEN_COST": config.audio_form_token_cost,
-    }
+    env_vars = _collect_env_vars(current_app.root_path)
 
     try:
         stats_data = get_users_stats()

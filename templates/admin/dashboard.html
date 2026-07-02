@@ -170,7 +170,7 @@
                             {% for key, value in env_vars.items() %}
                             <tr>
                                 <td>{{ key }}</td>
-                                <td><span class="badge bg-success">{{ value }}</span></td>
+                                <td><span class="badge {% if value == 'not set' %}bg-secondary{% else %}bg-success{% endif %}">{{ value }}</span></td>
                             </tr>
                             {% endfor %}
                         </tbody>
