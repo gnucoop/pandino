@@ -26,6 +26,7 @@ Pandino is a powerful tool designed to analyze and visualize data using various 
   - **Audio Transcription**: Transcribe audio files into text using Whisper.
   - **Image Analysis**: Generate descriptions for images.
   - **Audio-to-Form**: Automatically fill out structured forms from spoken input.
+  - **Document Comparison**: Compare two documents using OCR and structured extraction to surface their differences.
 
 - **Robust Administration and Management**:
   - **Admin Dashboard**: A web interface to monitor application stats, manage users, and view logs.
@@ -37,11 +38,12 @@ Pandino is a powerful tool designed to analyze and visualize data using various 
   - **Encrypted API Keys**: User API keys are encrypted in the database for enhanced security.
 
 ## Installation
-To install Pandino, follow these steps:
+
+Pandino targets **Python 3.10** (the repository pins `3.10.13`). To install Pandino, follow these steps:
 
 1. Clone the repository:
    ```bash
-   git clone git@github.com:tulas75/pandino.git
+   git clone git@github.com:gnucoop/pandino.git
    cd pandino
    ```
 
@@ -50,7 +52,16 @@ To install Pandino, follow these steps:
    pip install -r requirements.txt
    ```
 
-3. Setup admin panel hash
+3. Generate an encryption key:
+   `ENCRYPTION_KEY` is used to encrypt user API keys at rest (via Fernet), so it must be a
+   valid Fernet key. Generate one with:
+   ```bash
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+   Copy the output into the `ENCRYPTION_KEY` variable of your `.env` file. Keep this value
+   secret and stable — rotating it makes previously stored API keys undecryptable.
+
+4. Setup admin panel hash
    ```python
    import bcrypt
 
@@ -59,9 +70,22 @@ To install Pandino, follow these steps:
 
    print(hashed.decode()) 
    ```
+   Copy the output into the `ADMIN_PASSWORD_HASH` variable of your `.env` file.
 
-4. Set up environment variables:
+5. Set up environment variables:
    Create a `.env` file in the project root and add the variables from the `.env.example` file.
+   Notable groups include database credentials, model/provider selection, API keys, token
+   costs and RAG retrieval parameters. For the vector store you can use **PGVector** (backed by
+   your PostgreSQL database) or **Pinecone** (set `PINECONE_API_KEY` and the `RAG_NAMESPACE_*`
+   variables). Local models are supported via Ollama (`OLLAMA_BASE_URL`).
+
+### Running with Docker
+
+A `Dockerfile` is provided. To build and run the service in a container:
+```bash
+docker build -t pandino .
+docker run --rm -p 5000:5000 --env-file .env pandino
+```
 
 ## Available Endpoints
 
@@ -81,8 +105,26 @@ Here is a list of the available non-admin endpoints:
 - **POST /storeragfile**: Stores a file for Retrieval-Augmented Generation (RAG).
 - **POST /transcribe**: Transcribes an audio file using Whisper.
 - **POST /audioformcompilation**: Compiles a form from transcribed audio.
+- **POST /compare_docs**: Compares two documents (with OCR and structured extraction) and returns their differences.
 - **POST /agentchat**: AI agent endpoint powered by Smolagents that uses retrieval tools to answer questions based on stored documents in a specified namespace.
+- **POST /feedback**: Submits user feedback, viewable from the admin dashboard.
 - **GET /health**: Returns the health status of the application.
+
+The following endpoints are registered but **not yet implemented** (they currently return `501`): `GET /summarize`, `GET /categorize`, `GET /img-comparison`.
+
+## Admin Dashboard
+
+Pandino ships with a web-based admin dashboard, available at `/admin` (e.g. `http://127.0.0.1:5000/admin`).
+It is protected by a username/password login — set `ADMIN_USERNAME` and `ADMIN_PASSWORD_HASH`
+(see the bcrypt step in [Installation](#installation)) in your `.env` file.
+
+From the dashboard you can:
+- View application stats and runtime logs
+- Manage users and their token balances
+- Create, edit, version and delete prompts without redeploying
+- Upload and manage RAG files
+- Configure token costs
+- Review submitted user feedback
 
 ## Usage
 
@@ -92,19 +134,25 @@ Pandino includes a secure user management system using PostgreSQL. The system al
 #### Initializing the Database
 To initialize the PostgreSQL database, use the following command:
 ```bash
-python database_pg.py init_db
+python infrastructure/database_pg.py init_db
 ```
 
 #### Adding Users
 To add a new user to the database:
 ```bash
-python database_pg.py add_user <username> <api_key>
+python infrastructure/database_pg.py add_user <username> <api_key>
 ```
 
 #### Listing Users
 To list all users in the database:
 ```bash
-python database_pg.py list_users
+python infrastructure/database_pg.py list_users
+```
+
+#### Removing Users
+To remove a user from the database:
+```bash
+python infrastructure/database_pg.py remove_user <username>
 ```
 
 ### Running the Pandino API Service
@@ -163,7 +211,7 @@ curl -X POST "http://127.0.0.1:5000/agentchat" \
 Replace `your_api_key_here` with a valid API key from the database, `your_full_user_name_here` with a user name (it will be used to create the agent dedicated export folder), `your_request_to_pandas_here` with your natural language request to Pandas and adjust the `model_name`, `llm_type`, and `data` fields as needed.
 
 ## Contributing
-Contributions are welcome! Please read the [contributing guidelines](CONTRIBUTING.md) before getting started. To report bugs or suggest features, please open an issue on the GitHub repository.
+Contributions are welcome! To report bugs or suggest features, please open an issue on the GitHub repository.
 
 ## License
 This project is licensed under the GPLv3 License. See the [LICENSE](LICENSE) file for details.
