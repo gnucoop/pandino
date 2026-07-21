@@ -1,0 +1,911 @@
+openapi: 3.0.3
+
+info:
+  title: Pandino API
+  version: "1.0.0"
+  description: >
+    Pandino is a multi-tenant LLM gateway / backend exposing a unified HTTP API for
+    conversational data analysis (DataChat), Retrieval-Augmented Generation (RAG),
+    an agentic RAG chat, document comparison, audio transcription / audio-to-form,
+    user & token management, and reporting.
+
+
+    ## Authentication
+
+    Most protected endpoints validate the `X-API-KEY` header against a user identity
+    (`X-USER-EMAIL`, `X-USER-NAME`, or a `username`/`useremail` field in the body).
+    Successful billable operations deduct a per-feature token cost from the user.
+
+
+    A few endpoints use alternative gateways:
+
+    - `/checkpandinouser` and `/storeragfile` authenticate against an external auth
+      gateway (Dino GraphQL when `client == "dino"`, otherwise `AUTH_GATEWAY_URL`).
+
+    - `/edittokens` is a Stripe-webhook-style entry point guarded by `X-STRIPE-KEY`.
+
+
+    This document is a hand-maintained reference mirroring `DEVELOPMENT.md §8`.
+
+servers:
+  - url: http://127.0.0.1:5000
+    description: Local development server
+
+tags:
+  - name: System
+    description: Health and welcome endpoints.
+  - name: Auth & Users
+    description: User registration, API-key validation, token management, feedback.
+  - name: Reporting & Documents
+    description: Plain-text prompting and document comparison.
+  - name: Multimodal
+    description: Audio transcription, document/image extraction, and audio-to-form.
+  - name: RAG / Ingestion
+    description: Document ingestion and Retrieval-Augmented Generation completions.
+  - name: DataChat
+    description: Conversational CSV analysis sessions (start → chat → end).
+
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-KEY
+      description: Pandino API key, validated against the user identity.
+    stripeKey:
+      type: apiKey
+      in: header
+      name: X-STRIPE-KEY
+      description: Shared secret matching `STRIPE_SK_KEY`; guards `/edittokens`.
+
+  parameters:
+    UserEmailHeader:
+      name: X-USER-EMAIL
+      in: header
+      required: true
+      schema:
+        type: string
+        format: email
+      description: Email identifying the Pandino user the API key belongs to.
+    UserNameHeader:
+      name: X-USER-NAME
+      in: header
+      required: true
+      schema:
+        type: string
+      description: Display name of the user (spaces are normalised to underscores).
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        details:
+          type: string
+        user_tokens:
+          type: integer
+      required: [error]
+    UserResponse:
+      type: object
+      properties:
+        response:
+          type: object
+          properties:
+            user:
+              type: object
+              properties:
+                user_email:
+                  type: string
+                api_key:
+                  type: string
+                expiration_date:
+                  type: string
+    ComparisonResult:
+      type: object
+      description: Shape produced by the document comparison service.
+      properties:
+        score:
+          type: number
+        summary:
+          type: string
+        reasoning:
+          type: string
+    Vector:
+      type: object
+      properties:
+        text:
+          type: string
+        similarity:
+          type: number
+        metadata:
+          type: object
+          additionalProperties: true
+    DataChatResponse:
+      type: object
+      description: >
+        Normalised DataChat response. `type` tells the client how to render `value`.
+      properties:
+        type:
+          type: string
+          enum: [str, dataframe, image, dict, text_and_image]
+        value:
+          description: String, list, or base64 payload depending on `type`.
+
+security:
+  - apiKey: []
+
+paths:
+  /:
+    get:
+      tags: [System]
+      summary: Welcome message
+      security: []
+      responses:
+        "200":
+          description: Welcome string.
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: Welcome to Pandino! This is the root endpoint.
+
+  /health:
+    get:
+      tags: [System]
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /checkpandinouser:
+    post:
+      tags: [Auth & Users]
+      summary: Register / authenticate a user via the external auth gateway
+      description: >
+        Validates the user against the external auth gateway (or Dino GraphQL when
+        `client == "dino"`), creating the Pandino user if missing. Returns the user's
+        API key and expiration date.
+      security: []
+      parameters:
+        - name: X-AUTH-TOKEN
+          in: header
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/UserEmailHeader'
+        - name: X-CLIENT
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Client identifier. Defaults to `dino` when absent.
+        - name: X-GRAPHQL-URL
+          in: header
+          required: false
+          schema:
+            type: string
+          description: Required when the client is Dino.
+      responses:
+        "200":
+          description: User validated (existing or newly created).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        "400":
+          description: Missing required header.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "403":
+          description: External authentication failed.
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /validateapikey:
+    post:
+      tags: [Auth & Users]
+      summary: Validate an API key
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+      responses:
+        "200":
+          description: API key is valid and unexpired.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  response:
+                    type: string
+                    example: API key match found
+        "403":
+          description: Invalid or expired API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /edittokens:
+    post:
+      tags: [Auth & Users]
+      summary: Add or remove tokens (Stripe-webhook style)
+      description: Adjusts a user's token balance. Guarded by `X-STRIPE-KEY`, not an API key.
+      security:
+        - stripeKey: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quantity, useremail]
+              properties:
+                quantity:
+                  type: integer
+                  description: Positive to add, negative to remove.
+                useremail:
+                  type: string
+                  format: email
+      responses:
+        "200":
+          description: Tokens updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  response:
+                    type: string
+        "400":
+          description: Missing key or bad request.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "403":
+          description: Invalid Stripe key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /getusertokens:
+    post:
+      tags: [Auth & Users]
+      summary: Get a user's token balance
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+      responses:
+        "200":
+          description: Current token balance.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  response:
+                    type: object
+                    properties:
+                      tokens:
+                        type: integer
+
+  /feedback:
+    post:
+      tags: [Auth & Users]
+      summary: Submit feedback on a generated answer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, question, answer, feedback]
+              properties:
+                username:
+                  type: string
+                  format: email
+                question:
+                  type: string
+                answer:
+                  type: string
+                feedback:
+                  type: string
+                  enum: [positive, negative]
+                log_id:
+                  type: integer
+                  description: Optional link to an existing log entry.
+                source:
+                  type: string
+      responses:
+        "200":
+          description: Feedback stored.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  feedback_id:
+                    type: integer
+        "400":
+          description: Validation error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /buyreport:
+    post:
+      tags: [Auth & Users]
+      summary: Deduct tokens for a report purchase
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prompts]
+              properties:
+                prompts:
+                  type: integer
+                  description: Number of tokens to deduct.
+      responses:
+        "200":
+          description: Tokens deducted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  response:
+                    type: boolean
+                  message:
+                    type: string
+        "500":
+          description: Not enough tokens or lookup failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /prompt.txt:
+    post:
+      tags: [Reporting & Documents]
+      summary: Plain-text LLM reply
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [prompt, username]
+              properties:
+                prompt:
+                  type: string
+                username:
+                  type: string
+                  format: email
+                language:
+                  type: string
+                  default: ITA
+      responses:
+        "200":
+          description: Plain-text model reply.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "400":
+          description: Missing prompt / username / API key, or insufficient tokens.
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /compare_docs:
+    post:
+      tags: [Reporting & Documents]
+      summary: Compare two or more documents
+      description: >
+        Compares at least two documents (uploaded files and/or inline text documents),
+        applying OCR to scanned inputs when needed. Requires ≥2 documents total.
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [prompt]
+              properties:
+                prompt:
+                  type: string
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: Uploaded document files.
+                text_documents:
+                  type: string
+                  description: >
+                    JSON array of `{content, filename?, role?}` objects for inline text
+                    documents.
+                file_roles:
+                  type: string
+                  description: >
+                    JSON array of role strings, one per uploaded file (length must match
+                    `files`).
+                additional_context:
+                  type: string
+                language:
+                  type: string
+      responses:
+        "200":
+          description: Comparison result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComparisonResult'
+        "400":
+          description: Missing header/prompt or fewer than two documents.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "403":
+          description: Not enough tokens.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "413":
+          description: Payload exceeds the model context window.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "415":
+          description: Unsupported document format.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /transcribe:
+    post:
+      tags: [Multimodal]
+      summary: Transcribe audio / extract text from a document or image
+      description: >
+        Audio files are transcribed with Whisper; images are described via a vision model;
+        PDF/DOCX/RTF files have their text extracted.
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+        - $ref: '#/components/parameters/UserNameHeader'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                lang:
+                  type: string
+                  default: ENG
+      responses:
+        "200":
+          description: Extracted / transcribed text.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  text:
+                    type: string
+        "400":
+          description: Missing file/header or unexpected mimetype.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "415":
+          description: Unsupported file format.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "422":
+          description: Failed to extract text from the document.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "500":
+          description: Transcription / vision failure or missing configuration.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /audioformcompilation:
+    post:
+      tags: [Multimodal]
+      summary: Fill a form schema from transcribed audio
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, exampledata, transcribedAudio]
+              properties:
+                name:
+                  type: string
+                  description: Form schema name.
+                exampledata:
+                  description: Empty example instance of the target form schema.
+                choices:
+                  description: Optional enumerated choices for schema fields.
+                transcribedAudio:
+                  type: string
+      responses:
+        "200":
+          description: JSON object matching the supplied form schema.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Missing required field.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "500":
+          description: Not enough tokens or generation failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /storeragfile:
+    post:
+      tags: [RAG / Ingestion]
+      summary: Ingest a document into a RAG namespace
+      description: >
+        Authenticates against the external auth gateway (Dino GraphQL or `AUTH_GATEWAY_URL`),
+        then chunks and embeds the uploaded file into the given namespace.
+      security: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, url, authToken]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                url:
+                  type: string
+                authToken:
+                  type: string
+                client:
+                  type: string
+                  description: Defaults to `dino` when absent.
+                userEmail:
+                  type: string
+                  description: Required for non-Dino clients.
+                graphqlUrl:
+                  type: string
+                  description: Required for the Dino client.
+                namespace:
+                  type: string
+                language:
+                  type: string
+      responses:
+        "200":
+          description: File ingested.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  file_id:
+                    type: string
+                  file_name:
+                    type: string
+                  namespace:
+                    type: string
+                  chunk_count:
+                    type: integer
+                  language:
+                    type: string
+                  tracking_saved:
+                    type: boolean
+        "400":
+          description: Missing file/url/auth field.
+          content:
+            text/plain:
+              schema:
+                type: string
+        "403":
+          description: External authentication failed.
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  /completion.json:
+    post:
+      tags: [RAG / Ingestion]
+      summary: Classic RAG completion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chat, username]
+              properties:
+                chat:
+                  description: Chat history / query.
+                username:
+                  type: string
+                  format: email
+                namespace:
+                  type: string
+                language:
+                  type: string
+                  default: ENG
+                info:
+                  type: array
+                  items:
+                    type: object
+      responses:
+        "200":
+          description: RAG completion with source vectors.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  answer:
+                    type: string
+                  vectors:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Vector'
+                  log_id:
+                    type: integer
+        "400":
+          description: Missing required keys or API key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "500":
+          description: Not enough tokens or completion failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /agentchat:
+    post:
+      tags: [RAG / Ingestion]
+      summary: Agentic RAG chat
+      description: >
+        Smolagents-based agent that retrieves context before answering. `chat` must be a
+        non-empty list.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chat, username]
+              properties:
+                chat:
+                  type: array
+                  items:
+                    type: string
+                username:
+                  type: string
+                  format: email
+                namespace:
+                  type: string
+                language:
+                  type: string
+                  default: ITA
+      responses:
+        "200":
+          description: Agent answer with follow-ups, vectors, tool calls and metrics.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  answer:
+                    type: string
+                  follow_ups:
+                    type: array
+                    items:
+                      type: string
+                  vectors:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Vector'
+                  tool_calls:
+                    type: array
+                    items:
+                      type: object
+                  metrics:
+                    type: object
+                  debug:
+                    type: object
+                  log_id:
+                    type: integer
+        "400":
+          description: Missing keys or invalid `chat`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "403":
+          description: Not enough tokens.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "500":
+          description: Agent runtime failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /startdatachat:
+    post:
+      tags: [DataChat]
+      summary: Start a DataChat session
+      description: Uploads a CSV and initialises an in-memory analysis agent for the API key.
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+        - $ref: '#/components/parameters/UserNameHeader'
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: CSV dataset.
+                model_name:
+                  type: string
+                llm_type:
+                  type: string
+                lang:
+                  type: string
+                  default: ENG
+      responses:
+        "200":
+          description: Agent active, with optional suggested questions.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  "Agent active":
+                    type: string
+                    example: active
+                  suggested_questions:
+                    type: string
+        "400":
+          description: Missing parameters or header.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "500":
+          description: Not enough tokens or agent creation failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /datachat:
+    post:
+      tags: [DataChat]
+      summary: Ask a question within an active DataChat session
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chat]
+              properties:
+                chat:
+                  type: string
+      responses:
+        "200":
+          description: Normalised DataChat response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  response:
+                    $ref: '#/components/schemas/DataChatResponse'
+                  explanation:
+                    nullable: true
+                  log_id:
+                    type: integer
+        "400":
+          description: Missing chat / body / header, or agent not active.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "500":
+          description: Not enough tokens or normalisation failure.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /enddatachat:
+    post:
+      tags: [DataChat]
+      summary: End a DataChat session
+      description: Deletes the in-memory agent for the API key and cleans up plot directories.
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+        - $ref: '#/components/parameters/UserNameHeader'
+      responses:
+        "200":
+          description: Agent deleted (or was not active).
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Missing header.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'

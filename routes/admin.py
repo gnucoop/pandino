@@ -4,10 +4,13 @@ from functools import wraps
 
 import bcrypt
 import psutil
+import yaml
+from dotenv import dotenv_values
 from flask import (
     Blueprint,
     current_app,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -21,6 +24,7 @@ from infrastructure.database_pg import (
     add_prompt,
     delete_cost,
     delete_prompt,
+    delete_rag_file,
     get_all_costs,
     get_all_prompts,
     get_all_rag_files,
@@ -53,6 +57,98 @@ def admin_required(f):
         return f(*args, **kwargs)
 
     return decorated_function
+
+
+_SAFE_VALUE_ENV_VARS = {
+    "AUDIO_FORM_TOKEN_COST",
+    "AUDIO_MODEL",
+    "AUDIO_PROVIDER",
+    "AUTH_GATEWAY_URL",
+    "COMPARE_DOCS_MODEL",
+    "COMPARE_DOCS_PROVIDER",
+    "COMPARE_DOCS_TOKEN_COST",
+    "COMPLETION_EMBEDDING_MODEL",
+    "COMPLETION_EMBEDDING_MODEL_PROVIDER",
+    "COMPLETION_MODEL",
+    "COMPLETION_MODEL_AGENT_CHAT",
+    "COMPLETION_MODEL_PROVIDER",
+    "COMPLETION_TOKEN_COST",
+    "DATACHAT_ENGINE",
+    "DATACHAT_LOG_LEVEL",
+    "DATACHAT_MAX_STEPS",
+    "DATACHAT_MODEL",
+    "DATACHAT_PLOTS_DIR",
+    "DATACHAT_PROVIDER",
+    "DATACHAT_RATE_LIMIT_PER_MIN",
+    "DATACHAT_SESSION_TTL_MIN",
+    "DATACHAT_TOKEN_COST",
+    "LANGCHAIN_ENDPOINT",
+    "LANGCHAIN_PROJECT",
+    "LANGCHAIN_TRACING_V2",
+    "MAUI_SCHEMA",
+    "OLLAMA_BASE_URL",
+    "PG_PORT",
+    "PGDB",
+    "PGHOST",
+    "PROMPT_MODEL",
+    "PROMPT_PROVIDER",
+    "PROMPT_TOKEN_COST",
+    "RAG_DEFAULT_NAMESPACE",
+    "RAG_MIN_SIM",
+    "RAG_TOP_K",
+    "VISION_MODEL",
+    "VISION_PROVIDER",
+    "WHISPER_MODEL",
+}
+
+_STATUS_ONLY_ENV_VARS = {
+    "ADMIN_PASSWORD_HASH",
+    "ANTHROPIC_API_KEY",
+    "DEEPINFRA_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "ENCRYPTION_KEY",
+    "GOOGLE_API_KEY",
+    "GROQ_API_KEY",
+    "LANGCHAIN_API_KEY",
+    "MISTRAL_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "PANDASAI_API_KEY",
+    "PGPWD",
+    "PINECONE_API_KEY",
+    "STRIPE_SK_KEY",
+    "TOGETHER_API_KEY",
+    "X_AUTH_TOKEN",
+}
+
+_DASHBOARD_ENV_ALLOWLIST = _SAFE_VALUE_ENV_VARS | _STATUS_ONLY_ENV_VARS
+
+
+def _collect_env_vars(root_path: str) -> dict:
+    """Env-var name→value map for the dashboard.
+
+    Reads from the .env file when present (dev); otherwise falls back to live
+    os.environ (Docker/prod, where --env-file injects vars without shipping the
+    file). Only explicitly allowlisted variables are emitted. Sensitive
+    allowlisted variables expose configuration status only.
+    """
+    env_path = os.path.join(root_path, ".env")
+    if os.path.exists(env_path):
+        raw = dict(dotenv_values(env_path))
+    else:
+        raw = {
+            key: os.environ.get(key)
+            for key in _DASHBOARD_ENV_ALLOWLIST
+            if key in os.environ
+        }
+
+    display = {}
+    for key, value in raw.items():
+        if key in _STATUS_ONLY_ENV_VARS:
+            display[key] = "configured" if value else "not set"
+        elif key in _SAFE_VALUE_ENV_VARS:
+            display[key] = value if value not in (None, "") else "not set"
+    return display
 
 
 # Define a route for the '/admin/costs' endpoint
@@ -193,34 +289,31 @@ def admin_logout():
     return redirect(url_for("admin.admin_login"))
 
 
+@admin_bp.route("/admin/api-docs", methods=["GET"])
+@admin_required
+def admin_api_docs() -> str:
+    """Render the Swagger UI page for the Pandino HTTP API."""
+    return render_template("admin/api_docs.html")
+
+
+@admin_bp.route("/admin/openapi.json", methods=["GET"])
+@admin_required
+def admin_openapi_spec():
+    """Serve the hand-maintained OpenAPI spec (project_docs/openapi.yaml) as JSON.
+
+    Served behind admin_required so the spec is only reachable by logged-in
+    admins, and returned as JSON to avoid YAML content-type quirks in Swagger UI.
+    """
+    spec_path = os.path.join(current_app.root_path, "project_docs", "openapi.yaml")
+    with open(spec_path, "r", encoding="utf-8") as fh:
+        spec = yaml.safe_load(fh)
+    return jsonify(spec)
+
+
 @admin_bp.route("/admin")
 @admin_required
 def admin_dashboard():
-    config = current_app.config["MAUI_CONFIG"]
-    env_vars = {
-        "DATACHAT_MODEL": config.models.datachat_model,
-        "DATACHAT_PROVIDER": config.models.datachat_provider,
-        "PROMPT_MODEL": config.models.prompt_model,
-        "PROMPT_PROVIDER": config.models.prompt_provider,
-        "AUDIO_MODEL": config.models.audio_model,
-        "AUDIO_PROVIDER": config.models.audio_provider,
-        "COMPLETION_MODEL": config.models.completion_model,
-        "COMPLETION_MODEL_PROVIDER": config.models.completion_model_provider,
-        "COMPLETION_MODEL_AGENT_CHAT": config.models.completion_model_agent_chat,
-        "COMPLETION_EMBEDDING_MODEL": config.models.completion_embedding_model,
-        "COMPLETION_EMBEDDING_MODEL_PROVIDER": config.models.completion_embedding_model_provider,
-        "WHISPER_MODEL": config.models.whisper_model,
-        "VISION_PROVIDER": config.models.vision_provider,
-        "VISION_MODEL": config.models.vision_model,
-        "DATACHAT_TOKEN_COST": config.datachat_token_cost,
-        "DATACHAT_MAX_STEPS": config.datachat.max_steps,
-        "DATACHAT_RATE_LIMIT_PER_MIN": config.datachat.rate_limit_per_min,
-        "DATACHAT_SESSION_TTL_MIN": config.datachat.session_ttl_min,
-        "DATACHAT_LOG_LEVEL": config.datachat.log_level,
-        "COMPLETION_TOKEN_COST": config.completion_token_cost,
-        "PROMPT_TOKEN_COST": config.prompt_token_cost,
-        "AUDIO_FORM_TOKEN_COST": config.audio_form_token_cost,
-    }
+    env_vars = _collect_env_vars(current_app.root_path)
 
     try:
         stats_data = get_users_stats()
@@ -598,5 +691,30 @@ def admin_upload_rag_file():
             flash("File was empty, nothing indexed", "warning")
     except Exception as e:
         flash(f"Error processing file: {str(e)}", "danger")
+
+    return redirect(url_for("admin.admin_rag_files"))
+
+
+@admin_bp.route("/admin/rag-files/delete", methods=["POST"])
+@admin_required
+def admin_delete_rag_file():
+    file_id = request.form.get("file_id")
+    namespace = request.form.get("namespace")
+
+    if not file_id or not namespace:
+        flash("Missing file id or namespace", "danger")
+        return redirect(url_for("admin.admin_rag_files"))
+
+    try:
+        result = delete_rag_file(file_id, namespace)
+        if result["row_deleted"]:
+            flash(
+                f"RAG file deleted ({result['chunks_deleted']} chunks removed)",
+                "success",
+            )
+        else:
+            flash("RAG file not found", "warning")
+    except Exception as e:
+        flash(f"Error deleting RAG file: {str(e)}", "danger")
 
     return redirect(url_for("admin.admin_rag_files"))
