@@ -53,6 +53,7 @@ from infrastructure.database_methods import (
     build_check_table_exists_query,
     build_insert_rag_file_query,
     build_get_all_rag_files_query,
+    build_get_rag_file_for_delete_query,
     build_delete_rag_file_query,
     build_delete_pgvector_by_file_id_query,
 )
@@ -607,8 +608,8 @@ def delete_rag_file(file_id: str, namespace: str) -> dict:
     :param namespace: Namespace of the file (already normalized when stored).
     :return: {"row_deleted": bool, "chunks_deleted": int}.
     """
-    # Namespace stored in rag_files is already normalized; normalize defensively
-    # here too (avoids importing normalize_table_name → circular import).
+    # Keep this in sync with vector_store.normalize_table_name without importing
+    # it here, because vector_store imports this module.
     table_name = namespace.strip().lower().replace("-", "_")
 
     logging.info(f"Attempting to delete rag file: id={file_id} namespace={table_name}")
@@ -618,17 +619,36 @@ def delete_rag_file(file_id: str, namespace: str) -> dict:
 
     try:
         chunks_deleted = 0
+        validate_query, validate_params = build_get_rag_file_for_delete_query(
+            file_id, table_name
+        )
+        cursor.execute(validate_query, validate_params)
+        if cursor.fetchone() is None:
+            conn.rollback()
+            return {"row_deleted": False, "chunks_deleted": 0}
+
         current_schema = schema
-        if current_schema and table_exists(current_schema, table_name):
+        table_exists_for_namespace = False
+        if current_schema:
+            exists_query, exists_params = build_check_table_exists_query(
+                current_schema, table_name
+            )
+            cursor.execute(exists_query, exists_params)
+            table_exists_for_namespace = cursor.fetchone() is not None
+
+        if table_exists_for_namespace:
             chunk_query, chunk_params = build_delete_pgvector_by_file_id_query(
                 table_name, file_id
             )
             cursor.execute(chunk_query, chunk_params)
             chunks_deleted = cursor.rowcount
 
-        row_query, row_params = build_delete_rag_file_query(file_id)
+        row_query, row_params = build_delete_rag_file_query(file_id, table_name)
         cursor.execute(row_query, row_params)
         row_deleted = cursor.rowcount > 0
+        if not row_deleted:
+            conn.rollback()
+            return {"row_deleted": False, "chunks_deleted": 0}
 
         conn.commit()
         return {"row_deleted": row_deleted, "chunks_deleted": chunks_deleted}

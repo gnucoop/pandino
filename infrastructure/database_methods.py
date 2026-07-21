@@ -227,17 +227,38 @@ def build_get_all_rag_files_query() -> Tuple[sql.Composed, Tuple[()]]:
     return query, ()
 
 
-def build_delete_rag_file_query(
+def build_get_rag_file_for_delete_query(
     file_id: str,
+    namespace: str,
 ) -> Tuple[sql.SQL, Tuple[Any, ...]]:
     """
-    Builds a SQL query to delete a record from the rag_files table by its id.
+    Builds a SQL query to lock and validate a RAG file before deletion.
 
     :param file_id: Unique identifier of the document (file-level, hash-based).
+    :param namespace: Normalized namespace where embeddings are stored.
     :return: Tuple with SQL query and parameters.
     """
-    query = sql.SQL("DELETE FROM rag_files WHERE id = %s")
-    params = (file_id,)
+    query = sql.SQL(
+        "SELECT id FROM rag_files WHERE id = %s AND namespace = %s FOR UPDATE"
+    )
+    params = (file_id, namespace)
+    return query, params
+
+
+def build_delete_rag_file_query(
+    file_id: str,
+    namespace: str,
+) -> Tuple[sql.SQL, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to delete a record from the rag_files table by its id
+    and normalized namespace.
+
+    :param file_id: Unique identifier of the document (file-level, hash-based).
+    :param namespace: Normalized namespace where embeddings are stored.
+    :return: Tuple with SQL query and parameters.
+    """
+    query = sql.SQL("DELETE FROM rag_files WHERE id = %s AND namespace = %s")
+    params = (file_id, namespace)
     return query, params
 
 
