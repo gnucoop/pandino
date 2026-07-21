@@ -59,38 +59,94 @@ def admin_required(f):
     return decorated_function
 
 
-_SECRET_MARKERS = ("SECRET", "PASSWORD", "PWD", "HASH", "KEY", "TOKEN")
+_SAFE_VALUE_ENV_VARS = {
+    "AUDIO_FORM_TOKEN_COST",
+    "AUDIO_MODEL",
+    "AUDIO_PROVIDER",
+    "AUTH_GATEWAY_URL",
+    "COMPARE_DOCS_MODEL",
+    "COMPARE_DOCS_PROVIDER",
+    "COMPARE_DOCS_TOKEN_COST",
+    "COMPLETION_EMBEDDING_MODEL",
+    "COMPLETION_EMBEDDING_MODEL_PROVIDER",
+    "COMPLETION_MODEL",
+    "COMPLETION_MODEL_AGENT_CHAT",
+    "COMPLETION_MODEL_PROVIDER",
+    "COMPLETION_TOKEN_COST",
+    "DATACHAT_ENGINE",
+    "DATACHAT_LOG_LEVEL",
+    "DATACHAT_MAX_STEPS",
+    "DATACHAT_MODEL",
+    "DATACHAT_PLOTS_DIR",
+    "DATACHAT_PROVIDER",
+    "DATACHAT_RATE_LIMIT_PER_MIN",
+    "DATACHAT_SESSION_TTL_MIN",
+    "DATACHAT_TOKEN_COST",
+    "LANGCHAIN_ENDPOINT",
+    "LANGCHAIN_PROJECT",
+    "LANGCHAIN_TRACING_V2",
+    "MAUI_SCHEMA",
+    "OLLAMA_BASE_URL",
+    "PG_PORT",
+    "PGDB",
+    "PGHOST",
+    "PROMPT_MODEL",
+    "PROMPT_PROVIDER",
+    "PROMPT_TOKEN_COST",
+    "RAG_DEFAULT_NAMESPACE",
+    "RAG_MIN_SIM",
+    "RAG_TOP_K",
+    "VISION_MODEL",
+    "VISION_PROVIDER",
+    "WHISPER_MODEL",
+}
 
+_STATUS_ONLY_ENV_VARS = {
+    "ADMIN_PASSWORD_HASH",
+    "ANTHROPIC_API_KEY",
+    "DEEPINFRA_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "ENCRYPTION_KEY",
+    "GOOGLE_API_KEY",
+    "GROQ_API_KEY",
+    "LANGCHAIN_API_KEY",
+    "MISTRAL_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "PANDASAI_API_KEY",
+    "PGPWD",
+    "PINECONE_API_KEY",
+    "STRIPE_SK_KEY",
+    "TOGETHER_API_KEY",
+    "X_AUTH_TOKEN",
+}
 
-def _is_secret_var(name: str) -> bool:
-    """Return True for env vars whose values must be masked on the dashboard."""
-    upper = name.upper()
-    if upper.endswith("_COST"):  # DATACHAT_TOKEN_COST etc. are not secrets
-        return False
-    return any(marker in upper for marker in _SECRET_MARKERS)
+_DASHBOARD_ENV_ALLOWLIST = _SAFE_VALUE_ENV_VARS | _STATUS_ONLY_ENV_VARS
 
 
 def _collect_env_vars(root_path: str) -> dict:
     """Env-var name→value map for the dashboard.
 
     Reads from the .env file when present (dev); otherwise falls back to live
-    os.environ filtered by the names catalogued in .env.example (Docker/prod,
-    where --env-file injects vars without shipping the file). Secret-looking
-    values are masked.
+    os.environ (Docker/prod, where --env-file injects vars without shipping the
+    file). Only explicitly allowlisted variables are emitted. Sensitive
+    allowlisted variables expose configuration status only.
     """
     env_path = os.path.join(root_path, ".env")
     if os.path.exists(env_path):
         raw = dict(dotenv_values(env_path))
     else:
-        example_path = os.path.join(root_path, ".env.example")
-        keys = dotenv_values(example_path).keys() if os.path.exists(example_path) else []
-        raw = {k: os.environ.get(k) for k in keys if k in os.environ}
+        raw = {
+            key: os.environ.get(key)
+            for key in _DASHBOARD_ENV_ALLOWLIST
+            if key in os.environ
+        }
 
     display = {}
     for key, value in raw.items():
-        if _is_secret_var(key):
-            display[key] = "•••••• (set)" if value else "not set"
-        else:
+        if key in _STATUS_ONLY_ENV_VARS:
+            display[key] = "configured" if value else "not set"
+        elif key in _SAFE_VALUE_ENV_VARS:
             display[key] = value if value not in (None, "") else "not set"
     return display
 
