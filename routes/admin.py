@@ -243,12 +243,12 @@ def admin_api_docs() -> str:
 @admin_bp.route("/admin/openapi.json", methods=["GET"])
 @admin_required
 def admin_openapi_spec():
-    """Serve the hand-maintained OpenAPI spec (docs/openapi.yaml) as JSON.
+    """Serve the hand-maintained OpenAPI spec (project_docs/openapi.yaml) as JSON.
 
     Served behind admin_required so the spec is only reachable by logged-in
     admins, and returned as JSON to avoid YAML content-type quirks in Swagger UI.
     """
-    spec_path = os.path.join(current_app.root_path, "docs", "openapi.yaml")
+    spec_path = os.path.join(current_app.root_path, "project_docs", "openapi.yaml")
     with open(spec_path, "r", encoding="utf-8") as fh:
         spec = yaml.safe_load(fh)
     return jsonify(spec)

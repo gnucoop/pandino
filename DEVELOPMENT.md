@@ -156,9 +156,9 @@ pandino/
 │   ├── base.html login.html dashboard.html users.html edit_user.html
 │   ├── logs.html feedback.html prompts.html edit_prompt.html
 │   ├── costs.html edit_cost.html rag_files.html
-│   └── api_docs.html           #   Swagger UI page (renders docs/openapi.yaml)
+│   └── api_docs.html           #   Swagger UI page (renders project_docs/openapi.yaml)
 │
-├── docs/
+├── project_docs/
 │   ├── openapi.yaml            # Hand-maintained OpenAPI 3.0 spec (served in admin panel)
 │   └── auth-flow.md            # Mermaid diagrams of the auth + endpoint-usage flow
 │
@@ -445,7 +445,7 @@ All protected endpoints validate the `X-API-KEY` header against
 `X-USER-EMAIL` (or `username` in the body). Most deduct a token cost on success.
 
 > **Interactive docs.** An admin-only Swagger UI is available at **`/admin/api-docs`**,
-> backed by [`docs/openapi.yaml`](docs/openapi.yaml) (served as JSON via
+> backed by [`project_docs/openapi.yaml`](project_docs/openapi.yaml) (served as JSON via
 > `/admin/openapi.json`). That spec is hand-maintained and mirrors this section — keep
 > the two in sync when the API changes.
 
@@ -728,7 +728,7 @@ Features:
 - **RAG files** (`/admin/rag-files`, `…/upload`) — list ingested documents and
   upload new ones into a namespace.
 - **API Docs** (`/admin/api-docs`) — interactive Swagger UI for the HTTP API, rendered
-  from [`docs/openapi.yaml`](docs/openapi.yaml). The spec is served as JSON via
+  from [`project_docs/openapi.yaml`](project_docs/openapi.yaml). The spec is served as JSON via
   `/admin/openapi.json`; both routes are behind `admin_required`, and there is an
   "API Docs" entry in the sidebar.
 
