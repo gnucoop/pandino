@@ -66,10 +66,10 @@ Pandino is a **Flask 3** application built around a strict layered architecture:
   the PGVector store (`infrastructure/vector_store.py`), LLM/embedding factories
   (`infrastructure/ai.py`, `llm/litellm_factory.py`) and authentication gateways
   (`infrastructure/dino.py`, `infrastructure/external_auth.py`).
-- **Configuration is centralized.** Every environment read happens once in
-  `config.load_config()` and produces an immutable `AppConfig` dataclass that is
-  attached to the Flask app (`app.config["MAUI_CONFIG"]`) and available everywhere
-  via `current_app`.
+- **Configuration is centralized at the app boundary.** `config.load_config()`
+  produces an immutable `AppConfig` dataclass that is attached to the Flask app
+  (`app.config["MAUI_CONFIG"]`). A few infrastructure/admin paths keep explicit
+  `os.environ` fallbacks for provider keys and runtime display.
 - **Prompts are data.** Prompt templates live in code as defaults but can be
   overridden at runtime from the `prompts` DB table (see
   [§12](#12-prompt-management-db-driven)).
@@ -162,6 +162,8 @@ pandino/
 │   ├── openapi.yaml            # Hand-maintained OpenAPI 3.0 spec (served in admin panel)
 │   └── auth-flow.md            # Mermaid diagrams of the auth + endpoint-usage flow
 │
+├── docs/                       # Local ignored workspace for notes / Codex analyses
+│
 ├── tests/                      # pytest suite
 └── .github/workflows/          # CI: build_and_push.yml (multi-arch Docker)
 ```
@@ -222,9 +224,17 @@ python main.py          # → http://127.0.0.1:5000
 
 ## 4. Configuration System (`config.py`)
 
-All environment-variable reads are centralized in `load_config()` (`config.py:156`).
-Importing `config.py` has **no side effects**; the env is only read when
+Application configuration is loaded through `load_config()` (`config.py:156`).
+Importing `config.py` has **no side effects**; the main `AppConfig` is created when
 `load_config()` is called from `main.py`.
+
+Known direct env reads still exist and are intentional:
+
+- `infrastructure/ai.py` and `llm/litellm_factory.py` can fall back to provider
+  API-key env vars when a caller does not pass an explicit key.
+- `routes/admin.py` reads `.env` or `os.environ` for the dashboard environment view,
+  filtered through explicit allowlists.
+- DataChat internals read selected `DATACHAT_*` variables directly.
 
 ### Required variables (no defaults — app refuses to start if missing)
 
@@ -266,6 +276,17 @@ The resulting `AppConfig` is a frozen dataclass composed of sub-configs:
 `"Deepinfra"`) to the env var holding its key (e.g. `DEEPINFRA_API_KEY`). This is
 used by both `infrastructure/ai.py` (LangChain clients) and
 `llm/litellm_factory.py` (Smolagents `LiteLLMModel`).
+
+### Secrets and local notes
+
+- Keep real secrets in `.env` or your orchestrator secret store; `.env` is ignored.
+- The admin dashboard may show safe config values, but known secrets are rendered
+  only as `configured` / `not set`.
+- `project_docs/` is the versioned home for maintained project documentation such as
+  [`project_docs/openapi.yaml`](project_docs/openapi.yaml) and
+  [`project_docs/auth-flow.md`](project_docs/auth-flow.md).
+- `/docs` is ignored by `.gitignore` and should be treated as a local workspace for
+  notes, investigations, and Codex analyses, not as the API documentation source.
 
 ---
 
@@ -493,6 +514,12 @@ All protected endpoints validate the `X-API-KEY` header against
 | `POST` | `/completion.json` | `X-API-KEY` | `{chat, username, namespace?, language?, info?}` | `{answer, vectors, log_id?}` — classic RAG completion |
 | `POST` | `/agentchat` | `X-API-KEY` | `{chat:[...], username, namespace?, language?}` | `{answer, follow_ups, vectors, tool_calls, metrics, debug, log_id?}` — agentic RAG |
 
+Admin users can also manage indexed files at `/admin/rag-files`. Uploads reuse
+`process_rag_file()`. Deletes submit `file_id` plus namespace to
+`database_pg.delete_rag_file()`, which validates the normalized namespace before
+deleting chunks from the namespace PGVector table and the `rag_files` tracking row
+in one transaction.
+
 ### DataChat (conversational CSV analysis)
 
 A session is: **start → N× chat → end**.
@@ -716,7 +743,8 @@ Web UI under `/admin` (Jinja2 templates in `templates/admin/`), protected by
 Features:
 
 - **Dashboard** (`/admin`) — user/token stats, CPU/memory (psutil), daily cost,
-  recent activity, live env-var view.
+  recent activity, and a filtered env-var view. Only allowlisted safe values are
+  shown; known secrets render as `configured` / `not set`.
 - **Users** (`/admin/users`, `/admin/users/<id>/edit`) — paginated, searchable,
   edit token balances.
 - **Logs** (`/admin/logs`) — paginated token-usage logs with date range + charts.
@@ -725,8 +753,9 @@ Features:
   CRUD on prompt templates.
 - **Costs** (`/admin/costs`, `…/add`, `…/<id>/edit`, `…/<id>/delete`) — per-model
   input/output pricing used to compute `logs.cost`.
-- **RAG files** (`/admin/rag-files`, `…/upload`) — list ingested documents and
-  upload new ones into a namespace.
+- **RAG files** (`/admin/rag-files`, `…/upload`, `…/delete`) — list ingested
+  documents, upload new ones into a namespace, and delete a tracked file with its
+  namespace chunks.
 - **API Docs** (`/admin/api-docs`) — interactive Swagger UI for the HTTP API, rendered
   from [`project_docs/openapi.yaml`](project_docs/openapi.yaml). The spec is served as JSON via
   `/admin/openapi.json`; both routes are behind `admin_required`, and there is an
@@ -770,6 +799,13 @@ To add, say, `POST /summarize_text`:
 - Existing tests cover `config.load_config()` (required/optional/defaults), document
   extraction, OCR, the documents route, and AI vision. They mock the DB and LLM
   layers, so **no live Postgres/provider is required**.
+- Admin-panel regression coverage includes:
+  ```bash
+  pytest tests/test_admin_rag_delete.py
+  pytest tests/test_admin_dashboard_env.py
+  ```
+  These verify namespace-aware RAG deletion and dashboard env allowlist/status-only
+  behavior.
 - When writing tests, follow the same pattern: `unittest.mock.patch.dict` for env,
   and mock `infrastructure.*` boundaries. Services are designed to be tested without
   Flask.
@@ -804,6 +840,9 @@ Secrets required in GitHub: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`
 - **Database:** ensure `pgvector` extension and run `init_db()` on first deploy.
 - **Secrets:** provide all required env vars (see [§4](#4-configuration-system-configpy))
   via your orchestrator's secret store — never bake them into the image.
+- **Admin API docs:** `/admin/api-docs` and `/admin/openapi.json` are session-protected;
+  keep [`project_docs/openapi.yaml`](project_docs/openapi.yaml) current when endpoint
+  contracts change.
 
 ---
 
@@ -814,7 +853,10 @@ Secrets required in GitHub: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`
 - **Docstrings** follow Google/NumPy-ish style with `:param:` / `:return:`.
 - **SQL safety** — always go through `infrastructure/database_methods.py` builders;
   never f-string SQL.
-- **Configuration** — read env only in `config.py`; consume `AppConfig` elsewhere.
+- **Configuration** — prefer `AppConfig` outside bootstrap/config code. If a direct env
+  fallback is necessary, keep it explicit, narrow, and documented.
+- **Documentation** — use `project_docs/` for versioned project docs. Keep `/docs` for
+  local ignored notes and analyses unless the repository policy changes.
 - **Prompts** — use `load_prompt(title, default_text=...)` so ops can override
   without a deploy.
 - **Token discipline** — every billable route checks balance, debits, and logs.
