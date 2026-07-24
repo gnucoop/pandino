@@ -378,8 +378,46 @@ def extract_text_from_image(
     )["text"]
 
 
-def whisper_response(file, whisper_model: str, deepinfra_api_key: str):
-    url = f"https://api.deepinfra.com/v1/inference/{whisper_model}"
-    headers = {"Authorization": f"bearer {deepinfra_api_key}"}
-    files = {"audio": file, "response_format": (None, "text")}
-    return requests.post(url, headers=headers, files=files)
+def whisper_response(
+    file,
+    provider: str,
+    model: str,
+    api_key: str,
+    base_url: Optional[str] = None,
+) -> requests.Response:
+    """
+    Send an audio file to the configured transcription provider.
+
+    :param file: Audio file object to transcribe.
+    :param provider: Provider identifier (e.g., 'Deepinfra', 'Mistral').
+    :param model: Model name or version string.
+    :param api_key: API key for the selected provider.
+    :param base_url: Optional base URL override, required for self-hosted
+        OpenAI-compatible providers other than 'Deepinfra'/'Mistral'.
+    :return: The raw requests.Response from the provider.
+    :raises ValueError: If provider requires a base_url that was not supplied.
+    """
+    logging.info(f"Choosing Whisper provider: provider={provider}, model={model}")
+
+    if provider == "Deepinfra":
+        url = f"https://api.deepinfra.com/v1/inference/{model}"
+        headers = {"Authorization": f"bearer {api_key}"}
+        files = {"audio": file, "response_format": (None, "text")}
+        return requests.post(url, headers=headers, files=files)
+
+    if provider == "Mistral":
+        url = f"{base_url or 'https://api.mistral.ai/v1'}/audio/transcriptions"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        files = {"file": file}
+        data = {"model": model}
+        return requests.post(url, headers=headers, files=files, data=data)
+
+    if not base_url:
+        raise ValueError(
+            f"base_url is required for self-hosted whisper provider '{provider}'"
+        )
+    url = f"{base_url}/audio/transcriptions"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    files = {"file": file}
+    data = {"model": model}
+    return requests.post(url, headers=headers, files=files, data=data)

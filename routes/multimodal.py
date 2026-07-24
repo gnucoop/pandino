@@ -41,17 +41,42 @@ def whisper_parse() -> Union[Response, tuple[Response, int]]:
     config = current_app.config["MAUI_CONFIG"]
 
     if file.mimetype.startswith("audio"):
-        if not config.models.whisper_model or not config.api_keys.deepinfra_api_key:
+        whisper_provider = config.models.whisper_provider
+        whisper_base_url = config.models.whisper_base_url
+        whisper_api_key = os.getenv(
+            PROVIDER_API_KEY_MAP.get(whisper_provider or "", "")
+        ) or ""
+
+        if not config.models.whisper_model:
             return jsonify({"error": "Missing Whisper configuration"}), 500
 
-        response = whisper_response(
-            file, config.models.whisper_model, config.api_keys.deepinfra_api_key
-        )
+        if whisper_provider in PROVIDER_API_KEY_MAP and not whisper_api_key:
+            return jsonify({"error": "Missing Whisper configuration"}), 500
+
+        try:
+            response = whisper_response(
+                file,
+                whisper_provider,
+                config.models.whisper_model,
+                whisper_api_key,
+                whisper_base_url,
+            )
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 500
+
         if response.status_code == 200:
             try:
-                return jsonify(response.json()), 200
+                payload = response.json()
             except Exception as e:
                 return jsonify({"error": f"Invalid JSON from whisper: {str(e)}"}), 500
+
+            text = payload.get("text")
+            if text is None:
+                return (
+                    jsonify({"error": "Whisper response missing 'text' field"}),
+                    500,
+                )
+            return jsonify({"text": text}), 200
         else:
             current_app.logger.error(
                 f"Whisper failed: {response.status_code} - {response.text}"
