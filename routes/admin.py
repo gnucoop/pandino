@@ -87,7 +87,7 @@ _SAFE_VALUE_ENV_VARS = {
     "LANGCHAIN_TRACING_V2",
     "MAUI_SCHEMA",
     "OLLAMA_BASE_URL",
-    "PG_PORT",
+    "PGPORT",
     "PGDB",
     "PGHOST",
     "PROMPT_MODEL",
@@ -660,6 +660,12 @@ def admin_upload_rag_file():
 
     url = file.filename or ""
 
+    whisper_provider = config.models.whisper_provider
+    whisper_api_key = os.getenv(
+        PROVIDER_API_KEY_MAP.get(whisper_provider or "", "")
+    )
+    whisper_base_url = config.models.whisper_base_url
+
     try:
         result = process_rag_file(
             file,
@@ -667,7 +673,9 @@ def admin_upload_rag_file():
             namespace,
             language,
             whisper_model=config.models.whisper_model,
-            deepinfra_api_key=config.api_keys.deepinfra_api_key,
+            whisper_provider=whisper_provider,
+            whisper_api_key=whisper_api_key,
+            whisper_base_url=whisper_base_url,
             vision_provider=config.models.vision_provider,
             vision_model=config.models.vision_model,
             embedding_provider=config.models.completion_embedding_model_provider,

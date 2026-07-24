@@ -21,7 +21,7 @@ def test_load_config_success():
         "RAG_TOP_K": "5",
         "DATACHAT_ENGINE": "smolagents",
         "COMPLETION_TOKEN_COST": "3",
-        "PG_PORT": "5433",
+        "PGPORT": "5433",
     }
     with patch.dict("os.environ", env, clear=True):
         cfg = load_config()
@@ -37,7 +37,11 @@ def test_load_config_success():
 
 
 def test_load_config_missing_required_raises():
-    partial_env = {k: v for k, v in REQUIRED_ENV.items() if k not in ("PGHOST", "ADMIN_PASSWORD_HASH")}
+    partial_env = {
+        k: v
+        for k, v in REQUIRED_ENV.items()
+        if k not in ("PGHOST", "ADMIN_PASSWORD_HASH")
+    }
     with patch.dict("os.environ", partial_env, clear=True):
         with pytest.raises(ValueError) as exc_info:
             load_config()

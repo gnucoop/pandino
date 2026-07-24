@@ -194,7 +194,7 @@ def load_config() -> AppConfig:
         password=required["PGPWD"],  # type: ignore[arg-type]
         host=required["PGHOST"],  # type: ignore[arg-type]
         db=required["PGDB"],  # type: ignore[arg-type]
-        port=os.environ.get("PG_PORT", "5432"),
+        port=os.environ.get("PGPORT", "5432"),
         schema=os.environ.get("MAUI_SCHEMA", "public"),
     )
 

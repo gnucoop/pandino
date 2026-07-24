@@ -38,7 +38,9 @@ def process_rag_file(
     language: str | None,
     *,
     whisper_model: str | None,
-    deepinfra_api_key: str | None,
+    whisper_provider: str | None,
+    whisper_api_key: str | None,
+    whisper_base_url: str | None = None,
     vision_provider: str | None,
     vision_model: str | None,
     embedding_provider: str | None,
@@ -53,7 +55,9 @@ def process_rag_file(
     :param namespace: Vector store namespace/table name.
     :param language: Optional language code for metadata.
     :param whisper_model: Whisper model name for audio transcription.
-    :param deepinfra_api_key: API key for DeepInfra Whisper requests.
+    :param whisper_provider: Whisper provider name for audio transcription.
+    :param whisper_api_key: API key for the whisper provider.
+    :param whisper_base_url: Optional base URL override for the whisper provider.
     :param vision_provider: Vision provider name for image description.
     :param vision_model: Vision model name for image description.
     :param embedding_provider: Embedding provider name.
@@ -102,10 +106,12 @@ def process_rag_file(
             paragraphs = md_split.split_documents(page_docs)
 
     elif file.mimetype.startswith("audio"):
-        if not whisper_model or not deepinfra_api_key:
+        if not whisper_model or not whisper_provider:
             raise ValueError("Missing Whisper configuration")
 
-        resp = whisper_response(file, whisper_model, deepinfra_api_key)
+        resp = whisper_response(
+            file, whisper_provider, whisper_model, whisper_api_key or "", whisper_base_url
+        )
         if resp.status_code != 200:
             raise ValueError("Error whispering audio")
 
