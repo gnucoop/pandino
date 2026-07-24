@@ -238,23 +238,23 @@ Known direct env reads still exist and are intentional:
 
 ### Required variables (no defaults — app refuses to start if missing)
 
-| Variable | Purpose |
-|---|---|
-| `ENCRYPTION_KEY` | Fernet key used to encrypt user API keys at rest |
-| `PGUSER`, `PGPWD`, `PGHOST`, `PGDB` | PostgreSQL credentials |
-| `ADMIN_USERNAME` | Admin panel login username |
-| `ADMIN_PASSWORD_HASH` | bcrypt hash of the admin password |
+| Variable                            | Purpose                                          |
+| ----------------------------------- | ------------------------------------------------ |
+| `ENCRYPTION_KEY`                    | Fernet key used to encrypt user API keys at rest |
+| `PGUSER`, `PGPWD`, `PGHOST`, `PGDB` | PostgreSQL credentials                           |
+| `ADMIN_USERNAME`                    | Admin panel login username                       |
+| `ADMIN_PASSWORD_HASH`               | bcrypt hash of the admin password                |
 
 ### Optional variables (with defaults)
 
-| Group | Variables | Default |
-|---|---|---|
-| **DB** | `PG_PORT`, `MAUI_SCHEMA` | `5432`, `public` |
-| **Models** | `DATACHAT_MODEL/PROVIDER`, `PROMPT_*`, `COMPLETION_*`, `AUDIO_*`, `WHISPER_MODEL`, `VISION_*`, `COMPARE_DOCS_*` | see `.env.example` (DeepInfra / Qwen / Gemma defaults) |
-| **Token costs** | `DATACHAT_TOKEN_COST`, `COMPLETION_TOKEN_COST`, `PROMPT_TOKEN_COST`, `AUDIO_FORM_TOKEN_COST`, `COMPARE_DOCS_TOKEN_COST` | `1` |
-| **RAG** | `RAG_TOP_K`, `RAG_MIN_SIM`, `RAG_DEFAULT_NAMESPACE` | `3`, `0.5`, `Dino` |
-| **DataChat engine** | `DATACHAT_ENGINE`, `DATACHAT_MAX_STEPS`, `DATACHAT_RATE_LIMIT_PER_MIN`, `DATACHAT_SESSION_TTL_MIN`, `DATACHAT_LOG_LEVEL` | `smolagents`, `12`, `0`, `60`, `INFO` |
-| **Auth** | `AUTH_GATEWAY_URL`, `STRIPE_SK_KEY` | `http://localhost:3000/validate`, `None` |
+| Group               | Variables                                                                                                                | Default                                                |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| **DB**              | `PGPORT`, `MAUI_SCHEMA`                                                                                                  | `5432`, `public`                                       |
+| **Models**          | `DATACHAT_MODEL/PROVIDER`, `PROMPT_*`, `COMPLETION_*`, `AUDIO_*`, `WHISPER_MODEL`, `VISION_*`, `COMPARE_DOCS_*`          | see `.env.example` (DeepInfra / Qwen / Gemma defaults) |
+| **Token costs**     | `DATACHAT_TOKEN_COST`, `COMPLETION_TOKEN_COST`, `PROMPT_TOKEN_COST`, `AUDIO_FORM_TOKEN_COST`, `COMPARE_DOCS_TOKEN_COST`  | `1`                                                    |
+| **RAG**             | `RAG_TOP_K`, `RAG_MIN_SIM`, `RAG_DEFAULT_NAMESPACE`                                                                      | `3`, `0.5`, `Dino`                                     |
+| **DataChat engine** | `DATACHAT_ENGINE`, `DATACHAT_MAX_STEPS`, `DATACHAT_RATE_LIMIT_PER_MIN`, `DATACHAT_SESSION_TTL_MIN`, `DATACHAT_LOG_LEVEL` | `smolagents`, `12`, `0`, `60`, `INFO`                  |
+| **Auth**            | `AUTH_GATEWAY_URL`, `STRIPE_SK_KEY`                                                                                      | `http://localhost:3000/validate`, `None`               |
 
 ### How to read config inside a route/service
 
@@ -296,14 +296,14 @@ used by both `infrastructure/ai.py` (LangChain clients) and
 
 Created by `database_pg.init_db()` (`infrastructure/database_pg.py:107`):
 
-| Table | Purpose |
-|---|---|
-| `users` | `id, username, api_key (encrypted), date_valid_until, tokens (≥0)` |
-| `logs` | Per-request token accounting: `user_id, date, token_input, token_output, cost, model, provider` |
-| `costs` | Time-bounded input/output token pricing per model+provider (used to compute `logs.cost`) |
-| `prompts` | `title, version, message` — DB-overridable prompt templates |
-| `feedback` | User thumbs-up/down on answers, optionally linked to `logs.id` |
-| `rag_files` | Tracking of ingested documents (`file_id`, namespace, chunk_count, language) |
+| Table       | Purpose                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------- |
+| `users`     | `id, username, api_key (encrypted), date_valid_until, tokens (≥0)`                              |
+| `logs`      | Per-request token accounting: `user_id, date, token_input, token_output, cost, model, provider` |
+| `costs`     | Time-bounded input/output token pricing per model+provider (used to compute `logs.cost`)        |
+| `prompts`   | `title, version, message` — DB-overridable prompt templates                                     |
+| `feedback`  | User thumbs-up/down on answers, optionally linked to `logs.id`                                  |
+| `rag_files` | Tracking of ingested documents (`file_id`, namespace, chunk_count, language)                    |
 
 > **Plus** one PGVector table **per namespace** (e.g. `dino`, `farm`) created
 > lazily by `ensure_pgvector_namespace_ready()` (`infrastructure/vector_store.py:57`).
@@ -398,18 +398,18 @@ this contract:
 
 Blueprints:
 
-| Blueprint | File | Prefix |
-|---|---|---|
-| `system_bp` | `routes/system.py` | `/` |
-| `auth_bp` | `routes/auth.py` | `/` |
-| `users_bp` | `routes/users.py` | `/` |
-| `reporting_bp` | `routes/reporting.py` | `/` |
-| `documents_bp` | `routes/documents.py` | `/` |
-| `multimodal_bp` | `routes/multimodal.py` | `/` |
-| `ingestion_bp` | `routes/ingestion.py` | `/` |
-| `rag_bp` | `routes/rag.py` | `/` |
-| `datachat_bp` | `routes/datachat.py` | `/` |
-| `admin_bp` | `routes/admin.py` | `/admin` |
+| Blueprint       | File                   | Prefix   |
+| --------------- | ---------------------- | -------- |
+| `system_bp`     | `routes/system.py`     | `/`      |
+| `auth_bp`       | `routes/auth.py`       | `/`      |
+| `users_bp`      | `routes/users.py`      | `/`      |
+| `reporting_bp`  | `routes/reporting.py`  | `/`      |
+| `documents_bp`  | `routes/documents.py`  | `/`      |
+| `multimodal_bp` | `routes/multimodal.py` | `/`      |
+| `ingestion_bp`  | `routes/ingestion.py`  | `/`      |
+| `rag_bp`        | `routes/rag.py`        | `/`      |
+| `datachat_bp`   | `routes/datachat.py`   | `/`      |
+| `admin_bp`      | `routes/admin.py`      | `/admin` |
 
 ### 7.2 Services (`services/`)
 
@@ -472,35 +472,35 @@ All protected endpoints validate the `X-API-KEY` header against
 
 ### System
 
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| `GET` | `/` | – | Welcome string |
-| `GET` | `/health` | – | `{"status":"ok"}` |
+| Method | Path      | Auth | Description       |
+| ------ | --------- | ---- | ----------------- |
+| `GET`  | `/`       | –    | Welcome string    |
+| `GET`  | `/health` | –    | `{"status":"ok"}` |
 
 ### Authentication & users
 
-| Method | Path | Headers | Body | Description |
-|---|---|---|---|---|
-| `POST` | `/checkpandinouser` | `X-AUTH-TOKEN`, `X-USER-EMAIL`, `X-CLIENT`, (`X-GRAPHQL-URL` for Dino) | – | Validates the user against the external auth gateway (or Dino GraphQL), creates the user in Pandino if missing. Returns `{response:{user:{user_email, api_key, expiration_date}}}` |
-| `POST` | `/validateapikey` | `X-API-KEY`, `X-USER-EMAIL` | – | 200 if the key is valid & unexpired, else 403 |
-| `POST` | `/edittokens` | `X-STRIPE-KEY` (must equal `STRIPE_SK_KEY`) | `{quantity, useremail}` | Adds/removes tokens (Stripe-webhook style) |
-| `POST` | `/getusertokens` | `X-API-KEY`, `X-USER-EMAIL` | – | `{response:{tokens:N}}` |
-| `POST` | `/feedback` | `X-API-KEY` | `{username, question, answer, feedback, log_id?, source?}` | Stores positive/negative feedback; `feedback` ∈ {`positive`,`negative`} |
-| `POST` | `/buyreport` | `X-API-KEY`, `X-USER-EMAIL` | `{prompts:int}` | Deducts `prompts` tokens |
+| Method | Path                | Headers                                                                | Body                                                       | Description                                                                                                                                                                        |
+| ------ | ------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST` | `/checkpandinouser` | `X-AUTH-TOKEN`, `X-USER-EMAIL`, `X-CLIENT`, (`X-GRAPHQL-URL` for Dino) | –                                                          | Validates the user against the external auth gateway (or Dino GraphQL), creates the user in Pandino if missing. Returns `{response:{user:{user_email, api_key, expiration_date}}}` |
+| `POST` | `/validateapikey`   | `X-API-KEY`, `X-USER-EMAIL`                                            | –                                                          | 200 if the key is valid & unexpired, else 403                                                                                                                                      |
+| `POST` | `/edittokens`       | `X-STRIPE-KEY` (must equal `STRIPE_SK_KEY`)                            | `{quantity, useremail}`                                    | Adds/removes tokens (Stripe-webhook style)                                                                                                                                         |
+| `POST` | `/getusertokens`    | `X-API-KEY`, `X-USER-EMAIL`                                            | –                                                          | `{response:{tokens:N}}`                                                                                                                                                            |
+| `POST` | `/feedback`         | `X-API-KEY`                                                            | `{username, question, answer, feedback, log_id?, source?}` | Stores positive/negative feedback; `feedback` ∈ {`positive`,`negative`}                                                                                                            |
+| `POST` | `/buyreport`        | `X-API-KEY`, `X-USER-EMAIL`                                            | `{prompts:int}`                                            | Deducts `prompts` tokens                                                                                                                                                           |
 
 ### Reporting & documents
 
-| Method | Path | Headers | Body | Returns |
-|---|---|---|---|---|
-| `POST` | `/prompt.txt` | `X-API-KEY` | form: `prompt`, `username`, `language?` | Plain-text LLM reply (content-type `text/plain`) |
+| Method | Path            | Headers                     | Body                                                                                                           | Returns                                                                     |
+| ------ | --------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `POST` | `/prompt.txt`   | `X-API-KEY`                 | form: `prompt`, `username`, `language?`                                                                        | Plain-text LLM reply (content-type `text/plain`)                            |
 | `POST` | `/compare_docs` | `X-API-KEY`, `X-USER-EMAIL` | multipart: `prompt`, `files[]`, `text_documents`(JSON), `file_roles`(JSON), `additional_context?`, `language?` | `{score, summary, reasoning}` JSON. Needs ≥2 documents (files and/or text). |
 
 ### Multimodal
 
-| Method | Path | Headers | Body | Returns |
-|---|---|---|---|---|
-| `POST` | `/transcribe` | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME`¹ | multipart `file` + `lang?` | Audio → Whisper transcription; image → vision description; PDF/DOCX/RTF → extracted text. `{text}` |
-| `POST` | `/audioformcompilation` | `X-API-KEY`, `X-USER-EMAIL` | `{name, exampledata, choices?, transcribedAudio}` | JSON object matching the supplied form schema |
+| Method | Path                    | Headers                                     | Body                                              | Returns                                                                                            |
+| ------ | ----------------------- | ------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `POST` | `/transcribe`           | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME`¹ | multipart `file` + `lang?`                        | Audio → Whisper transcription; image → vision description; PDF/DOCX/RTF → extracted text. `{text}` |
+| `POST` | `/audioformcompilation` | `X-API-KEY`, `X-USER-EMAIL`                 | `{name, exampledata, choices?, transcribedAudio}` | JSON object matching the supplied form schema                                                      |
 
 > ¹ `/transcribe` enforces `X-USER-NAME` (400 if missing) but the handler never actually
 > uses it (`routes/multimodal.py`) — unlike the DataChat endpoints, where `X-USER-NAME`
@@ -508,11 +508,11 @@ All protected endpoints validate the `X-API-KEY` header against
 
 ### RAG / Ingestion
 
-| Method | Path | Headers | Body | Returns |
-|---|---|---|---|---|
-| `POST` | `/storeragfile` | (Dino auth or `X-CLIENT`) | multipart: `file`, `url`, `namespace?`, `language?`, `authToken`, `graphqlUrl`/`userEmail`, `client` | `{status, file_id, namespace, chunk_count, language, tracking_saved}` |
-| `POST` | `/completion.json` | `X-API-KEY` | `{chat, username, namespace?, language?, info?}` | `{answer, vectors, log_id?}` — classic RAG completion |
-| `POST` | `/agentchat` | `X-API-KEY` | `{chat:[...], username, namespace?, language?}` | `{answer, follow_ups, vectors, tool_calls, metrics, debug, log_id?}` — agentic RAG |
+| Method | Path               | Headers                   | Body                                                                                                 | Returns                                                                            |
+| ------ | ------------------ | ------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `POST` | `/storeragfile`    | (Dino auth or `X-CLIENT`) | multipart: `file`, `url`, `namespace?`, `language?`, `authToken`, `graphqlUrl`/`userEmail`, `client` | `{status, file_id, namespace, chunk_count, language, tracking_saved}`              |
+| `POST` | `/completion.json` | `X-API-KEY`               | `{chat, username, namespace?, language?, info?}`                                                     | `{answer, vectors, log_id?}` — classic RAG completion                              |
+| `POST` | `/agentchat`       | `X-API-KEY`               | `{chat:[...], username, namespace?, language?}`                                                      | `{answer, follow_ups, vectors, tool_calls, metrics, debug, log_id?}` — agentic RAG |
 
 Admin users can also manage indexed files at `/admin/rag-files`. Uploads reuse
 `process_rag_file()`. Deletes submit `file_id` plus namespace to
@@ -524,11 +524,11 @@ in one transaction.
 
 A session is: **start → N× chat → end**.
 
-| Method | Path | Headers | Body | Returns |
-|---|---|---|---|---|
-| `POST` | `/startdatachat` | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | multipart: `file` (CSV), `model_name?`, `llm_type?`, `lang?` | `{Agent active:"active", suggested_questions?}` |
-| `POST` | `/datachat` | `X-API-KEY`, `X-USER-EMAIL` | `{chat:"..."}` | `{response:{type, value}, explanation, log_id?}` |
-| `POST` | `/enddatachat` | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | – | Deletes the in-memory agent and cleans up plot dirs |
+| Method | Path             | Headers                                    | Body                                                         | Returns                                             |
+| ------ | ---------------- | ------------------------------------------ | ------------------------------------------------------------ | --------------------------------------------------- |
+| `POST` | `/startdatachat` | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | multipart: `file` (CSV), `model_name?`, `llm_type?`, `lang?` | `{Agent active:"active", suggested_questions?}`     |
+| `POST` | `/datachat`      | `X-API-KEY`, `X-USER-EMAIL`                | `{chat:"..."}`                                               | `{response:{type, value}, explanation, log_id?}`    |
+| `POST` | `/enddatachat`   | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | –                                                            | Deletes the in-memory agent and cleans up plot dirs |
 
 #### Example: full DataChat session
 
@@ -588,6 +588,7 @@ Pandino uses **four** distinct auth surfaces — not every endpoint needs `X-API
 
    `/checkpandinouser` is also how a Pandino API key is first minted (you can't send a key
    you don't have yet).
+
 3. **Stripe shared secret** (`X-STRIPE-KEY` must equal `STRIPE_SK_KEY`): guards
    `/edittokens` only. This is a machine-to-machine billing webhook, not a user call.
 4. **Admin session cookie** (`admin_required`, bcrypt login at `/admin/login`): guards the
@@ -615,7 +616,7 @@ at the top of every protected route. It `abort(403)`s on failure.
 
 ### Storage
 
-Pandino uses **PGVector** (via `langchain_postgres.PGVectorStore`). Each *namespace*
+Pandino uses **PGVector** (via `langchain_postgres.PGVectorStore`). Each _namespace_
 maps to its own table (normalized to lowercase, `-`→`_`). Tables are created on
 demand by `ensure_pgvector_namespace_ready()` the first time a namespace is ingested.
 
@@ -623,13 +624,13 @@ demand by `ensure_pgvector_namespace_ready()` the first time a namespace is inge
 
 `services/rag_ingestion_service.process_rag_file()` handles, by mimetype:
 
-| Type | Strategy |
-|---|---|
-| `text/plain` | `RecursiveCharacterTextSplitter(900/100)` |
-| `text/markdown` | `MarkdownTextSplitter(900/100)` |
+| Type              | Strategy                                                          |
+| ----------------- | ----------------------------------------------------------------- |
+| `text/plain`      | `RecursiveCharacterTextSplitter(900/100)`                         |
+| `text/markdown`   | `MarkdownTextSplitter(900/100)`                                   |
 | `application/pdf` | `pymupdf4llm.to_markdown` then markdown split (per-page metadata) |
-| `audio/*` | DeepInfra Whisper → segments merged to ~900 chars |
-| `image/*` | Vision model → single-chunk description |
+| `audio/*`         | DeepInfra Whisper → segments merged to ~900 chars                 |
+| `image/*`         | Vision model → single-chunk description                           |
 
 Each chunk gets metadata `{url, source, file_id, page?, start_time?, language?}` and
 a deterministic `maui_id` so re-ingestion is idempotent (duplicates are skipped in
@@ -720,16 +721,16 @@ Prompt templates can be customized **without redeploying**.
 
 Known prompt titles used across the codebase:
 
-| Title | Used by |
-|---|---|
-| `complete_chat_system` | `completion_service` |
-| `compass_agentchat_system` | `agentchat_service` |
-| `reply_to_prompt_system` | `prompt_service` |
-| `compare_docs_system` | `document_comparison_service` |
-| `audio_form_system`, `audio_form_user` | `audio_form_service` |
-| `describe_image_user`, `vision_ocr_user` | `infrastructure/ai.py` |
-| `data_chat_system` | DataChat engine instructions |
-| `start_chat_system` | DataChat bootstrap (LLM variant) |
+| Title                                    | Used by                          |
+| ---------------------------------------- | -------------------------------- |
+| `complete_chat_system`                   | `completion_service`             |
+| `compass_agentchat_system`               | `agentchat_service`              |
+| `reply_to_prompt_system`                 | `prompt_service`                 |
+| `compare_docs_system`                    | `document_comparison_service`    |
+| `audio_form_system`, `audio_form_user`   | `audio_form_service`             |
+| `describe_image_user`, `vision_ocr_user` | `infrastructure/ai.py`           |
+| `data_chat_system`                       | DataChat engine instructions     |
+| `start_chat_system`                      | DataChat bootstrap (LLM variant) |
 
 Manage them via the admin UI (`/admin/prompts`) or the `prompts` table directly.
 
@@ -867,4 +868,4 @@ Secrets required in GitHub: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`
 
 ---
 
-*If something here drifts from the code, the code is the source of truth.*
+_If something here drifts from the code, the code is the source of truth._

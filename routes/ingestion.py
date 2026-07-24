@@ -52,6 +52,12 @@ def store_rag_file() -> tuple[Response, int] | tuple[str, int, dict[str, str]]:
 
     config = current_app.config["MAUI_CONFIG"]
 
+    whisper_provider = config.models.whisper_provider
+    whisper_api_key = os.getenv(
+        PROVIDER_API_KEY_MAP.get(whisper_provider or "", "")
+    )
+    whisper_base_url = config.models.whisper_base_url
+
     try:
         result = process_rag_file(
             file,
@@ -59,7 +65,9 @@ def store_rag_file() -> tuple[Response, int] | tuple[str, int, dict[str, str]]:
             namespace,
             language,
             whisper_model=config.models.whisper_model,
-            deepinfra_api_key=config.api_keys.deepinfra_api_key,
+            whisper_provider=whisper_provider,
+            whisper_api_key=whisper_api_key,
+            whisper_base_url=whisper_base_url,
             vision_provider=config.models.vision_provider,
             vision_model=config.models.vision_model,
             embedding_provider=config.models.completion_embedding_model_provider,
