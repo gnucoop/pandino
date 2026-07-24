@@ -409,7 +409,7 @@ def whisper_response(
         url = f"{base_url or 'https://api.mistral.ai/v1'}/audio/transcriptions"
         headers = {"Authorization": f"Bearer {api_key}"}
         files = {"file": file}
-        data = {"model": model}
+        data = {"model": model, "timestamp_granularities": "segment"}
         return requests.post(url, headers=headers, files=files, data=data)
 
     if not base_url:
