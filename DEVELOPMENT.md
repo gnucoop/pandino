@@ -120,7 +120,7 @@ pandino/
 │   ├── database_pg.py          #   PostgreSQL access + Fernet-encrypted API keys
 │   ├── database_methods.py     #   Parameterized SQL builders (psycopg.sql, injection-safe)
 │   ├── vector_store.py         #   PGVector store wrapper (MauiVectorStore)
-│   ├── ai.py                   #   choose_llm() / choose_emb_model() / vision / whisper
+│   ├── ai.py                   #   choose_llm() / choose_emb_model() / vision / asr
 │   ├── agent_manager.py        #   In-memory dict of active DataChat engines
 │   ├── retriever_tool.py       #   Smolagents Tool wrapping retrieval_service
 │   ├── prompt_utils.py         #   load_prompt() / render_prompt() (DB → default → env)
@@ -250,7 +250,7 @@ Known direct env reads still exist and are intentional:
 | Group               | Variables                                                                                                                | Default                                                |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
 | **DB**              | `PGPORT`, `MAUI_SCHEMA`                                                                                                  | `5432`, `public`                                       |
-| **Models**          | `DATACHAT_MODEL/PROVIDER`, `PROMPT_*`, `COMPLETION_*`, `AUDIO_*`, `WHISPER_MODEL`, `VISION_*`, `COMPARE_DOCS_*`          | see `.env.example` (DeepInfra / Qwen / Gemma defaults) |
+| **Models**          | `DATACHAT_MODEL/PROVIDER`, `PROMPT_*`, `COMPLETION_*`, `AUDIO_*`, `ASR_MODEL`, `VISION_*`, `COMPARE_DOCS_*`              | see `.env.example` (DeepInfra / Qwen / Gemma defaults) |
 | **Token costs**     | `DATACHAT_TOKEN_COST`, `COMPLETION_TOKEN_COST`, `PROMPT_TOKEN_COST`, `AUDIO_FORM_TOKEN_COST`, `COMPARE_DOCS_TOKEN_COST`  | `1`                                                    |
 | **RAG**             | `RAG_TOP_K`, `RAG_MIN_SIM`, `RAG_DEFAULT_NAMESPACE`                                                                      | `3`, `0.5`, `Dino`                                     |
 | **DataChat engine** | `DATACHAT_ENGINE`, `DATACHAT_MAX_STEPS`, `DATACHAT_RATE_LIMIT_PER_MIN`, `DATACHAT_SESSION_TTL_MIN`, `DATACHAT_LOG_LEVEL` | `smolagents`, `12`, `0`, `60`, `INFO`                  |
@@ -434,7 +434,7 @@ Pure-Python orchestration. Key services:
 - **`ai.py`** — `choose_llm(provider, model, ...)` returns a LangChain
   `BaseChatModel` (Groq/OpenAI/Mistral/Google/Anthropic/Deepseek/Deepinfra/Together/
   OpenRouter/Ollama/Llama.cpp). `choose_emb_model()` returns embeddings.
-  `describe_image()`, `extract_text_from_image()` (OCR), and `whisper_response()`
+  `describe_image()`, `extract_text_from_image()` (OCR), and `asr_response()`
   live here too.
 - **`vector_store.py`** — `MauiVectorStore` wraps `langchain_postgres.PGVectorStore`.
   Similarity is computed as `1 - score` and filtered by `min_similarity`.
@@ -497,10 +497,10 @@ All protected endpoints validate the `X-API-KEY` header against
 
 ### Multimodal
 
-| Method | Path                    | Headers                                     | Body                                              | Returns                                                                                            |
-| ------ | ----------------------- | ------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `POST` | `/transcribe`           | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME`¹ | multipart `file` + `lang?`                        | Audio → Whisper transcription; image → vision description; PDF/DOCX/RTF → extracted text. `{text}` |
-| `POST` | `/audioformcompilation` | `X-API-KEY`, `X-USER-EMAIL`                 | `{name, exampledata, choices?, transcribedAudio}` | JSON object matching the supplied form schema                                                      |
+| Method | Path                    | Headers                                     | Body                                              | Returns                                                                                        |
+| ------ | ----------------------- | ------------------------------------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `POST` | `/transcribe`           | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME`¹ | multipart `file` + `lang?`                        | Audio → Asr transcription; image → vision description; PDF/DOCX/RTF → extracted text. `{text}` |
+| `POST` | `/audioformcompilation` | `X-API-KEY`, `X-USER-EMAIL`                 | `{name, exampledata, choices?, transcribedAudio}` | JSON object matching the supplied form schema                                                  |
 
 > ¹ `/transcribe` enforces `X-USER-NAME` (400 if missing) but the handler never actually
 > uses it (`routes/multimodal.py`) — unlike the DataChat endpoints, where `X-USER-NAME`
@@ -629,7 +629,7 @@ demand by `ensure_pgvector_namespace_ready()` the first time a namespace is inge
 | `text/plain`      | `RecursiveCharacterTextSplitter(900/100)`                         |
 | `text/markdown`   | `MarkdownTextSplitter(900/100)`                                   |
 | `application/pdf` | `pymupdf4llm.to_markdown` then markdown split (per-page metadata) |
-| `audio/*`         | DeepInfra Whisper → segments merged to ~900 chars                 |
+| `audio/*`         | DeepInfra Asr → segments merged to ~900 chars                     |
 | `image/*`         | Vision model → single-chunk description                           |
 
 Each chunk gets metadata `{url, source, file_id, page?, start_time?, language?}` and

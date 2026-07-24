@@ -7,7 +7,7 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from config import PROVIDER_API_KEY_MAP
 from services.document_text_service import extract_and_normalize_document, DocumentInput
 import infrastructure.database_pg as database_pg
-from infrastructure.ai import describe_image, whisper_response
+from infrastructure.ai import describe_image, asr_response
 from infrastructure.database_pg import edit_tokens, log_token_usage
 from services.audio_form_service import audioFormCompilation, audioFormPromptBuild
 from routes.utils import assert_valid_api_key
@@ -17,7 +17,7 @@ multimodal_bp = Blueprint("multimodal", __name__)
 
 # Define a route for the '/transcribe' endpoint
 @multimodal_bp.route("/transcribe", methods=["POST"])
-def whisper_parse() -> Union[Response, tuple[Response, int]]:
+def asr_parse() -> Union[Response, tuple[Response, int]]:
     api_key = request.headers.get("X-API-KEY")
     user_email = request.headers.get("X-USER-EMAIL")
     user_name_header = request.headers.get("X-USER-NAME")
@@ -41,25 +41,25 @@ def whisper_parse() -> Union[Response, tuple[Response, int]]:
     config = current_app.config["MAUI_CONFIG"]
 
     if file.mimetype.startswith("audio"):
-        whisper_provider = config.models.whisper_provider
-        whisper_base_url = config.models.whisper_base_url
-        whisper_api_key = os.getenv(
-            PROVIDER_API_KEY_MAP.get(whisper_provider or "", "")
+        asr_provider = config.models.asr_provider
+        asr_base_url = config.models.asr_base_url
+        asr_api_key = os.getenv(
+            PROVIDER_API_KEY_MAP.get(asr_provider or "", "")
         ) or ""
 
-        if not config.models.whisper_model:
-            return jsonify({"error": "Missing Whisper configuration"}), 500
+        if not config.models.asr_model:
+            return jsonify({"error": "Missing ASR configuration"}), 500
 
-        if whisper_provider in PROVIDER_API_KEY_MAP and not whisper_api_key:
-            return jsonify({"error": "Missing Whisper configuration"}), 500
+        if asr_provider in PROVIDER_API_KEY_MAP and not asr_api_key:
+            return jsonify({"error": "Missing ASR configuration"}), 500
 
         try:
-            response = whisper_response(
+            response = asr_response(
                 file,
-                whisper_provider,
-                config.models.whisper_model,
-                whisper_api_key,
-                whisper_base_url,
+                asr_provider,
+                config.models.asr_model,
+                asr_api_key,
+                asr_base_url,
             )
         except ValueError as e:
             return jsonify({"error": str(e)}), 500
@@ -68,20 +68,20 @@ def whisper_parse() -> Union[Response, tuple[Response, int]]:
             try:
                 payload = response.json()
             except Exception as e:
-                return jsonify({"error": f"Invalid JSON from whisper: {str(e)}"}), 500
+                return jsonify({"error": f"Invalid JSON from ASR: {str(e)}"}), 500
 
             text = payload.get("text")
             if text is None:
                 return (
-                    jsonify({"error": "Whisper response missing 'text' field"}),
+                    jsonify({"error": "ASR response missing 'text' field"}),
                     500,
                 )
             return jsonify({"text": text}), 200
         else:
             current_app.logger.error(
-                f"Whisper failed: {response.status_code} - {response.text}"
+                f"ASR failed: {response.status_code} - {response.text}"
             )
-            return jsonify({"error": "Whisper transcription failed"}), 500
+            return jsonify({"error": "ASR transcription failed"}), 500
 
     filename = file.filename or ""
     ext = os.path.splitext(filename.lower())[1]

@@ -60,6 +60,9 @@ def admin_required(f):
 
 
 _SAFE_VALUE_ENV_VARS = {
+    "ASR_BASE_URL",
+    "ASR_MODEL",
+    "ASR_PROVIDER",
     "AUDIO_FORM_TOKEN_COST",
     "AUDIO_MODEL",
     "AUDIO_PROVIDER",
@@ -98,9 +101,6 @@ _SAFE_VALUE_ENV_VARS = {
     "RAG_TOP_K",
     "VISION_MODEL",
     "VISION_PROVIDER",
-    "WHISPER_BASE_URL",
-    "WHISPER_MODEL",
-    "WHISPER_PROVIDER",
 }
 
 _STATUS_ONLY_ENV_VARS = {
@@ -662,11 +662,11 @@ def admin_upload_rag_file():
 
     url = file.filename or ""
 
-    whisper_provider = config.models.whisper_provider
-    whisper_api_key = os.getenv(
-        PROVIDER_API_KEY_MAP.get(whisper_provider or "", "")
+    asr_provider = config.models.asr_provider
+    asr_api_key = os.getenv(
+        PROVIDER_API_KEY_MAP.get(asr_provider or "", "")
     )
-    whisper_base_url = config.models.whisper_base_url
+    asr_base_url = config.models.asr_base_url
 
     try:
         result = process_rag_file(
@@ -674,10 +674,10 @@ def admin_upload_rag_file():
             url,
             namespace,
             language,
-            whisper_model=config.models.whisper_model,
-            whisper_provider=whisper_provider,
-            whisper_api_key=whisper_api_key,
-            whisper_base_url=whisper_base_url,
+            asr_model=config.models.asr_model,
+            asr_provider=asr_provider,
+            asr_api_key=asr_api_key,
+            asr_base_url=asr_base_url,
             vision_provider=config.models.vision_provider,
             vision_model=config.models.vision_model,
             embedding_provider=config.models.completion_embedding_model_provider,

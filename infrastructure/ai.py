@@ -378,7 +378,7 @@ def extract_text_from_image(
     )["text"]
 
 
-def whisper_response(
+def asr_response(
     file,
     provider: str,
     model: str,
@@ -386,7 +386,7 @@ def whisper_response(
     base_url: Optional[str] = None,
 ) -> requests.Response:
     """
-    Send an audio file to the configured transcription provider.
+    Send an audio file to the configured ASR provider.
 
     :param file: Audio file object to transcribe.
     :param provider: Provider identifier (e.g., 'Deepinfra', 'Mistral').
@@ -397,7 +397,7 @@ def whisper_response(
     :return: The raw requests.Response from the provider.
     :raises ValueError: If provider requires a base_url that was not supplied.
     """
-    logging.info(f"Choosing Whisper provider: provider={provider}, model={model}")
+    logging.info(f"Choosing ASR provider: provider={provider}, model={model}")
 
     if provider == "Deepinfra":
         url = f"https://api.deepinfra.com/v1/inference/{model}"
@@ -414,7 +414,7 @@ def whisper_response(
 
     if not base_url:
         raise ValueError(
-            f"base_url is required for self-hosted whisper provider '{provider}'"
+            f"base_url is required for self-hosted ASR provider '{provider}'"
         )
     url = f"{base_url}/audio/transcriptions"
     headers = {"Authorization": f"Bearer {api_key}"}

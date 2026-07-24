@@ -72,8 +72,8 @@ class ModelConfig:
     audio_model: str
     audio_provider: str
 
-    whisper_model: str
-    whisper_provider: str
+    asr_model: str
+    asr_provider: str
 
     vision_model: str
     vision_provider: str
@@ -83,7 +83,7 @@ class ModelConfig:
 
     # Optional[str] = None carries semantic meaning here (no override
     # configured), not an operational fallback.
-    whisper_base_url: Optional[str] = None
+    asr_base_url: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -226,13 +226,13 @@ def load_config() -> AppConfig:
         ),
         audio_model=os.environ.get("AUDIO_MODEL", "google/gemma-3-4b-it"),
         audio_provider=os.environ.get("AUDIO_PROVIDER", "Deepinfra"),
-        whisper_model=os.environ.get("WHISPER_MODEL", "openai/whisper-large-v3"),
-        whisper_provider=os.environ.get("WHISPER_PROVIDER", "Deepinfra"),
+        asr_model=os.environ.get("ASR_MODEL", "openai/whisper-large-v3"),
+        asr_provider=os.environ.get("ASR_PROVIDER", "Deepinfra"),
         vision_model=os.environ.get("VISION_MODEL", "google/gemma-3-4b-it"),
         vision_provider=os.environ.get("VISION_PROVIDER", "Deepinfra"),
         compare_docs_model=os.environ.get("COMPARE_DOCS_MODEL", "google/gemma-3-4b-it"),
         compare_docs_provider=os.environ.get("COMPARE_DOCS_PROVIDER", "Google"),
-        whisper_base_url=os.environ.get("WHISPER_BASE_URL") or None,
+        asr_base_url=os.environ.get("ASR_BASE_URL") or None,
     )
 
     api_keys = ApiKeysConfig(

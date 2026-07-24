@@ -10,7 +10,7 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 
-from infrastructure.ai import choose_emb_model, describe_image, whisper_response
+from infrastructure.ai import choose_emb_model, describe_image, asr_response
 from infrastructure.database_pg import insert_rag_file
 from infrastructure.vector_store import (
     MauiVectorStore,
@@ -37,10 +37,10 @@ def process_rag_file(
     namespace: str,
     language: str | None,
     *,
-    whisper_model: str | None,
-    whisper_provider: str | None,
-    whisper_api_key: str | None,
-    whisper_base_url: str | None = None,
+    asr_model: str | None,
+    asr_provider: str | None,
+    asr_api_key: str | None,
+    asr_base_url: str | None = None,
     vision_provider: str | None,
     vision_model: str | None,
     embedding_provider: str | None,
@@ -54,10 +54,10 @@ def process_rag_file(
     :param url: Source identifier to store in chunk metadata.
     :param namespace: Vector store namespace/table name.
     :param language: Optional language code for metadata.
-    :param whisper_model: Whisper model name for audio transcription.
-    :param whisper_provider: Whisper provider name for audio transcription.
-    :param whisper_api_key: API key for the whisper provider.
-    :param whisper_base_url: Optional base URL override for the whisper provider.
+    :param asr_model: ASR model name for audio transcription.
+    :param asr_provider: ASR provider name for audio transcription.
+    :param asr_api_key: API key for the ASR provider.
+    :param asr_base_url: Optional base URL override for the ASR provider.
     :param vision_provider: Vision provider name for image description.
     :param vision_model: Vision model name for image description.
     :param embedding_provider: Embedding provider name.
@@ -65,7 +65,7 @@ def process_rag_file(
     :param vision_api_key: Optional API key override for the vision provider. Falls back to environment variables if not provided.
     :param embedding_api_key: Optional API key override for the embedding provider. Falls back to environment variables if not provided.
     :return: Structured ingestion result.
-    :raises ValueError: For unsupported file types, missing configuration, or whisper errors.
+    :raises ValueError: For unsupported file types, missing configuration, or ASR errors.
     """
     chunk_size = 900
     chunk_overlap = 100
@@ -106,14 +106,14 @@ def process_rag_file(
             paragraphs = md_split.split_documents(page_docs)
 
     elif file.mimetype.startswith("audio"):
-        if not whisper_model or not whisper_provider:
-            raise ValueError("Missing Whisper configuration")
+        if not asr_model or not asr_provider:
+            raise ValueError("Missing ASR configuration")
 
-        resp = whisper_response(
-            file, whisper_provider, whisper_model, whisper_api_key or "", whisper_base_url
+        resp = asr_response(
+            file, asr_provider, asr_model, asr_api_key or "", asr_base_url
         )
         if resp.status_code != 200:
-            raise ValueError("Error whispering audio")
+            raise ValueError("Error transcribing audio")
 
         json = resp.json()
         text = json["text"]
