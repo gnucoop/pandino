@@ -493,7 +493,7 @@ paths:
       tags: [Multimodal]
       summary: Transcribe audio / extract text from a document or image
       description: >
-        Audio files are transcribed with Whisper; images are described via a vision model;
+        Audio files are transcribed with the configured ASR provider; images are described via a vision model;
         PDF/DOCX/RTF files have their text extracted.
       parameters:
         - $ref: '#/components/parameters/UserEmailHeader'

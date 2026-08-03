@@ -23,7 +23,7 @@ Pandino is a powerful tool designed to analyze and visualize data using various 
 
 - **Rich API Services**:
   - **RESTful Endpoints**: A comprehensive Flask-based API provides access to all features.
-  - **Audio Transcription**: Transcribe audio files into text using Whisper.
+  - **Audio Transcription**: Transcribe audio files into text using the configured ASR provider.
   - **Image Analysis**: Generate descriptions for images.
   - **Audio-to-Form**: Automatically fill out structured forms from spoken input.
   - **Document Comparison**: Compare two documents using OCR and structured extraction to surface their differences.
@@ -103,7 +103,7 @@ Here is a list of the available non-admin endpoints:
 - **POST /completion.json**: Provides a chat completion service.
 - **POST /prompt.txt**: Handles a prompt and returns a response.
 - **POST /storeragfile**: Stores a file for Retrieval-Augmented Generation (RAG).
-- **POST /transcribe**: Transcribes an audio file using Whisper.
+- **POST /transcribe**: Transcribes audio with the configured ASR provider, or extracts text from supported documents/images.
 - **POST /audioformcompilation**: Compiles a form from transcribed audio.
 - **POST /compare_docs**: Compares two documents (with OCR and structured extraction) and returns their differences.
 - **POST /agentchat**: AI agent endpoint powered by Smolagents that uses retrieval tools to answer questions based on stored documents in a specified namespace.
