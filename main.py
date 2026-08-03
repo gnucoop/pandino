@@ -1,31 +1,35 @@
 # === Built-in ===
 import os
 
+# Logging must be configured before any other runtime effect.
+from utils.logging_config import bootstrap_logging
+
+DATACHAT_RUNTIME_LOGGER = bootstrap_logging()
+
 os.environ["MPLBACKEND"] = "Agg"
-from dotenv import load_dotenv
+
+from dotenv import load_dotenv  # noqa: E402
 
 # === Third-party ===
-from flask import Flask
-from flask_cors import CORS
-import pandas as pd
-import matplotlib
+from flask import Flask  # noqa: E402
+from flask_cors import CORS  # noqa: E402
+import pandas as pd  # noqa: E402
+import matplotlib  # noqa: E402
 
 # === Local modules ===
-import infrastructure.database_pg as database_pg
-import infrastructure.vector_store as vector_store
-from utils.agent_logging import setup_agent_logger
-from utils.runtime_logging import setup_datachat_runtime_logger
-from config import load_config, AppConfig
-from routes.system import system_bp
-from routes.auth import auth_bp
-from routes.users import users_bp
-from routes.reporting import reporting_bp
-from routes.documents import documents_bp
-from routes.multimodal import multimodal_bp
-from routes.ingestion import ingestion_bp
-from routes.rag import rag_bp
-from routes.datachat import datachat_bp
-from routes.admin import admin_bp
+import infrastructure.database_pg as database_pg  # noqa: E402
+import infrastructure.vector_store as vector_store  # noqa: E402
+from config import load_config, AppConfig  # noqa: E402
+from routes.system import system_bp  # noqa: E402
+from routes.auth import auth_bp  # noqa: E402
+from routes.users import users_bp  # noqa: E402
+from routes.reporting import reporting_bp  # noqa: E402
+from routes.documents import documents_bp  # noqa: E402
+from routes.multimodal import multimodal_bp  # noqa: E402
+from routes.ingestion import ingestion_bp  # noqa: E402
+from routes.rag import rag_bp  # noqa: E402
+from routes.datachat import datachat_bp  # noqa: E402
+from routes.admin import admin_bp  # noqa: E402
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -61,12 +65,6 @@ if not secret_key:
     raise RuntimeError("ENCRYPTION_KEY must be set in environment")
 app.secret_key = secret_key
 
-# Configure the agent run logger
-setup_agent_logger()
-
-DATACHAT_RUNTIME_LOGGER = (
-    setup_datachat_runtime_logger()
-)  # Initialise the datachat runtime logger
 app.config["DATACHAT_RUNTIME_LOGGER"] = (
     DATACHAT_RUNTIME_LOGGER  # Make the datachat runtime logger available to all Blueprints via current_app
 )
