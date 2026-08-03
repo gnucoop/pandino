@@ -348,7 +348,7 @@ def get_user_by_username(user_name: str) -> Optional[dict[str, str | int]]:
             "date_valid_until": user[3],
             "tokens": user[4],
         }
-        logging.info(f"User found: {user_data}")
+        logging.info("event=user_lookup_success username=%s", user_name)
         return user_data
 
     logging.warning(f"No user found for username: {user_name}")
