@@ -23,6 +23,7 @@ class AgentRunRecord:
     namespace: str
     language: str
     question: str
+    request_id: str = "-"
     state: Optional[Any] = None
     steps_count: int = 0
     duration_ms: Optional[float] = None
@@ -83,6 +84,19 @@ def log_runresult(
     :param question: User question (truncated).
     :param extra: Additional fields for extensibility.
     """
+    # Function-local import, not hoistable to module level: utils/logging_config.py
+    # imports setup_agent_logger from this module at its own module level, so when
+    # this module is loaded as part of that import chain, utils.logging_config is
+    # already present in sys.modules but get_request_id is not yet defined on it
+    # (this import runs before that name is bound). By the time log_runresult is
+    # actually called, both modules are fully loaded and the import resolves.
+    from utils.logging_config import get_request_id
+
+    # Resolved outside the try block below: a failure here must not be
+    # miscategorised as one of the RunResult-shape errors that block catches
+    # and silently downgrades to a WARNING with no record written at all.
+    request_id = get_request_id()
+
     try:
         steps: List[Dict[str, Any]] = getattr(result, "steps", []) or []
         timing = getattr(result, "timing", None)
@@ -118,6 +132,7 @@ def log_runresult(
             namespace=namespace,
             language=language,
             question=truncated_question,
+            request_id=request_id,
             state=getattr(result, "state", None),
             steps_count=len(steps),
             duration_ms=round(float(getattr(timing, "duration", 0.0)) * 1000, 2) if timing else None,

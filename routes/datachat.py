@@ -280,7 +280,6 @@ def dataChat() -> Response | tuple[Response, int]:
                 extra={
                     "channel": "datachat",
                     "response_kind": response_kind,
-                    "request_id": request_id,
                 },
             )
             structured_log_ok = True
