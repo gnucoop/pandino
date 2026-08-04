@@ -1,5 +1,4 @@
 import os
-import secrets
 import time
 import logging
 from typing import Any, Optional
@@ -14,6 +13,7 @@ from datachat.output_normalizer import normalize_datachat_response
 from datachat.engine_output_adapter import adapt_engine_output, consume_adapter_fallback_used
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult
+from utils.logging_config import get_request_id
 from config import PROVIDER_API_KEY_MAP
 from routes.utils import assert_valid_api_key
 
@@ -143,7 +143,7 @@ def dataChat() -> Response | tuple[Response, int]:
     config = current_app.config["MAUI_CONFIG"]
     _logger = current_app.config["DATACHAT_RUNTIME_LOGGER"]
 
-    request_id = secrets.token_hex(4)
+    request_id = get_request_id()
     request_started = time.time()
 
     api_key = request.headers.get("X-API-KEY")
@@ -237,7 +237,7 @@ def dataChat() -> Response | tuple[Response, int]:
     # Perform the chat operation and get the response and explanation
     chat_started = time.time()
 
-    response = engine.chat(chat, request_id=request_id)
+    response = engine.chat(chat)
 
     response_kind = response.get("kind") if isinstance(response, dict) else None
 
