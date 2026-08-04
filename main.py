@@ -2,7 +2,7 @@
 import os
 
 # Logging must be configured before any other runtime effect.
-from utils.logging_config import bootstrap_logging
+from utils.logging_config import bootstrap_logging, register_request_context_hooks
 
 DATACHAT_RUNTIME_LOGGER = bootstrap_logging()
 
@@ -44,6 +44,7 @@ vector_store.init(config)  # Init vector store layer config
 
 # Initialize the Flask application
 app = Flask(__name__)
+register_request_context_hooks(app)  # Bind a request_id for every request
 app.register_blueprint(system_bp)
 app.register_blueprint(auth_bp)
 app.register_blueprint(users_bp)
@@ -58,7 +59,7 @@ app.config["MAUI_CONFIG"] = (
     config  # Make Maui config available to all Blueprints via current_app
 )
 # origins=["http://localhost:4200"]
-CORS(app)
+CORS(app, expose_headers=["X-Request-ID"])
 
 secret_key = os.environ.get("ENCRYPTION_KEY")
 if not secret_key:

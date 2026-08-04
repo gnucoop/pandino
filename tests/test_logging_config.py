@@ -13,7 +13,17 @@ from unittest.mock import patch
 
 import pytest
 
-from utils.logging_config import _HANDLER_MARKER, bootstrap_logging
+from utils.logging_config import (
+    CONTEXT_UNSET,
+    _app_id_var,
+    _HANDLER_MARKER,
+    _request_id_var,
+    bootstrap_logging,
+    get_request_id,
+    register_request_context_hooks,
+    reset_request_context,
+    set_request_context,
+)
 
 BASE_ENV = {"DATACHAT_LOG_LEVEL": "INFO"}
 
@@ -52,12 +62,19 @@ def restore_logging_state():
         _discard(lg.handlers)
         lg.handlers = []
 
+    # A leaked request_id would otherwise make every later test in the module
+    # order-dependent.
+    _request_id_var.set(CONTEXT_UNSET)
+    _app_id_var.set(CONTEXT_UNSET)
+
     # bootstrap_logging() calls load_dotenv() itself; a developer .env on disk
     # would otherwise defeat patch.dict(..., clear=True).
     try:
         with patch("utils.logging_config.load_dotenv", lambda *a, **k: None):
             yield
     finally:
+        _request_id_var.set(CONTEXT_UNSET)
+        _app_id_var.set(CONTEXT_UNSET)
         _discard([h for h in root.handlers if getattr(h, _HANDLER_MARKER, False)])
         root.handlers, root.level = saved_root
         for name, (handlers, level, propagate) in saved_named.items():
@@ -271,3 +288,246 @@ def test_returns_datachat_runtime_logger(agent_runs_env):
 
     assert logger.name == "datachat.runtime"
     assert logger.propagate is False
+
+
+# --------------------------------------------------------------------------
+# Request context: contextvars bound at the HTTP boundary
+# --------------------------------------------------------------------------
+
+_ROUTE_LOGGER = "route.probe"
+
+
+def _make_app():
+    """Throwaway Flask app carrying the hooks and two probe routes."""
+    from flask import Flask, abort, request
+
+    app = Flask(__name__)
+    register_request_context_hooks(app)
+
+    @app.route("/slowping")
+    def slowping():
+        """Yields to the hub mid-request so greenlets genuinely interleave."""
+        import gevent
+
+        tag = request.args.get("tag", "00")
+        gevent.sleep(float(request.args.get("delay", "0.01")))
+        logging.getLogger(_ROUTE_LOGGER).warning("SLOWMARKER%s", tag)
+        return tag
+
+    @app.route("/ping")
+    def ping():
+        logging.getLogger(_ROUTE_LOGGER).warning("PING_MARKER")
+        return "pong"
+
+    @app.route("/boom")
+    def boom():
+        logging.getLogger(_ROUTE_LOGGER).warning("BOOM_MARKER")
+        abort(403)
+
+    @app.route("/kaboom")
+    def kaboom():
+        logging.getLogger(_ROUTE_LOGGER).warning("KABOOM_MARKER")
+        raise RuntimeError("unhandled")
+
+    return app
+
+
+def _bootstrapped_stream():
+    """Bootstrap logging and redirect the marker handler to a buffer."""
+    stream = io.StringIO()
+    bootstrap_logging()
+    _marker_handlers()[0].setStream(stream)
+    return stream
+
+
+def test_record_inside_request_carries_generated_id(agent_runs_env):
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        stream = _bootstrapped_stream()
+        response = _make_app().test_client().get("/ping")
+
+    header_id = response.headers["X-Request-ID"]
+
+    assert response.status_code == 200
+    ping_line = next(l for l in stream.getvalue().splitlines() if "PING_MARKER" in l)
+    assert f"request_id={header_id}" in ping_line
+    # app_id stays unset: its source is a Phase 3 decision.
+    assert "app_id=-" in ping_line
+
+
+def test_request_id_header_is_sixteen_hex_chars(agent_runs_env):
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        bootstrap_logging()
+        response = _make_app().test_client().get("/ping")
+
+    assert re.fullmatch(r"[0-9a-f]{16}", response.headers["X-Request-ID"])
+
+
+def test_two_requests_get_distinct_ids(agent_runs_env):
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        bootstrap_logging()
+        client = _make_app().test_client()
+        first = client.get("/ping").headers["X-Request-ID"]
+        second = client.get("/ping").headers["X-Request-ID"]
+
+    assert first != second
+
+
+def test_context_is_reset_after_request(agent_runs_env):
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        bootstrap_logging()
+        _make_app().test_client().get("/ping")
+
+    assert get_request_id() == CONTEXT_UNSET
+
+
+def test_context_is_reset_when_view_aborts(agent_runs_env):
+    """The abort() path, used by routes/utils.py:17-23 for auth failures.
+
+    Flask handles the HTTPException and finalises a 403 response, so
+    after_request does run here and the header is set. The reset is still
+    teardown's job.
+    """
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        stream = _bootstrapped_stream()
+        response = _make_app().test_client().get("/boom")
+
+    assert response.status_code == 403
+    boom_line = next(l for l in stream.getvalue().splitlines() if "BOOM_MARKER" in l)
+    assert f"request_id={response.headers['X-Request-ID']}" in boom_line
+    assert get_request_id() == CONTEXT_UNSET
+
+
+def test_context_is_reset_when_view_raises_unhandled(agent_runs_env):
+    """The path where after_request genuinely does not run.
+
+    With testing=True an unhandled non-HTTP exception propagates out of the
+    test client instead of being finalised into a 500, so after_request is
+    skipped. teardown_request still runs, which is why the reset lives there.
+    """
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        stream = _bootstrapped_stream()
+        app = _make_app()
+        app.testing = True
+        with pytest.raises(RuntimeError, match="unhandled"):
+            app.test_client().get("/kaboom")
+
+    line = next(l for l in stream.getvalue().splitlines() if "KABOOM_MARKER" in l)
+    assert re.search(r"request_id=[0-9a-f]{16}", line)
+    assert get_request_id() == CONTEXT_UNSET
+
+
+def test_register_request_context_hooks_is_idempotent(agent_runs_env):
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        bootstrap_logging()
+        app = _make_app()
+        register_request_context_hooks(app)  # second call must be a no-op
+        response = app.test_client().get("/ping")
+
+    assert len(app.before_request_funcs[None]) == 1
+    assert len(app.after_request_funcs[None]) == 1
+    assert re.fullmatch(r"[0-9a-f]{16}", response.headers["X-Request-ID"])
+
+
+def test_set_request_context_restores_previous_value():
+    tokens = set_request_context(request_id="outer")
+    assert get_request_id() == "outer"
+
+    inner = set_request_context(request_id="inner")
+    assert get_request_id() == "inner"
+
+    reset_request_context(inner)
+    assert get_request_id() == "outer"
+
+    reset_request_context(tokens)
+    assert get_request_id() == CONTEXT_UNSET
+
+
+def test_reset_request_context_accepts_none():
+    reset_request_context(None)  # must not raise
+    assert get_request_id() == CONTEXT_UNSET
+
+
+def test_context_is_isolated_across_greenlets(agent_runs_env):
+    """The regression test for per-greenlet resolution of the ambient value.
+
+    The pytest process is not monkey-patched and does not need to be:
+    contextvar isolation across greenlets is provided by greenlet at the C
+    level, independently of gevent's monkey-patching.
+    """
+    gevent = pytest.importorskip("gevent")
+
+    count = 8
+    read_back = {}
+
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        stream = _bootstrapped_stream()
+
+        def worker(n):
+            tokens = set_request_context(request_id=f"greenlet{n:02d}")
+            try:
+                gevent.sleep(0.01)  # force a switch to the hub mid-flight
+                logging.getLogger("greenlet.probe").warning("MARKER%02d", n)
+                read_back[n] = get_request_id()
+            finally:
+                reset_request_context(tokens)
+
+        jobs = [gevent.spawn(worker, n) for n in range(count)]
+        gevent.joinall(jobs, timeout=30)
+
+    assert all(job.successful() for job in jobs)
+    assert read_back == {n: f"greenlet{n:02d}" for n in range(count)}
+
+    lines = [l for l in stream.getvalue().splitlines() if "MARKER" in l]
+    assert len(lines) == count
+
+    for line in lines:
+        marker = re.search(r"MARKER(\d{2})", line).group(1)
+        rid = re.search(r"request_id=(\S+)", line).group(1)
+        assert rid == f"greenlet{marker}", f"crossover on line: {line!r}"
+
+    assert get_request_id() == CONTEXT_UNSET
+
+
+def test_hooks_isolate_context_across_concurrent_requests(agent_runs_env):
+    """The hooks themselves, not just set_request_context, under concurrency.
+
+    Each greenlet drives a full request through the Flask test client, so
+    before_request/after_request/teardown_request all participate.
+    """
+    gevent = pytest.importorskip("gevent")
+
+    count = 6
+    header_ids = {}
+
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        stream = _bootstrapped_stream()
+        app = _make_app()
+
+        def worker(n):
+            # Descending delays, so the requests must complete in reverse
+            # spawn order. That ordering is what proves they really were in
+            # flight together rather than being served one after another.
+            delay = (count - n) * 0.01
+            response = app.test_client().get(f"/slowping?tag={n:02d}&delay={delay}")
+            header_ids[n] = response.headers["X-Request-ID"]
+
+        jobs = [gevent.spawn(worker, n) for n in range(count)]
+        gevent.joinall(jobs, timeout=30)
+
+    assert all(job.successful() for job in jobs), [job.exception for job in jobs]
+    assert len(header_ids) == count
+    assert len(set(header_ids.values())) == count, "ids were reused across requests"
+
+    lines = [l for l in stream.getvalue().splitlines() if "SLOWMARKER" in l]
+    assert len(lines) == count
+
+    emitted = [re.search(r"SLOWMARKER(\d{2})", l).group(1) for l in lines]
+    assert emitted == [f"{n:02d}" for n in reversed(range(count))], (
+        f"requests did not overlap; emission order was {emitted}"
+    )
+
+    for n, request_id in header_ids.items():
+        line = next(l for l in lines if f"SLOWMARKER{n:02d}" in l)
+        assert f"request_id={request_id}" in line, f"crossover on line: {line!r}"
+
+    assert get_request_id() == CONTEXT_UNSET
