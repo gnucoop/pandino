@@ -39,9 +39,11 @@ class SentimentAnalysisTool(Tool):
     name = "sentiment_analysis"
     description = (
         "Analyze the emotional tone (sentiment) of a text column. "
-        "Assigns each unique text value a label ('positive', 'negative', 'neutral') "
+        "Assigns each text value a label ('positive', 'negative', 'neutral') "
         "with a numeric confidence score (0-1). "
-        "Optionally returns aggregate counts per sentiment instead of per-row details. "
+        "By default (aggregate=True) returns complete summary counts per sentiment. "
+        "Use aggregate=False with max_rows for a limited per-row sample. "
+        "For the full per-row results, use export_csv on this column. "
         "Do NOT use for topic classification -- use 'classify' for that."
     )
     output_type = "object"
@@ -54,8 +56,9 @@ class SentimentAnalysisTool(Tool):
         "aggregate": {
             "type": "boolean",
             "description": (
-                "If True, return only aggregate counts per sentiment label "
-                "instead of the full per-row table."
+                "If True (default), return aggregate counts per sentiment label. "
+                "If False, return per-row results (limited to max_rows). "
+                "For the full per-row export, use export_csv."
             ),
             "nullable": True,
         },
@@ -77,6 +80,14 @@ class SentimentAnalysisTool(Tool):
             "items": {"type": "string"},
             "nullable": True,
         },
+        "max_rows": {
+            "type": "integer",
+            "description": (
+                "Max rows to return when aggregate=False (default 50, max 50). "
+                "Use export_csv for the complete per-row export."
+            ),
+            "nullable": True,
+        },
     }
 
     def __init__(self, df: pd.DataFrame, model: LiteLLMModel) -> None:
@@ -87,9 +98,10 @@ class SentimentAnalysisTool(Tool):
     def forward(
         self,
         column: str,
-        aggregate: Optional[bool] = False,
+        aggregate: Optional[bool] = True,
         data: list[dict[str, Any]] | None = None,
         labels: Optional[list[str]] = None,
+        max_rows: Optional[int] = 50,
     ) -> dict[str, Any]:
         try:
             if data is not None:
@@ -112,8 +124,9 @@ class SentimentAnalysisTool(Tool):
             if col not in df.columns:
                 return {"kind": "error", "message": f"Column not found: {col}", "code": "INVALID_COLUMN"}
 
-            agg = bool(aggregate) if aggregate is not None else False
+            agg = bool(aggregate) if aggregate is not None else True
             sentiment_labels = labels or ["positive", "negative", "neutral"]
+            max_n = max(1, min(int(max_rows or 50), 50))
 
             # Collect unique non-empty text values (limit to avoid huge prompts)
             s = df[col].dropna().astype(str)
@@ -224,7 +237,7 @@ class SentimentAnalysisTool(Tool):
                 logging.info("[datachat][sentiment_tool] col=%s rows=%d agg=%s", col, len(records), len(agg_records))
                 return {"kind": "table", "data": agg_records}
 
-            records = replace_nan(records)
+            records = replace_nan(records[:max_n])
             logging.info("[datachat][sentiment_tool] col=%s rows=%d", col, len(records))
             return {"kind": "table", "data": records}
 
