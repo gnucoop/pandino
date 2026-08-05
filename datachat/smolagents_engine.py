@@ -328,7 +328,7 @@ class SmolagentsEngine(DataChatEngine):
             TrendTool(self.data),
             SentimentAnalysisTool(self.data, model=self._model),
             ClassifyTool(self.data, model=self._model),
-            ExportCsvTool(self.data, output_dir=self._plots_dir or os.getenv("DATACHAT_PLOTS_DIR", "/tmp/datachat_plots")),
+            ExportCsvTool(self.data, output_dir=self._plots_dir or os.getenv("DATACHAT_PLOTS_DIR", "/tmp/datachat_plots"), model=self._model),
         ]
 
         base_kwargs: dict[str, Any] = {
