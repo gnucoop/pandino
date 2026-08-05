@@ -15,6 +15,7 @@ from smolagents import CodeAgent, LiteLLMModel
 from datachat.bootstrap_static import get_static_bootstrap_html
 from datachat.engine_interface import DataChatEngine, EngineBootstrapResult
 from datachat.tools.aggregate_tool import AggregateTool
+from datachat.tools.classify_tool import ClassifyTool
 from datachat.tools.correlation_tool import CorrelationTool
 from datachat.tools.describe_tool import DescribeTool
 from datachat.tools.filter_rows_tool import FilterRowsTool
@@ -22,6 +23,7 @@ from datachat.tools.missing_values_tool import MissingValuesTool
 from datachat.tools.plot_tool import PlotTool
 from datachat.tools.row_count_tool import RowCountTool
 from datachat.tools.sample_rows_tool import SampleRowsTool
+from datachat.tools.sentiment_tool import SentimentAnalysisTool
 from datachat.tools.top_rows_tool import TopRowsTool
 from datachat.tools.trend_tool import TrendTool
 from datachat.tools.unique_values_tool import UniqueValuesTool
@@ -323,6 +325,8 @@ class SmolagentsEngine(DataChatEngine):
             AggregateTool(self.data),
             PlotTool(self.data, output_dir=self._plots_dir or os.getenv("DATACHAT_PLOTS_DIR", "/tmp/datachat_plots")),
             TrendTool(self.data),
+            SentimentAnalysisTool(self.data, model=self._model),
+            ClassifyTool(self.data, model=self._model),
         ]
 
         base_kwargs: dict[str, Any] = {
