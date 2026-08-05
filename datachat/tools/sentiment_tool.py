@@ -83,8 +83,8 @@ class SentimentAnalysisTool(Tool):
         "max_rows": {
             "type": "integer",
             "description": (
-                "Max rows to return when aggregate=False (default 50, max 50). "
-                "Use export_csv for the complete per-row export."
+                "Max rows to return when aggregate=False (default 50). "
+                "Increase this or use export_csv for the complete per-row export."
             ),
             "nullable": True,
         },
@@ -126,7 +126,7 @@ class SentimentAnalysisTool(Tool):
 
             agg = bool(aggregate) if aggregate is not None else True
             sentiment_labels = labels or ["positive", "negative", "neutral"]
-            max_n = max(1, min(int(max_rows or 50), 50))
+            max_n = max(1, int(max_rows or 50))
 
             # Collect unique non-empty text values (limit to avoid huge prompts)
             s = df[col].dropna().astype(str)

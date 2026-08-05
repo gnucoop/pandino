@@ -19,10 +19,12 @@ class ExportCsvTool(Tool):
 
     name = "export_csv"
     description = (
-        "Save a column from the dataset (or records from another tool) to a CSV file. "
+        "Save records (from another tool's output or a session column) to a CSV file on disk. "
         "Useful when the user requests the full data export, "
-        "the complete sentiment analysis results, "
-        "or any large table that cannot be displayed entirely in chat. "
+        "the complete sentiment analysis results per row, "
+        "or any tabular result too large for the chat display. "
+        "When 'data' is provided, ALL records are saved (no row limit). "
+        "When only 'column' is provided, the entire column from the dataset is exported. "
         "Returns the file path where the CSV was saved."
     )
     output_type = "object"
