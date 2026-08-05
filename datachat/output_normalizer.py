@@ -33,7 +33,7 @@ def _is_json_scalar(value: Any) -> bool:
 def _sanitize_table_records(
     data: list[Any],
     *,
-    max_rows: int = 50,
+    max_rows: int = 200,
     max_columns: int = 10,
 ) -> list[dict[str, Any]]:
     """
