@@ -115,8 +115,9 @@ class SentimentAnalysisTool(Tool):
             agg = bool(aggregate) if aggregate is not None else False
             sentiment_labels = labels or ["positive", "negative", "neutral"]
 
-            # Collect unique text values (limit to avoid huge prompts)
+            # Collect unique non-empty text values (limit to avoid huge prompts)
             s = df[col].dropna().astype(str)
+            s = s[s.str.strip() != ""]
             unique_vals = s.unique().tolist()
             if len(unique_vals) > _MAX_UNIQUE_VALUES:
                 unique_vals = unique_vals[:_MAX_UNIQUE_VALUES]
@@ -178,10 +179,13 @@ class SentimentAnalysisTool(Tool):
                         score = 0.5
                     lookup[idx_str] = {"sentiment": sentiment, "score": round(score, 4)}
 
-            # Map back to original rows
+            # Map back to original rows (skip empty/NaN rows)
             records: list[dict[str, Any]] = []
-            for idx, row in df.iterrows():
-                text_val = str(row.get(col, ""))
+            for _, row in df.iterrows():
+                raw = row.get(col)
+                if pd.isna(raw) or not str(raw).strip():
+                    continue
+                text_val = str(raw).strip()
                 matched = None
 
                 # Try full string match first

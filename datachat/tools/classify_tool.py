@@ -149,6 +149,7 @@ class ClassifyTool(Tool):
             return {"kind": "error", "message": "LLM model not available for method='match'.", "code": "MODEL_UNAVAILABLE"}
 
         s = df[col].dropna().astype(str)
+        s = s[s.str.strip() != ""]
         unique_vals = s.unique().tolist()
         if len(unique_vals) > _MAX_UNIQUE_VALUES:
             unique_vals = unique_vals[:_MAX_UNIQUE_VALUES]
@@ -209,7 +210,10 @@ class ClassifyTool(Tool):
 
         records: list[dict[str, Any]] = []
         for _, row in df.iterrows():
-            text_val = str(row.get(col, ""))
+            raw = row.get(col)
+            if pd.isna(raw) or not str(raw).strip():
+                continue
+            text_val = str(raw).strip()
             matched = None
             if text_val in unique_vals:
                 val_idx = str(unique_vals.index(text_val))
@@ -259,6 +263,7 @@ class ClassifyTool(Tool):
         n = max(2, min(int(n_clusters), _MAX_CLUSTERS))
 
         s = df[col].dropna().astype(str)
+        s = s[s.str.strip() != ""]
         if s.empty:
             return {"kind": "error", "message": "No non-empty text values found in column.", "code": "EMPTY_COLUMN"}
 
