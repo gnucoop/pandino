@@ -62,10 +62,43 @@ def _coerce_filter_value(df: pd.DataFrame, col: str, raw: Any) -> Any:
     return raw
 
 
+def _empty_mask(series: pd.Series) -> pd.Series:
+    """
+    True where a cell holds no usable value: NaN/None, or a blank/whitespace-only string.
+
+    Needed because `astype(str)` turns NaN into the literal "nan", so a plain equality
+    comparison against None or "" can never match a missing cell.
+    """
+    missing = series.isna()
+    if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series):
+        return missing
+    return missing | (series.astype(str).str.strip() == "")
+
+
+def _contains_mask(series: pd.Series, value: Any) -> pd.Series:
+    """
+    Case-insensitive substring match.
+
+    regex=False deliberately: the needle comes from an LLM, so a stray '(' or '*' would
+    either raise or compile into something expensive, and callers asking for "commenti che
+    parlano di orario" mean a substring, not a pattern.
+    """
+    needle = "" if value is None else str(value).strip()
+    if not needle:
+        # An empty needle matches everything, which is never a useful filter.
+        return pd.Series(False, index=series.index)
+    return series.astype(str).str.contains(needle, case=False, na=False, regex=False)
+
+
 def _eq_mask(series: pd.Series, value: Any) -> pd.Series:
     """
     Build an equality mask in a type-aware way.
     """
+    # None/"" mean "missing", not the strings "None"/"". Without this, filtering for
+    # blank cells silently matches nothing.
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return _empty_mask(series)
+
     # If value is bool, compare to bool series where possible
     if isinstance(value, bool):
         if pd.api.types.is_bool_dtype(series):
@@ -95,8 +128,14 @@ class FilterRowsTool(Tool):
     name = "filter_rows"
     description = (
         "Return rows that satisfy one or two conditions on specified columns. "
-        "Supports equality and numeric comparisons (lt, lte, gt, gte). "
-        "Returns a table of matching rows."
+        "Operations: 'eq' (default), numeric 'lt'/'lte'/'gt'/'gte', "
+        "'is_empty'/'is_not_empty' to select rows where a column is missing or filled in, "
+        "and 'contains'/'not_contains' to search free text for a word or phrase. "
+        "To answer 'which rows have a value for X', use op='is_not_empty' -- do NOT try to "
+        "count it by subtracting an 'eq' filter from the total. "
+        "To answer 'which comments mention X', use op='contains'. "
+        "Returns ALL matching rows: the system previews them and attaches a CSV download, "
+        "so do not pass 'n' to paginate and do not print the whole result."
     )
     output_type = "object"
 
@@ -107,11 +146,26 @@ class FilterRowsTool(Tool):
         },
         "value": {
             "type": "any",
-            "description": "Value to match.",
+            "description": (
+                "Value to match. Not needed for 'is_empty'/'is_not_empty'. "
+                "Passing null or an empty string with op='eq' selects rows whose column "
+                "is missing or blank (same as 'is_empty')."
+            ),
+            "nullable": True,
         },
         "op": {
             "type": "string",
-            "description": "Filter operation: 'eq' (default), 'lt', 'lte', 'gt', 'gte'.",
+            "description": (
+                "Filter operation: 'eq' (default), 'lt', 'lte', 'gt', 'gte', "
+                "'is_empty' (column missing or blank), 'is_not_empty' (column filled in), "
+                "'contains'/'not_contains' (case-insensitive substring -- use this to find "
+                "free-text answers mentioning a word)."
+            ),
+            "enum": [
+                "eq", "lt", "lte", "gt", "gte",
+                "is_empty", "is_not_empty",
+                "contains", "not_contains",
+            ],
             "nullable": True,
         },
         "data": {
@@ -142,7 +196,11 @@ class FilterRowsTool(Tool):
 
         "n": {
             "type": "integer",
-            "description": "Max number of rows to return (max 50).",
+            "description": (
+                "Optional hard cap on rows returned. Leave unset to return every match: "
+                "the result is previewed and exported automatically, so capping here only "
+                "shrinks the user's download."
+            ),
             "nullable": True,
         },
         "offset": {
@@ -165,13 +223,13 @@ class FilterRowsTool(Tool):
     def forward(
         self,
         where_col: str,
-        value: Any,
+        value: Any = None,
         op: Optional[str] = None,
         data: list[dict[str, Any]] | None = None,
         where_col2: Optional[str] = None,
         op2: Optional[str] = None,
         value2: Optional[Any] = None,
-        n: Optional[int] = 5,
+        n: Optional[int] = None,
         offset: Optional[int] = None,
         columns: Optional[list[str]] = None,
     ) -> dict[str, Any]:
@@ -200,17 +258,24 @@ class FilterRowsTool(Tool):
                     "code": "INVALID_FILTER_COLUMN",
                 }
 
-            n_int = max(1, min(int(n or 5), 50))
+            # No implicit row cap: the transport layer previews the result and exports the
+            # rest, so truncating here would silently shrink the user's download.
+            n_int = max(1, int(n)) if n else None
             offset_int = max(0, int(offset or 0))
 
-            # Choose columns
+            # Choose columns. All of them by default -- the preview keeps the first few and
+            # the CSV export keeps everything.
             if columns:
                 chosen = [c for c in columns if c in df.columns]
                 df_view = df[chosen] if chosen else df
             else:
-                df_view = df[list(df.columns)[:10]]  # keep small by default
+                df_view = df
 
-            allowed_ops = {"eq", "lt", "lte", "gt", "gte"}
+            allowed_ops = {
+                "eq", "lt", "lte", "gt", "gte",
+                "is_empty", "is_not_empty",
+                "contains", "not_contains",
+            }
 
             # -----------------------------
             # Build mask #1
@@ -225,7 +290,17 @@ class FilterRowsTool(Tool):
 
             series1 = df[where_col]
 
-            if op_clean in {"lt", "lte", "gt", "gte"}:
+            if op_clean == "is_empty":
+                mask1 = _empty_mask(series1)
+            elif op_clean == "is_not_empty":
+                mask1 = ~_empty_mask(series1)
+            elif op_clean == "contains":
+                mask1 = _contains_mask(series1, value)
+            elif op_clean == "not_contains":
+                # Blank cells do not "not contain" the term in any useful sense: excluding
+                # them keeps not_contains the complement of contains over real answers.
+                mask1 = ~_contains_mask(series1, value) & ~_empty_mask(series1)
+            elif op_clean in {"lt", "lte", "gt", "gte"}:
                 series1_num = pd.to_numeric(series1, errors="coerce")
                 try:
                     value_num = float(value)
@@ -254,7 +329,14 @@ class FilterRowsTool(Tool):
             mask_final = mask1
             where_col2_clean = (where_col2 or "").strip()
 
-            if where_col2_clean and value2 is not None:
+            # is_empty/is_not_empty need no value, so a second condition is active as soon
+            # as its column is named.
+            op2_clean_probe = (op2 or "eq").strip().lower()
+            second_condition_active = bool(where_col2_clean) and (
+                value2 is not None or op2_clean_probe in {"is_empty", "is_not_empty"}
+            )
+
+            if second_condition_active:
                 if where_col2_clean not in df.columns:
                     return {
                         "kind": "error",
@@ -272,7 +354,15 @@ class FilterRowsTool(Tool):
 
                 series2 = df[where_col2_clean]
 
-                if op2_clean in {"lt", "lte", "gt", "gte"}:
+                if op2_clean == "is_empty":
+                    mask2 = _empty_mask(series2)
+                elif op2_clean == "is_not_empty":
+                    mask2 = ~_empty_mask(series2)
+                elif op2_clean == "contains":
+                    mask2 = _contains_mask(series2, value2)
+                elif op2_clean == "not_contains":
+                    mask2 = ~_contains_mask(series2, value2) & ~_empty_mask(series2)
+                elif op2_clean in {"lt", "lte", "gt", "gte"}:
                     series2_num = pd.to_numeric(series2, errors="coerce")
                     try:
                         value2_num = float(str(value2))
@@ -300,7 +390,10 @@ class FilterRowsTool(Tool):
             filtered_all = df_view[mask_final]
             total_matches = int(mask_final.sum())
 
-            filtered = filtered_all.iloc[offset_int : offset_int + n_int]
+            if n_int is None:
+                filtered = filtered_all.iloc[offset_int:]
+            else:
+                filtered = filtered_all.iloc[offset_int : offset_int + n_int]
 
             records = filtered.to_dict(orient="records")
 
@@ -324,15 +417,26 @@ class FilterRowsTool(Tool):
                 len(safe_records),
             )
 
-            return {
+            payload: dict[str, Any] = {
                 "kind": "table",
                 "data": safe_records,
+                "export_name": f"filter_{where_col}",
                 "meta": {
                     "offset": offset_int,
                     "returned": len(safe_records),
                     "total_matches": total_matches,
                 },
             }
+
+            # If the caller asked for fewer rows than matched, say so: the export would
+            # otherwise look like the complete answer.
+            if len(safe_records) < total_matches:
+                payload["note"] = (
+                    f"{total_matches} rows match; {len(safe_records)} were returned "
+                    f"because a row limit was requested."
+                )
+
+            return payload
 
         except Exception as e:
             logging.exception("[datachat][filter_rows_tool] failed")

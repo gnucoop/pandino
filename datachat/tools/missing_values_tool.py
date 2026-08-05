@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.tools.limits import resolve_limit, truncation_note
 
 
 def _to_json_scalar(value: Any) -> Any:
@@ -47,7 +48,10 @@ class MissingValuesTool(Tool):
         },
         "n": {
             "type": "integer",
-            "description": "Max number of columns to return (max 50).",
+            "description": (
+                "Optional cap on the number of columns returned. Leave unset to "
+                "cover every column: the result is previewed and exported automatically."
+            ),
             "nullable": True,
         },
     }
@@ -60,7 +64,7 @@ class MissingValuesTool(Tool):
         self,
         data: list[dict[str, Any]] | None = None,
         columns: Optional[list[str]] = None,
-        n: Optional[int] = 50,
+        n: Optional[int] = None,
     ) -> dict[str, Any]:
         try:
             
@@ -102,10 +106,13 @@ class MissingValuesTool(Tool):
                 if cols:
                     df = df[cols]
 
-            n_int = max(1, min(int(n or 50), 50))
+            # No implicit cap: a partial column list reads as the whole schema.
+            n_int = resolve_limit(n)
+            total_columns = len(df.columns)
+            cols_to_use = list(df.columns) if n_int is None else list(df.columns)[:n_int]
 
             rows: list[dict[str, Any]] = []
-            for col in list(df.columns)[:n_int]:
+            for col in cols_to_use:
                 s = df[col]
                 missing = int(s.isna().sum())
                 total = int(len(s))
@@ -121,8 +128,18 @@ class MissingValuesTool(Tool):
 
             rows = replace_nan(rows)
 
-            logging.info("[datachat][missing_values_tool] cols=%s", len(rows))
-            return {"kind": "table", "data": rows}
+            logging.info(
+                "[datachat][missing_values_tool] cols=%s total_columns=%s", len(rows), total_columns
+            )
+            payload: dict[str, Any] = {
+                "kind": "table",
+                "data": rows,
+                "export_name": "missing_values",
+            }
+            note = truncation_note(len(rows), total_columns, unit="columns")
+            if note:
+                payload["note"] = note
+            return payload
 
         except Exception as e:
             logging.exception("[datachat][missing_values_tool] failed")

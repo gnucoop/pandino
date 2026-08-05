@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.tools.limits import resolve_limit, truncation_note
 
 
 def _truncate_cell(value: Any, max_chars: int) -> Any:
@@ -76,7 +77,10 @@ class SampleRowsTool(Tool):
     inputs: ClassVar[dict[str, Any]] = {
         "n": {
             "type": "integer",
-            "description": "Number of rows to return (max 20).",
+            "description": (
+                "Number of rows to return (default 5). There is no upper bound: ask for "
+                "as many as the user wants, they are previewed and exported automatically."
+            ),
             "nullable": True,
         },
         "offset": {
@@ -121,7 +125,7 @@ class SampleRowsTool(Tool):
         max_cell_chars: int | None = 3000,
     ) -> dict[str, Any]:
         try:
-            n_int = max(1, min(int(n or 5), 20))
+            n_int = resolve_limit(n, default=5)
             offset_int = max(0, int(offset or 0))
 
             # -----------------------------
@@ -165,7 +169,7 @@ class SampleRowsTool(Tool):
             else:
                 # If we're sampling from upstream tool output, it's usually already small/curated,
                 # so keep all columns. If sampling from the session dataset, keep it compact.
-                df_view = df if is_upstream else df[list(df.columns)[:10]]
+                df_view = df  # all columns: the preview trims, the CSV export keeps them
 
             # -----------------------------
             # Pagination then sample
@@ -191,9 +195,10 @@ class SampleRowsTool(Tool):
                 len(records),
             )
 
-            return {
+            payload: dict[str, Any] = {
                 "kind": "table",
                 "data": records,
+                "export_name": "sample",
                 "meta": {
                     "offset": offset_int,
                     "returned": len(records),
@@ -201,6 +206,10 @@ class SampleRowsTool(Tool):
                     "total_rows": int(len(df_view)),
                 },
             }
+            note = truncation_note(len(records), int(len(df_view)), unit="rows")
+            if note:
+                payload["note"] = note
+            return payload
 
         except Exception as e:
             logging.exception("[datachat][sample_rows_tool] failed")

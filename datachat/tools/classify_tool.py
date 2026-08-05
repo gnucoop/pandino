@@ -6,6 +6,7 @@ import pandas as pd
 from smolagents import LiteLLMModel, Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.tools.stopwords import get_stopwords
 
 _MAX_UNIQUE_VALUES = 500
 _MAX_CLUSTERS = 50
@@ -18,16 +19,6 @@ _CLASSIFY_SYSTEM_PROMPT = (
     "Return ONLY a valid JSON object mapping each input index to its category and confidence. "
     "No explanations, no extra text, no markdown."
 )
-
-
-def _to_json_scalar(value: Any) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, pd.Timestamp):
-        return value.isoformat()
-    return str(value)
 
 
 class ClassifyTool(Tool):
@@ -238,7 +229,7 @@ class ClassifyTool(Tool):
 
         records = replace_nan(records)
         logging.info("[datachat][classify_tool] mode=match col=%s rows=%d categories=%s", col, len(records), cats)
-        return {"kind": "table", "data": records}
+        return {"kind": "table", "data": records, "export_name": f"classify_{col}"}
 
     # ------------------------------------------------------------------
     # Cluster mode: TF-IDF + KMeans (scikit-learn)
@@ -271,7 +262,9 @@ class ClassifyTool(Tool):
         try:
             vectorizer = TfidfVectorizer(
                 max_features=_MAX_TFIDF_FEATURES,
-                stop_words="english",
+                # sklearn ships an English list only; on Italian answers that left the
+                # function words in and they dominated every cluster label.
+                stop_words=get_stopwords(texts=texts),
                 lowercase=True,
             )
             X = vectorizer.fit_transform(texts)
@@ -330,4 +323,4 @@ class ClassifyTool(Tool):
             "[datachat][classify_tool] mode=cluster col=%s rows=%d n_clusters=%d features=%d",
             col, len(records), n_actual, X.shape[1],
         )
-        return {"kind": "table", "data": records}
+        return {"kind": "table", "data": records, "export_name": f"clusters_{col}"}

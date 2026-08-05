@@ -527,8 +527,9 @@ A session is: **start → N× chat → end**.
 | Method | Path | Headers | Body | Returns |
 |---|---|---|---|---|
 | `POST` | `/startdatachat` | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | multipart: `file` (CSV), `model_name?`, `llm_type?`, `lang?` | `{Agent active:"active", suggested_questions?}` |
-| `POST` | `/datachat` | `X-API-KEY`, `X-USER-EMAIL` | `{chat:"..."}` | `{response:{type, value}, explanation, log_id?}` |
-| `POST` | `/enddatachat` | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | – | Deletes the in-memory agent and cleans up plot dirs |
+| `POST` | `/datachat` | `X-API-KEY`, `X-USER-EMAIL` | `{chat:"..."}` | `{response:{type, value, …}, explanation, log_id?}` |
+| `GET` | `/datachat/export/<token>` | `X-API-KEY`, `X-USER-EMAIL` | – | The full CSV behind a truncated table (`download_url`), as an attachment |
+| `POST` | `/enddatachat` | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | – | Deletes the in-memory agent and cleans up plot/export dirs |
 
 #### Example: full DataChat session
 
@@ -560,13 +561,58 @@ curl -X POST http://127.0.0.1:5000/agentchat \
 
 ### Response shape — DataChat `response`
 
-`normalize_datachat_response()` (`datachat/output_normalizer.py:86`) always returns:
+`normalize_datachat_response()` always returns:
 
 ```json
 { "type": "str|dataframe|image|dict|text_and_image", "value": <str|list|base64> }
 ```
 
 The `type` tells the client how to render `value` (e.g. `image` → base64 PNG).
+
+#### Table previews and CSV downloads
+
+Table payloads are **previews**, not complete results: the client receives at most
+`_PREVIEW_ROWS` rows (20) and `_PREVIEW_COLUMNS` columns (10) to keep the JSON small.
+Because a truncated table is otherwise indistinguishable from a complete one,
+`_build_table_response()` adds these fields to every `dataframe` response:
+
+```json
+{
+  "type": "dataframe",
+  "value": [ /* first 20 rows */ ],
+  "total_rows": 340,
+  "total_columns": 4,
+  "preview_rows": 20,
+  "truncated": true,
+  "download_url": "/datachat/export/<token>",
+  "download_filename": "sentiment_reviews.csv"
+}
+```
+
+`type` and `value` are unchanged, so a client that ignores the rest renders exactly as
+before. When `truncated` is true the **complete** result (all rows, all columns) is
+written to CSV by the active engine's `register_export()` and reachable at
+`download_url`; when it is false, `download_url` is `null`.
+
+A `text` response may also carry `download_url`/`download_filename` — that is how the
+`export_csv` tool returns a file for raw data the user never asked to see rendered.
+
+Notes for client implementors:
+
+- The download endpoint requires `X-API-KEY` and `X-USER-EMAIL` headers, so it must be
+  fetched programmatically — a plain browser link will not authenticate.
+- Exports are **session-scoped**. The token resolves only through the engine registered
+  for the API key that produced it, and `/enddatachat` deletes both the token map and the
+  files. Download during the chat, not after.
+- A tool can name its own export by adding `export_name` to its `table` payload; that
+  becomes `download_filename`.
+- A `note` on a `table` payload is forwarded verbatim and should be shown alongside the
+  table — tools use it to report caveats about their own result, e.g. the rows
+  `sentiment_analysis` could not score.
+
+See **`DINO_TABLE_PREVIEW_SPEC.md`** for the client-side specification: exact payloads,
+deserialization rules, required UI behaviour, download-endpoint contract and an acceptance
+checklist.
 
 ---
 
@@ -665,9 +711,45 @@ def close(self) -> None
 
 ### Active implementation: `SmolagentsEngine`
 
-`datachat/smolagents_engine.py` builds a Smolagents `CodeAgent` with **11 tools**
-(`datachat/tools/`): `describe`, `missing_values`, `unique_values`, `correlation`,
-`sample_rows`, `top_rows`, `filter_rows`, `row_count`, `aggregate`, `plot`, `trend`.
+`datachat/smolagents_engine.py` builds a Smolagents `CodeAgent` with **17 tools**
+(`datachat/tools/`):
+
+| Area | Tools |
+|---|---|
+| Shape & quality | `describe`, `missing_values`, `row_count`, `unique_values` |
+| Retrieval | `sample_rows`, `top_rows`, `filter_rows` |
+| Aggregation | `aggregate`, `crosstab`, `trend` |
+| Statistics | `correlation`, `compare_groups` |
+| Text | `keywords`, `sentiment_analysis`, `classify` |
+| Output | `plot`, `export_csv` |
+
+Tools worth knowing about when extending:
+
+- **`crosstab`** — two-dimensional breakdown (rows × columns, counts or an aggregated
+  metric, optionally normalized to percentages). Use it for "X per A *and* per B";
+  `aggregate` handles at most two grouping columns and returns a long table instead.
+- **`compare_groups`** — difference between two groups with a 95% CI, effect size and a
+  verdict. Exists so the agent can say a gap is *not* meaningful: with ~10 responses per
+  group, ranking averages surfaces noise as signal.
+- **`keywords`** — word/bigram frequencies over a free-text column. Deterministic and
+  free (no LLM call), unlike `sentiment_analysis` and `classify`.
+- **`correlation`** — supports `spearman` (correct for 1–5 ordinal scales) as well as
+  `pearson`; omit `col_y` to rank every numeric column against one anchor.
+- **`filter_rows`** — beyond `eq`/`lt`/`gt`, supports `is_empty`/`is_not_empty` and
+  `contains`/`not_contains` (literal substring, never regex).
+
+Two shared conventions live in `datachat/tools/`:
+
+- **`limits.py`** — `resolve_limit()` (no implicit row caps; the transport layer previews
+  and exports instead), `truncation_note()` and `sample_warning()`. **No tool may cap its
+  own output silently**: a cap inside a tool shrinks the user's CSV export.
+- **`stopwords.py`** — `get_stopwords()` with Italian and English lists plus
+  autodetection. sklearn ships English only, so `stop_words="english"` on Italian answers
+  left the function words in and they dominated every result.
+
+Note the cost of adding a tool: definitions are re-sent to the model on **every** step
+(~7,600 tokens for the current 17). Prefer extending an existing tool when the output
+shape allows it.
 
 Notable behaviors:
 

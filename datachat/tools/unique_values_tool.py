@@ -46,7 +46,11 @@ class UniqueValuesTool(Tool):
         },        
         "n": {
             "type": "integer",
-            "description": "Max number of unique values to return (max 50).",
+            "description": (
+                "Optional cap on the number of distinct values returned, most frequent "
+                "first. Leave unset to return all of them: the result is previewed and "
+                "exported automatically, so capping here only shrinks the user's download."
+            ),
             "nullable": True,
         },
     }
@@ -59,7 +63,7 @@ class UniqueValuesTool(Tool):
         self,
         column: str,
         data: list[dict[str, Any]] | None = None,
-        n: Optional[int] = 20,
+        n: Optional[int] = None,
     ) -> dict[str, Any]:
         
         try:
@@ -94,16 +98,35 @@ class UniqueValuesTool(Tool):
             if col not in df.columns:
                 return {"kind": "error", "message": f"Invalid column: {col}", "code": "INVALID_COLUMN"}
 
-            n_int = max(1, min(int(n or 20), 50))
+            # No implicit cap: the transport layer previews the result and exports the rest,
+            # so truncating here would silently shrink both the answer and the download.
+            n_int = max(1, int(n)) if n else None
 
             s = df[col].dropna()
-            vc = s.value_counts().head(n_int)
+            vc = s.value_counts()
+            total_distinct = int(vc.shape[0])
+            if n_int is not None:
+                vc = vc.head(n_int)
             records = [{"value": _to_json_scalar(idx), "count": _to_json_scalar(int(cnt))} for idx, cnt in vc.items()]
 
             records = replace_nan(records)
 
-            logging.info("[datachat][unique_values_tool] col=%s n=%s", col, n_int)
-            return {"kind": "table", "data": records}
+            logging.info(
+                "[datachat][unique_values_tool] col=%s returned=%s total_distinct=%s n=%s",
+                col, len(records), total_distinct, n_int if n_int is not None else "all",
+            )
+
+            payload: dict[str, Any] = {
+                "kind": "table",
+                "data": records,
+                "export_name": f"unique_{col}",
+            }
+            if len(records) < total_distinct:
+                payload["note"] = (
+                    f"{total_distinct} distinct values exist; the {len(records)} most "
+                    f"frequent were returned because a limit was requested."
+                )
+            return payload
 
         except Exception as e:
             logging.exception("[datachat][unique_values_tool] failed")

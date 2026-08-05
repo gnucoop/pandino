@@ -1,5 +1,6 @@
 import json
 import logging
+from collections import Counter
 from typing import Any, ClassVar, Optional
 
 import pandas as pd
@@ -8,17 +9,6 @@ from smolagents import LiteLLMModel, Tool
 from datachat.output_normalizer import replace_nan
 
 _MAX_UNIQUE_VALUES = 500
-
-
-def _to_json_scalar(value: Any) -> Any:
-    if value is None:
-        return None
-    if isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, pd.Timestamp):
-        return value.isoformat()
-    return str(value)
-
 
 _SENTIMENT_SYSTEM_PROMPT = (
     "You are a sentiment analysis assistant. "
@@ -41,9 +31,9 @@ class SentimentAnalysisTool(Tool):
         "Analyze the emotional tone (sentiment) of a text column. "
         "Assigns each text value a label ('positive', 'negative', 'neutral') "
         "with a numeric confidence score (0-1). "
-        "By default (aggregate=True) returns complete summary counts per sentiment. "
-        "Use aggregate=False with max_rows for a limited per-row sample. "
-        "For the full per-row results, use export_csv on this column. "
+        "By default (aggregate=True) returns summary counts per sentiment. "
+        "Use aggregate=False to return the per-row results; large results are shown as a "
+        "preview and the complete set is offered as a download automatically. "
         "Do NOT use for topic classification -- use 'classify' for that."
     )
     output_type = "object"
@@ -57,8 +47,7 @@ class SentimentAnalysisTool(Tool):
             "type": "boolean",
             "description": (
                 "If True (default), return aggregate counts per sentiment label. "
-                "If False, return per-row results (limited to max_rows). "
-                "For the full per-row export, use export_csv."
+                "If False, return the per-row results."
             ),
             "nullable": True,
         },
@@ -80,14 +69,6 @@ class SentimentAnalysisTool(Tool):
             "items": {"type": "string"},
             "nullable": True,
         },
-        "max_rows": {
-            "type": "integer",
-            "description": (
-                "Max rows to return when aggregate=False (default 50). "
-                "Increase this or use export_csv for the complete per-row export."
-            ),
-            "nullable": True,
-        },
     }
 
     def __init__(self, df: pd.DataFrame, model: LiteLLMModel) -> None:
@@ -101,7 +82,6 @@ class SentimentAnalysisTool(Tool):
         aggregate: Optional[bool] = True,
         data: list[dict[str, Any]] | None = None,
         labels: Optional[list[str]] = None,
-        max_rows: Optional[int] = 50,
     ) -> dict[str, Any]:
         try:
             if data is not None:
@@ -126,14 +106,13 @@ class SentimentAnalysisTool(Tool):
 
             agg = bool(aggregate) if aggregate is not None else True
             sentiment_labels = labels or ["positive", "negative", "neutral"]
-            max_n = max(1, int(max_rows or 50))
 
             # Collect unique non-empty text values (limit to avoid huge prompts)
-            s = df[col].dropna().astype(str)
-            s = s[s.str.strip() != ""]
-            unique_vals = s.unique().tolist()
-            if len(unique_vals) > _MAX_UNIQUE_VALUES:
-                unique_vals = unique_vals[:_MAX_UNIQUE_VALUES]
+            s = df[col].dropna().astype(str).str.strip()
+            s = s[s != ""]
+            all_unique = s.unique().tolist()
+            unique_vals = all_unique[:_MAX_UNIQUE_VALUES]
+            skipped_unique = len(all_unique) - len(unique_vals)
 
             if not unique_vals:
                 return {"kind": "error", "message": "No non-empty text values found in column.", "code": "EMPTY_COLUMN"}
@@ -175,72 +154,110 @@ class SentimentAnalysisTool(Tool):
             except Exception:
                 pass
 
-            if not isinstance(parsed, dict):
+            if not isinstance(parsed, dict) or not parsed:
                 return {"kind": "error", "message": "Failed to parse LLM response as JSON.", "code": "PARSE_FAILED"}
 
-            # Build lookup: value -> sentiment/score
-            lookup: dict[str, dict[str, Any]] = {}
+            # Build lookup: text value -> sentiment/score.
+            # The LLM keys its answer by the index we sent, so resolve those indexes to
+            # the text they stood for and key on the text itself: that makes the per-row
+            # mapping below a dict hit instead of a scan over unique_vals.
+            by_text: dict[str, dict[str, Any]] = {}
+            label_set = {l.lower() for l in sentiment_labels}
             for key, val in parsed.items():
-                if isinstance(val, dict) and "sentiment" in val:
-                    idx_str = str(key).strip()
-                    sentiment = str(val.get("sentiment", "neutral")).strip().lower()
-                    if sentiment not in {l.lower() for l in sentiment_labels}:
-                        sentiment = "neutral"
-                    try:
-                        score = float(val.get("score", 0.5))
-                    except (ValueError, TypeError):
-                        score = 0.5
-                    lookup[idx_str] = {"sentiment": sentiment, "score": round(score, 4)}
+                if not isinstance(val, dict) or "sentiment" not in val:
+                    continue
+                try:
+                    idx = int(str(key).strip())
+                except (ValueError, TypeError):
+                    continue
+                if not 0 <= idx < len(unique_vals):
+                    continue
 
-            # Map back to original rows (skip empty/NaN rows)
+                sentiment = str(val.get("sentiment", "")).strip().lower()
+                if sentiment not in label_set:
+                    # An off-menu label is not a signal we can use; treat it as unscored
+                    # rather than silently rounding it to a real category.
+                    continue
+                try:
+                    score = round(float(val.get("score", 0.5)), 4)
+                except (ValueError, TypeError):
+                    score = None
+
+                by_text[unique_vals[idx]] = {"sentiment": sentiment, "score": score}
+
+            if not by_text:
+                # The model answered, but nothing in it was usable. Returning a table of
+                # empty labels here would look like a successful analysis of nothing.
+                return {
+                    "kind": "error",
+                    "message": "The model returned no usable sentiment labels.",
+                    "code": "PARSE_FAILED",
+                }
+
+            # Map back to original rows (skip empty/NaN rows).
+            # Rows the LLM never scored -- because the column had more distinct values
+            # than we could send, or because it omitted an index -- are left null. They
+            # must NOT be defaulted to a real label with a confidence score: that would
+            # be indistinguishable from a genuine result, in the UI and in the CSV.
             records: list[dict[str, Any]] = []
+            unscored = 0
             for _, row in df.iterrows():
                 raw = row.get(col)
                 if pd.isna(raw) or not str(raw).strip():
                     continue
                 text_val = str(raw).strip()
-                matched = None
 
-                # Try full string match first
-                if text_val in unique_vals:
-                    val_idx = str(unique_vals.index(text_val))
-                    matched = lookup.get(val_idx)
-
-                # Fallback: iterate lookup
+                matched = by_text.get(text_val)
                 if matched is None:
-                    for key, val in lookup.items():
-                        try:
-                            lu_idx = int(key)
-                            if lu_idx < len(unique_vals) and unique_vals[lu_idx] == text_val:
-                                matched = val
-                                break
-                        except (ValueError, IndexError):
-                            continue
-
-                if matched is None:
-                    matched = {"sentiment": "neutral", "score": 0.5}
+                    unscored += 1
 
                 records.append({
                     str(col): text_val,
-                    "sentiment": matched["sentiment"],
-                    "score": matched["score"],
+                    "sentiment": matched["sentiment"] if matched else None,
+                    "score": matched["score"] if matched else None,
                 })
 
+            logging.info(
+                "[datachat][sentiment_tool] col=%s rows=%d scored=%d unscored=%d skipped_unique=%d",
+                col, len(records), len(records) - unscored, unscored, skipped_unique,
+            )
+
             if agg:
-                from collections import Counter
                 counts = Counter(r["sentiment"] for r in records)
                 agg_records = [
-                    {"sentiment": label, "count": count}
+                    {"sentiment": label if label is not None else "not analyzed", "count": count}
                     for label, count in counts.most_common()
                 ]
-                agg_records = replace_nan(agg_records)
-                logging.info("[datachat][sentiment_tool] col=%s rows=%d agg=%s", col, len(records), len(agg_records))
-                return {"kind": "table", "data": agg_records}
+                return {
+                    "kind": "table",
+                    "data": replace_nan(agg_records),
+                    "export_name": f"sentiment_{col}",
+                    "note": self._coverage_note(unscored, skipped_unique),
+                }
 
-            records = replace_nan(records[:max_n])
-            logging.info("[datachat][sentiment_tool] col=%s rows=%d", col, len(records))
-            return {"kind": "table", "data": records}
+            return {
+                "kind": "table",
+                "data": replace_nan(records),
+                "export_name": f"sentiment_{col}",
+                "note": self._coverage_note(unscored, skipped_unique),
+            }
 
         except Exception as e:
             logging.exception("[datachat][sentiment_tool] failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}
+
+    @staticmethod
+    def _coverage_note(unscored: int, skipped_unique: int) -> Optional[str]:
+        """Describe incomplete coverage so it is never presented as a full result."""
+        if not unscored:
+            return None
+        if skipped_unique:
+            return (
+                f"{unscored} rows could not be analyzed: the column has "
+                f"{skipped_unique} more distinct values than the {_MAX_UNIQUE_VALUES}-value "
+                f"analysis limit. Their sentiment is empty, not neutral."
+            )
+        return (
+            f"{unscored} rows were not scored by the model. "
+            f"Their sentiment is empty, not neutral."
+        )

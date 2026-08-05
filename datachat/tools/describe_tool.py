@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.tools.limits import resolve_limit, truncation_note
 
 
 def _to_json_scalar(value: Any) -> Any:
@@ -59,7 +60,10 @@ class DescribeTool(Tool):
         },
         "n": {
             "type": "integer",
-            "description": "Max number of columns to return (max 50).",
+            "description": (
+                "Optional cap on the number of columns returned. Leave unset to "
+                "cover every column: the result is previewed and exported automatically."
+            ),
             "nullable": True,
         },
     }
@@ -72,7 +76,7 @@ class DescribeTool(Tool):
         self,
         data: list[dict[str, Any]] | None = None,
         columns: Optional[list[str]] = None,
-        n: Optional[int] = 50,
+        n: Optional[int] = None,
     ) -> dict[str, Any]:
         
         try:
@@ -114,10 +118,13 @@ class DescribeTool(Tool):
                 if cols:
                     df = df[cols]
 
-            n_int = max(1, min(int(n or 50), 50))
+            # No implicit cap: a partial column list reads as the whole schema.
+            n_int = resolve_limit(n)
+            total_columns = len(df.columns)
+            cols_to_use = list(df.columns) if n_int is None else list(df.columns)[:n_int]
 
             records: list[dict[str, Any]] = []
-            for col in list(df.columns)[:n_int]:
+            for col in cols_to_use:
                 s = df[col]
                 dtype = str(s.dtype)
                 count = int(s.count())
@@ -168,8 +175,18 @@ class DescribeTool(Tool):
 
             records = replace_nan(records)
 
-            logging.info("[datachat][describe_tool] cols=%s", len(records))
-            return {"kind": "table", "data": records}
+            logging.info(
+                "[datachat][describe_tool] cols=%s total_columns=%s", len(records), total_columns
+            )
+            payload: dict[str, Any] = {
+                "kind": "table",
+                "data": records,
+                "export_name": "describe",
+            }
+            note = truncation_note(len(records), total_columns, unit="columns")
+            if note:
+                payload["note"] = note
+            return payload
 
         except Exception as e:
             logging.exception("[datachat][describe_tool] failed")

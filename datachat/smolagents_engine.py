@@ -16,10 +16,13 @@ from datachat.bootstrap_static import get_static_bootstrap_html
 from datachat.engine_interface import DataChatEngine, EngineBootstrapResult
 from datachat.tools.aggregate_tool import AggregateTool
 from datachat.tools.classify_tool import ClassifyTool
+from datachat.tools.compare_groups_tool import CompareGroupsTool
 from datachat.tools.correlation_tool import CorrelationTool
+from datachat.tools.crosstab_tool import CrosstabTool
 from datachat.tools.describe_tool import DescribeTool
 from datachat.tools.export_csv_tool import ExportCsvTool
 from datachat.tools.filter_rows_tool import FilterRowsTool
+from datachat.tools.keywords_tool import KeywordsTool
 from datachat.tools.missing_values_tool import MissingValuesTool
 from datachat.tools.plot_tool import PlotTool
 from datachat.tools.row_count_tool import RowCountTool
@@ -34,6 +37,12 @@ from infrastructure.prompt_utils import load_prompt, render_prompt
 runtime_logger = logging.getLogger("datachat.runtime")
 
 _ALLOWED_FINAL_KINDS = {"text", "table", "image_path", "error"}
+
+# Cap on full-result CSVs kept per session; older ones are deleted on overflow.
+_MAX_SESSION_EXPORTS = 20
+
+# Suggested download names come from column names, which can be full sentences.
+_MAX_EXPORT_NAME_LEN = 60
 
 
 # ----------------------------
@@ -178,6 +187,9 @@ class SmolagentsEngine(DataChatEngine):
     _plots_dir: Optional[str] = field(default=None, init=False, repr=False)
     _user_plots_dir: Optional[str] = field(default=None, init=False, repr=False)
 
+    # download token -> (absolute CSV path, suggested download name); see register_export
+    _exports: dict[str, Tuple[str, str]] = field(default_factory=dict, init=False, repr=False)
+
     _last_run_result: Any = field(default=None, init=False, repr=False)
     _last_run_duration_ms: Optional[float] = field(default=None, init=False, repr=False)
 
@@ -292,6 +304,51 @@ class SmolagentsEngine(DataChatEngine):
             - Use plain text only (avoid markdown formatting).
             - If a request cannot be expressed with the available tools, explain the limitation briefly.
 
+            CHOOSING COLUMNS
+            - When the user names a concept rather than an exact column, pick the SINGLE
+              column whose name best matches it. Do not combine several columns into one
+              answer unless the user asked for a combination.
+            - Always state which column you used, quoting its name, so the user can correct
+              you. Example: 'Nella colonna "...qualunque commento" ci sono 212 righe compilate.'
+            - If two or more columns match the request equally well, say so and ask which
+              one the user means instead of guessing or merging them.
+
+            PICKING THE RIGHT TOOL
+            - Two dimensions ("X per A e per B", "distribuzione delle risposte per gruppo")
+              -> crosstab. Never issue two separate aggregate calls and stitch the numbers
+              together yourself.
+            - Free text mentioning a word ("commenti che parlano di orario")
+              -> filter_rows with op="contains".
+            - What open answers are about -> keywords first (it is free and instant), then
+              classify or sentiment_analysis only if the user wants grouping or tone.
+            - Before saying one group scores better than another -> compare_groups. An
+              average from aggregate cannot distinguish a real gap from noise.
+            - Relationships between rating questions -> correlation with method="spearman",
+              and omit col_y to rank every question against one of them at once.
+
+            REPORTING RESULTS HONESTLY
+            - When a tool returns a "note", repeat its substance in your answer. It reports
+              things like rows that could not be analyzed or groups too small to trust.
+            - Never present an average over a handful of answers as a firm result.
+
+            COUNTING FILLED OR EMPTY ROWS
+            - To count rows that have a value in a column, call
+              filter_rows(where_col=..., op="is_not_empty") and then row_count on the result.
+            - To count rows that are blank, use op="is_empty" the same way.
+            - Do NOT compute these by subtracting one count from another: it is easy to get
+              wrong and it hides which column you actually used.
+
+            TABLE RESULTS ARE PREVIEWS
+            - Tables you return are shown to the user as a preview of the first 20 rows only.
+            - Whenever the result is larger, the system automatically attaches a download link
+              to the complete CSV. You do not need to do anything for this to happen.
+            - Therefore: never state or imply that a table contains all the matching rows,
+              and never quote the number of rows in a table as if it were the total.
+            - Never try to paginate, split a result into batches, or re-run a query to
+              "show the remaining rows". Return the full result once and let the system
+              handle the preview.
+            - If the user needs every row, tell them to use the download link.
+
             OUTPUT
             - The final result must be exactly one JSON object.
             - The JSON must contain a "kind" field.
@@ -311,7 +368,15 @@ class SmolagentsEngine(DataChatEngine):
         )
 
         template = load_prompt("data_chat_system", default_text=default_context)
-        return render_prompt(template, columns=cols)
+        rendered = render_prompt(template, columns=cols)
+
+        # render_prompt uses str.format, which raises on the literal JSON braces in the
+        # contract examples above and then returns the template untouched -- leaving
+        # "{columns}" in place, so the model never saw the column names. Substitute it
+        # directly; this also covers a DB-stored prompt with the same placeholder.
+        if "{columns}" in rendered:
+            rendered = rendered.replace("{columns}", ", ".join(str(c) for c in cols))
+        return rendered
 
     def _build_agent(self, model: LiteLLMModel, instructions: str) -> Optional[CodeAgent]:
         tools = [
@@ -324,11 +389,14 @@ class SmolagentsEngine(DataChatEngine):
             FilterRowsTool(self.data),
             RowCountTool(self.data),
             AggregateTool(self.data),
+            CrosstabTool(self.data),
+            CompareGroupsTool(self.data),
+            KeywordsTool(self.data),
             PlotTool(self.data, output_dir=self._plots_dir or os.getenv("DATACHAT_PLOTS_DIR", "/tmp/datachat_plots")),
             TrendTool(self.data),
             SentimentAnalysisTool(self.data, model=self._model),
             ClassifyTool(self.data, model=self._model),
-            ExportCsvTool(self.data, output_dir=self._plots_dir or os.getenv("DATACHAT_PLOTS_DIR", "/tmp/datachat_plots"), model=self._model),
+            ExportCsvTool(self.data, exporter=self),
         ]
 
         base_kwargs: dict[str, Any] = {
@@ -462,12 +530,74 @@ class SmolagentsEngine(DataChatEngine):
             return None
         return {"run_result": self._last_run_result, "duration_ms": self._last_run_duration_ms}
 
+    # --- full-result CSV exports ---
+
+    def register_export(self, records: list[dict[str, Any]], hint: str = "export") -> Tuple[str, str]:
+        """
+        Write `records` as a complete CSV and return (token, download_filename).
+
+        Table responses are truncated to a preview before reaching the client, so the
+        full result is written here and handed back as an opaque token.
+
+        The on-disk name is the token itself: the caller-supplied `hint` only ever
+        becomes the *suggested download* name, never a path component, so no caller
+        (tool, LLM or client) can steer where we write.
+        """
+        if not self._plots_dir:
+            raise RuntimeError("export directory not initialised")
+
+        os.makedirs(self._plots_dir, exist_ok=True)
+
+        safe_hint = re.sub(r"[^A-Za-z0-9._-]+", "_", str(hint or "export")).strip("_") or "export"
+        if safe_hint.lower().endswith(".csv"):
+            safe_hint = safe_hint[:-4]
+        # Column names can be whole sentences (survey headers); keep the filename usable.
+        safe_hint = safe_hint[:_MAX_EXPORT_NAME_LEN].strip("_") or "export"
+        download_filename = f"{safe_hint}.csv"
+
+        token = uuid.uuid4().hex
+        path = os.path.join(self._plots_dir, f"{token}.csv")
+        pd.DataFrame(records).to_csv(path, index=False)
+
+        self._exports[token] = (path, download_filename)
+        self._evict_old_exports()
+
+        runtime_logger.info(
+            "export_registered engine=smolagents user=%s token=%s rows=%s cols=%s",
+            self.user_name,
+            token,
+            len(records),
+            len(records[0]) if records else 0,
+        )
+        return token, download_filename
+
+    def resolve_export(self, token: str) -> Optional[Tuple[str, str]]:
+        """Return (path, download_filename) for a token issued by this session, or None."""
+        entry = self._exports.get(str(token or ""))
+        if entry and os.path.isfile(entry[0]):
+            return entry
+        return None
+
+    def _evict_old_exports(self) -> None:
+        """Keep only the most recent exports so a long session cannot fill the disk."""
+        while len(self._exports) > _MAX_SESSION_EXPORTS:
+            # dicts preserve insertion order, so the first key is the oldest export
+            old_token = next(iter(self._exports))
+            old_path, _ = self._exports.pop(old_token)
+            try:
+                os.unlink(old_path)
+            except OSError:
+                pass
+
     def close(self) -> None:
         plots_dir_removed = False
         user_dir_removed = False
         cleanup_error = ""
 
         try:
+            # export tokens die with the session: the CSVs live under _plots_dir
+            self._exports.clear()
+
             if self._plots_dir and os.path.exists(self._plots_dir):
                 shutil.rmtree(self._plots_dir, ignore_errors=True)
                 plots_dir_removed = not os.path.exists(self._plots_dir)

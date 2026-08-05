@@ -1,8 +1,46 @@
+import logging
 import os
 from dataclasses import dataclass
 from typing import Optional
 
 from smolagents import LiteLLMModel
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+# LiteLLM's loggers are process-global; only touch them once.
+_litellm_debug_enabled = False
+
+
+def _maybe_enable_litellm_debug() -> None:
+    """
+    Raise LiteLLM's own loggers to DEBUG when LITELLM_DEBUG is truthy.
+
+    This is what LiteLLM's "use litellm._turn_on_debug()" error hint asks for. It logs
+    full request/response bodies -- including prompts and dataset rows sent to the model
+    -- so it is opt-in and belongs off in production.
+    """
+    global _litellm_debug_enabled
+
+    if _litellm_debug_enabled:
+        return
+    if os.getenv("LITELLM_DEBUG", "").strip().lower() not in _TRUTHY:
+        return
+
+    try:
+        import litellm
+
+        litellm._turn_on_debug()
+    except Exception:
+        # _turn_on_debug is a private helper; if a future release moves it, set the
+        # loggers it targets directly rather than failing model construction.
+        for name in ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy"):
+            logging.getLogger(name).setLevel(logging.DEBUG)
+
+    _litellm_debug_enabled = True
+    logging.getLogger("datachat.runtime").warning(
+        "litellm_debug=on -- verbose LLM request/response logging is enabled; "
+        "prompts and dataset contents will appear in the logs"
+    )
 
 
 @dataclass(frozen=True)
@@ -27,6 +65,8 @@ def build_litellm_model(
       environment via PROVIDER_API_KEY_MAP (imported from config) or the
       fallback pattern "{PROVIDER}_API_KEY".
     """
+    _maybe_enable_litellm_debug()
+
     provider_clean = (provider or "").strip()
     model_clean = (configured_model or "").strip()
 

@@ -4,7 +4,7 @@ import time
 import logging
 from typing import Any, Optional
 
-from flask import Blueprint, Response, jsonify, request, current_app
+from flask import Blueprint, Response, jsonify, request, current_app, send_file
 
 from infrastructure.agent_manager import getAgent, createAgent, deleteAgent
 from infrastructure.ai import choose_llm
@@ -136,6 +136,66 @@ def startChat() -> Response | tuple[Response, int]:
             jsonify({"error": f"Failed to create Agent: {str(e)}"}),
             500,
         )
+
+
+@datachat_bp.route("/datachat/export/<token>", methods=["GET"])
+def downloadDatachatExport(token: str) -> Response | tuple[Response, int]:
+    """
+    Download the full CSV behind a truncated table response.
+
+    Table results are sent to the client as a preview; when one is truncated the
+    normalizer writes the complete result to CSV and returns an opaque token
+    (`download_url`). This serves that CSV.
+
+    Access control: the token is only ever a key into the owning engine's in-memory
+    export map, and engines are registered per API key, so a token is unresolvable
+    without the key that produced it. It never reaches the filesystem as a path.
+    Exports live for the length of the chat session -- /enddatachat removes them.
+    """
+    _logger = current_app.config["DATACHAT_RUNTIME_LOGGER"]
+
+    api_key = request.headers.get("X-API-KEY")
+    user_email = request.headers.get("X-USER-EMAIL")
+
+    if not api_key:
+        return jsonify({"error": "Missing X-API-KEY header"}), 400
+    if not user_email:
+        return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
+
+    assert_valid_api_key(api_key, user_email)
+
+    engine = getAgent(api_key)
+    if not engine:
+        _logger.info(
+            "datachat_export status=error http_status=400 user=%s error_code=AGENT_NOT_ACTIVE",
+            user_email,
+        )
+        return jsonify({"error": "Agent not active for this Api Key"}), 400
+
+    resolver = getattr(engine, "resolve_export", None)
+    resolved = resolver(token) if callable(resolver) else None
+
+    if not resolved:
+        _logger.info(
+            "datachat_export status=error http_status=404 user=%s error_code=EXPORT_NOT_FOUND",
+            user_email,
+        )
+        return jsonify({"error": "Export not found or expired"}), 404
+
+    path, download_name = resolved
+
+    _logger.info(
+        "datachat_export status=ok http_status=200 user=%s bytes=%s",
+        user_email,
+        os.path.getsize(path),
+    )
+
+    return send_file(
+        path,
+        mimetype="text/csv",
+        as_attachment=True,
+        download_name=download_name,
+    )
 
 
 @datachat_bp.route("/datachat", methods=["POST"])
@@ -334,7 +394,7 @@ def dataChat() -> Response | tuple[Response, int]:
     )
 
     try:
-        response_dict = normalize_datachat_response(response)
+        response_dict = normalize_datachat_response(response, exporter=engine)
     except RuntimeError as e:
         _logger.info(
             "datachat_request_end request_id=%s status=error http_status=500 duration_ms_total=%.2f user=%s engine=%s response_kind=%s error_code=NORMALIZE_FAILED",
@@ -357,7 +417,7 @@ def dataChat() -> Response | tuple[Response, int]:
         response_payload["log_id"] = log_id
 
     _logger.info(
-        "datachat_request_end request_id=%s status=ok http_status=200 duration_ms_total=%.2f user=%s engine=%s response_kind=%s adapter_fallback_used=%s log_id=%s",
+        "datachat_request_end request_id=%s status=ok http_status=200 duration_ms_total=%.2f user=%s engine=%s response_kind=%s adapter_fallback_used=%s log_id=%s total_rows=%s truncated=%s export=%s",
         request_id,
         (time.time() - request_started) * 1000,
         user_email,
@@ -365,6 +425,9 @@ def dataChat() -> Response | tuple[Response, int]:
         response_kind or "unknown",
         adapter_fallback_used,
         log_id if log_id is not None else "none",
+        response_dict.get("total_rows", "n/a"),
+        response_dict.get("truncated", "n/a"),
+        "yes" if response_dict.get("download_url") else "no",
     )
 
     return jsonify(response_payload)

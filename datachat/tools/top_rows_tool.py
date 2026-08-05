@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.tools.limits import resolve_limit, truncation_note
 
 
 def _to_json_scalar(value: Any) -> Any:
@@ -96,7 +97,10 @@ class TopRowsTool(Tool):
     inputs: ClassVar[dict[str, Any]] = {
         "n": {
             "type": "integer",
-            "description": "Number of rows to return (max 20).",
+            "description": (
+                "Number of rows to return (default 5). There is no upper bound: ask for "
+                "as many as the user wants, they are previewed and exported automatically."
+            ),
             "nullable": True,
         },
         "offset": {
@@ -165,7 +169,7 @@ class TopRowsTool(Tool):
             if not sort_by_clean:
                 return {"kind": "error", "message": "Missing sort_by column.", "code": "MISSING_SORT_COLUMN"}
 
-            n_int = max(1, min(int(n or 5), 20))
+            n_int = resolve_limit(n, default=5)
             offset_int = max(0, int(offset or 0))
             asc = bool(ascending) if ascending is not None else False
             max_chars = int(max_cell_chars or 200)
@@ -207,7 +211,7 @@ class TopRowsTool(Tool):
             else:
                 # If we're operating on tool-produced data, keep all columns (already "small").
                 # If session dataset, cap to first 10 columns for safety.
-                df_view = df if data is not None else df[list(df.columns)[:10]]
+                df_view = df  # all columns: the preview trims, the CSV export keeps them
 
             # --- sorting (robust) ---
             sort_key = _coerce_sort_key(df[sort_by_clean])
@@ -246,9 +250,10 @@ class TopRowsTool(Tool):
                 "tool_data" if data is not None else "session_df",
             )
 
-            return {
+            payload: dict[str, Any] = {
                 "kind": "table",
                 "data": safe_records,
+                "export_name": f"top_{sort_by_clean}",
                 "meta": {
                     "offset": offset_int,
                     "returned": len(safe_records),
@@ -257,6 +262,10 @@ class TopRowsTool(Tool):
                     "ascending": asc,
                 },
             }
+            note = truncation_note(len(safe_records), total, unit="rows")
+            if note:
+                payload["note"] = note
+            return payload
 
         except Exception as e:
             logging.exception("[datachat][top_rows_tool] failed")

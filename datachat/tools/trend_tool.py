@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.tools.limits import resolve_limit, truncation_note
 
 
 def _to_json_scalar(value: Any) -> Any:
@@ -132,7 +133,10 @@ class TrendTool(Tool):
         },
         "n": {
             "type": "integer",
-            "description": "Max number of periods to return (max 50).",
+            "description": (
+                "Optional cap on the number of periods returned. Leave unset to return "
+                "the whole series: it is previewed and exported automatically."
+            ),
             "nullable": True,
         },
         "ascending": {
@@ -163,7 +167,7 @@ class TrendTool(Tool):
         metric: Optional[str] = None,
         start: Optional[Any] = None,
         end: Optional[Any] = None,
-        n: Optional[int] = 50,
+        n: Optional[int] = None,
         ascending: Optional[bool] = True,
         include_empty: Optional[bool] = False,
     ) -> dict[str, Any]:
@@ -219,7 +223,8 @@ class TrendTool(Tool):
                 if metric_clean not in df.columns:
                     return {"kind": "error", "message": f"Invalid metric column: {metric_clean}", "code": "INVALID_METRIC"}
 
-            n_int = max(1, min(int(n if n is not None else 50), 50))
+            # No implicit cap: a truncated time series misrepresents the trend.
+            n_int = resolve_limit(n)
             asc = bool(ascending) if ascending is not None else True
             keep_empty = bool(include_empty) if include_empty is not None else False
 
@@ -302,7 +307,10 @@ class TrendTool(Tool):
             out["period"] = out["period_dt"].apply(lambda x: _format_period(pd.Timestamp(x), freq))
             out = out.drop(columns=["period_dt"], errors="ignore")
 
-            out = out.sort_values(by="period", ascending=asc).head(n_int)
+            out = out.sort_values(by="period", ascending=asc)
+            total_periods = int(out.shape[0])
+            if n_int is not None:
+                out = out.head(n_int)
 
             records = out[["period", value_col]].to_dict(orient="records")
             safe_records: list[dict[str, Any]] = []
@@ -319,12 +327,20 @@ class TrendTool(Tool):
                 metric_clean,
                 start_ts.isoformat() if start_ts is not None else None,
                 end_ts.isoformat() if end_ts is not None else None,
-                n_int,
+                n_int if n_int is not None else "all",
                 len(safe_records),
                 keep_empty,
             )
 
-            return {"kind": "table", "data": safe_records}
+            payload: dict[str, Any] = {
+                "kind": "table",
+                "data": safe_records,
+                "export_name": f"trend_{metric_clean or 'count'}",
+            }
+            note = truncation_note(len(safe_records), total_periods, unit="periods")
+            if note:
+                payload["note"] = note
+            return payload
 
         except Exception as e:
             logging.exception("[datachat][trend_tool] failed")
