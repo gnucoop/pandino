@@ -6,6 +6,8 @@ from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
 
+logger = logging.getLogger(__name__)
+
 
 def _truncate_cell(value: Any, max_chars: int) -> Any:
     """
@@ -182,7 +184,7 @@ class SampleRowsTool(Tool):
             records = _truncate_records(records, max_cell_chars if max_cell_chars is not None else 3000)
             records = replace_nan(records)  # in case truncation introduced weird values
 
-            logging.info(
+            logger.info(
                 "[datachat][sample_rows_tool] n=%s offset=%s cols=%s source=%s returned=%s",
                 n_int,
                 offset_int,
@@ -203,5 +205,5 @@ class SampleRowsTool(Tool):
             }
 
         except Exception as e:
-            logging.exception("[datachat][sample_rows_tool] failed")
+            logger.exception("[datachat][sample_rows_tool] failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

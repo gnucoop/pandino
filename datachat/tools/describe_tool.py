@@ -6,6 +6,8 @@ from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
 
+logger = logging.getLogger(__name__)
+
 
 def _to_json_scalar(value: Any) -> Any:
     if value is None:
@@ -168,9 +170,9 @@ class DescribeTool(Tool):
 
             records = replace_nan(records)
 
-            logging.info("[datachat][describe_tool] cols=%s", len(records))
+            logger.info("[datachat][describe_tool] cols=%s", len(records))
             return {"kind": "table", "data": records}
 
         except Exception as e:
-            logging.exception("[datachat][describe_tool] failed")
+            logger.exception("[datachat][describe_tool] failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

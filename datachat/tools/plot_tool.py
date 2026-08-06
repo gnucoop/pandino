@@ -12,6 +12,8 @@ import matplotlib
 matplotlib.use("Agg")  # must be set BEFORE importing pyplot
 import matplotlib.pyplot as plt
 
+logger = logging.getLogger(__name__)
+
 
 class PlotTool(Tool):
     """
@@ -678,9 +680,9 @@ class PlotTool(Tool):
             plt.savefig(out_path, dpi=150)
             plt.close()
 
-            logging.info("[datachat][plot_tool] saved plot=%s", out_path)
+            logger.info("[datachat][plot_tool] saved plot=%s", out_path)
             return {"kind": "image_path", "path": out_path}
 
         except Exception as e:
-            logging.exception("[datachat][plot_tool] failed")
+            logger.exception("[datachat][plot_tool] failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

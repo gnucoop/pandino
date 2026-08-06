@@ -6,6 +6,8 @@ from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
 
+logger = logging.getLogger(__name__)
+
 
 def _to_json_scalar(v: Any) -> Any:
     # JSON scalars only: str, int/float, bool, None
@@ -312,7 +314,7 @@ class FilterRowsTool(Tool):
 
             safe_records = replace_nan(safe_records)
 
-            logging.info(
+            logger.info(
                 "[datachat][filter_rows_tool] where_col=%s op=%s value=%s where_col2=%s op2=%s value2=%s n=%s rows=%s",
                 where_col,
                 op_clean,
@@ -335,5 +337,5 @@ class FilterRowsTool(Tool):
             }
 
         except Exception as e:
-            logging.exception("[datachat][filter_rows_tool] failed")
+            logger.exception("[datachat][filter_rows_tool] failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

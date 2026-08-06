@@ -6,6 +6,8 @@ from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
 
+logger = logging.getLogger(__name__)
+
 
 def _to_json_scalar(value: Any) -> Any:
     """
@@ -234,7 +236,7 @@ class TopRowsTool(Tool):
 
             safe_records = replace_nan(safe_records)
 
-            logging.info(
+            logger.info(
                 "[datachat][top_rows_tool] sort_by=%s asc=%s n=%s offset=%s returned=%s total=%s cols=%s data_mode=%s",
                 sort_by_clean,
                 asc,
@@ -259,5 +261,5 @@ class TopRowsTool(Tool):
             }
 
         except Exception as e:
-            logging.exception("[datachat][top_rows_tool] failed")
+            logger.exception("[datachat][top_rows_tool] failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

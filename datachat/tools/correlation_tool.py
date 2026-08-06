@@ -6,6 +6,8 @@ from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
 
+logger = logging.getLogger(__name__)
+
 
 class CorrelationTool(Tool):
     """
@@ -147,9 +149,9 @@ class CorrelationTool(Tool):
             }
             records = replace_nan([row])
 
-            logging.info("[datachat][correlation_tool] x=%s y=%s n=%s corr=%.6f", x, y, len(tmp), corr)
+            logger.info("[datachat][correlation_tool] x=%s y=%s n=%s corr=%.6f", x, y, len(tmp), corr)
             return {"kind": "table", "data": records}
 
         except Exception as e:
-            logging.exception("[datachat][correlation_tool] failed")
+            logger.exception("[datachat][correlation_tool] failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

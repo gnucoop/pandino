@@ -4,6 +4,8 @@ from typing import Any, ClassVar
 import pandas as pd
 from smolagents import Tool
 
+logger = logging.getLogger(__name__)
+
 
 class RowCountTool(Tool):
     """
@@ -52,11 +54,11 @@ class RowCountTool(Tool):
             else:
                 n_rows = int(len(self._df))
 
-            logging.info("[datachat][row_count_tool] n_rows=%s", n_rows)
+            logger.info("[datachat][row_count_tool] n_rows=%s", n_rows)
 
             return {"kind": "table", "data": [{"row_count": n_rows}]}
 
         except Exception as e:
-            logging.exception("[datachat][row_count_tool] failed")
+            logger.exception("[datachat][row_count_tool] failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}
         

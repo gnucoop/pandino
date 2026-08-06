@@ -6,6 +6,8 @@ from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
 
+logger = logging.getLogger(__name__)
+
 
 def _to_json_scalar(value: Any) -> Any:
     """
@@ -294,7 +296,7 @@ class AggregateTool(Tool):
                 )
 
             if df_work.empty:
-                logging.info(
+                logger.info(
                     "[datachat][aggregate_tool] empty after filter where_col=%s value=%s where_col2=%s value2=%s",
                     wc1 or None,
                     value,
@@ -357,7 +359,7 @@ class AggregateTool(Tool):
 
             safe_records = replace_nan(safe_records)
 
-            logging.info(
+            logger.info(
                 "[datachat][aggregate_tool] group_by=%s op=%s metric=%s n=%s asc=%s filter1=%s filter2=%s",
                 group_by_clean,
                 op_clean,
@@ -371,5 +373,5 @@ class AggregateTool(Tool):
             return {"kind": "table", "data": safe_records}
 
         except Exception as e:
-            logging.exception("[datachat][aggregate_tool] failed")
+            logger.exception("[datachat][aggregate_tool] failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

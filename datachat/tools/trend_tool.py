@@ -6,6 +6,8 @@ from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
 
+logger = logging.getLogger(__name__)
+
 
 def _to_json_scalar(value: Any) -> Any:
     """
@@ -311,7 +313,7 @@ class TrendTool(Tool):
 
             safe_records = replace_nan(safe_records)
 
-            logging.info(
+            logger.info(
                 "[datachat][trend_tool] date_col=%s freq=%s op=%s metric=%s start=%s end=%s n=%s rows=%s include_empty=%s",
                 date_col_clean,
                 freq,
@@ -327,5 +329,5 @@ class TrendTool(Tool):
             return {"kind": "table", "data": safe_records}
 
         except Exception as e:
-            logging.exception("[datachat][trend_tool] failed")
+            logger.exception("[datachat][trend_tool] failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}
