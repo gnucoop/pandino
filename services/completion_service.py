@@ -8,6 +8,8 @@ from infrastructure.vector_store import VectorStore
 from infrastructure.ai import choose_llm
 from infrastructure.prompt_utils import load_prompt, render_prompt
 
+logger = logging.getLogger(__name__)
+
 
 class TokenUsage(TypedDict):
     """
@@ -99,8 +101,8 @@ def complete_chat(
     if not question:
         raise RuntimeError("No question found in chat history.")
 
-    logging.info(f"Starting chat completion with llm_type: {llm_type}, model: {model}")
-    logging.info(f"Processing question: {question}")
+    logger.info(f"Starting chat completion with llm_type: {llm_type}, model: {model}")
+    logger.info(f"Processing question: {question}")
 
     vectors: list[dict[str, Any]] = []
 
@@ -108,7 +110,7 @@ def complete_chat(
         vectors = store.find_similar_vectors(
             text=question, top_k=top_k, min_similarity=min_sim
         )
-        logging.info(f"Found {len(vectors)} relevant paragraphs")
+        logger.info(f"Found {len(vectors)} relevant paragraphs")
     except Exception as e:
         raise RuntimeError(f"Vector retrieval failed: {str(e)}")
 
@@ -236,5 +238,5 @@ def complete_chat(
         }
 
     except Exception as e:
-        logging.exception("Error in chat completion")
+        logger.exception("Error in chat completion")
         raise RuntimeError(f"Chat completion failed: {str(e)}")

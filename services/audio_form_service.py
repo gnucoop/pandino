@@ -5,6 +5,8 @@ from typing import Any, TypedDict, Union
 from infrastructure.ai import choose_llm
 from infrastructure.prompt_utils import load_prompt, render_prompt
 
+logger = logging.getLogger(__name__)
+
 
 class TokenUsage(TypedDict):
     """
@@ -65,7 +67,7 @@ def audioFormPromptBuild(
     fieldTypes = formSchemaExampleData["fieldTypes"]
     fieldDescriptions = formSchemaExampleData["fieldDescriptions"]
 
-    logging.info("Building audio form prompts for schema: %s", formSchemaName)
+    logger.info("Building audio form prompts for schema: %s", formSchemaName)
 
     language_instruction = (
         f"Please answer using the official language of the country corresponding "
@@ -148,7 +150,7 @@ def audioFormCompilation(
             "Missing one or more required parameters for audioFormCompilation"
         )
 
-    logging.info(
+    logger.info(
         "Invoking audio form compilation with model=%s (provider=%s)",
         model,
         llm_type,
@@ -175,5 +177,5 @@ def audioFormCompilation(
         }
 
     except Exception as e:
-        logging.exception("Error in audio form compilation")
+        logger.exception("Error in audio form compilation")
         raise RuntimeError(f"Audio form compilation failed: {str(e)}")

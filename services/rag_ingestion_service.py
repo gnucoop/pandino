@@ -20,6 +20,8 @@ from infrastructure.vector_store import (
     normalize_table_name,
 )
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class RagIngestionResult:
@@ -188,7 +190,7 @@ def process_rag_file(
     )
 
     if not tracking_ok:
-        logging.warning(
+        logger.warning(
             "RAG file tracking failed for file_id=%s, namespace=%s",
             file_id,
             normalized_namespace,

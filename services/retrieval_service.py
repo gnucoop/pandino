@@ -18,6 +18,8 @@ from typing import List, Dict, Any
 from infrastructure.vector_store import MauiVectorStore
 from infrastructure.ai import choose_emb_model
 
+logger = logging.getLogger(__name__)
+
 
 def retrieve_from_collection(
     question: str,
@@ -54,7 +56,7 @@ def retrieve_from_collection(
         - "metadata": dict (original stored metadata).
     """
 
-    logging.info(
+    logger.info(
         f"[retrieval] Query started. namespace={namespace}, top_k={top_k}, min_sim={min_sim}"
     )
 
@@ -70,13 +72,13 @@ def retrieve_from_collection(
             text=question, top_k=top_k, min_similarity=min_sim
         )
 
-        logging.info(
+        logger.info(
             f"[retrieval] Query completed: {len(vectors)} matches found in '{namespace}'."
         )
         return vectors
 
     except Exception as e:
-        logging.exception("[retrieval] Error during vector retrieval")
+        logger.exception("[retrieval] Error during vector retrieval")
         raise RuntimeError(
             f"Error retrieving vectors from namespace '{namespace}': {e}"
         ) from e

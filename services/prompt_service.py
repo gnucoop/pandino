@@ -4,6 +4,8 @@ from typing import TypedDict
 from infrastructure.ai import choose_llm
 from infrastructure.prompt_utils import load_prompt, render_prompt
 
+logger = logging.getLogger(__name__)
+
 
 class TokenUsage(TypedDict):
     input_tokens: int
@@ -23,7 +25,7 @@ def reply_to_prompt(
     api_key: str | None = None,
 ) -> PromptServiceResult:
     if not prompt.strip():
-        logging.warning("Empty prompt provided to reply_to_prompt")
+        logger.warning("Empty prompt provided to reply_to_prompt")
         return PromptServiceResult(
             content="", token_usage=TokenUsage(input_tokens=0, output_tokens=0)
         )
