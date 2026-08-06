@@ -194,7 +194,8 @@ class SmolagentsEngine(DataChatEngine):
         self._init_config()
 
         runtime_logger.info(
-            "engine_init engine=smolagents user=%s provider=%s model=%s max_steps=%s",
+            "engine_init request_id=%s engine=smolagents user=%s provider=%s model=%s max_steps=%s",
+            get_request_id(),
             self.user_name,
             self._provider,
             self._configured_model or "missing",
@@ -214,7 +215,8 @@ class SmolagentsEngine(DataChatEngine):
         self._agent = self._build_agent(self._model, self._instructions)
 
         runtime_logger.info(
-            "engine_init_result engine=smolagents user=%s status=%s",
+            "engine_init_result request_id=%s engine=smolagents user=%s status=%s",
+            get_request_id(),
             self.user_name,
             "ok" if self._agent is not None else "error",
         )
@@ -240,7 +242,8 @@ class SmolagentsEngine(DataChatEngine):
         self._model = None
         self._agent = None
         runtime_logger.info(
-            "engine_init_result engine=smolagents user=%s status=error error_code=%s",
+            "engine_init_result request_id=%s engine=smolagents user=%s status=error error_code=%s",
+            get_request_id(),
             self.user_name,
             code,
         )
@@ -356,7 +359,8 @@ class SmolagentsEngine(DataChatEngine):
             agent = CodeAgent(**{**base_kwargs, "final_answer_checks": [_final_answer_contract_check]})
             self._final_answer_checks_supported = True
             runtime_logger.info(
-                "engine_init_guardrail engine=smolagents user=%s final_answer_checks_supported=%s",
+                "engine_init_guardrail request_id=%s engine=smolagents user=%s final_answer_checks_supported=%s",
+                get_request_id(),
                 self.user_name,
                 True,
             )
@@ -364,7 +368,8 @@ class SmolagentsEngine(DataChatEngine):
         except TypeError:
             self._final_answer_checks_supported = False
             runtime_logger.info(
-                "engine_init_guardrail engine=smolagents user=%s final_answer_checks_supported=%s",
+                "engine_init_guardrail request_id=%s engine=smolagents user=%s final_answer_checks_supported=%s",
+                get_request_id(),
                 self.user_name,
                 False,
             )
@@ -473,7 +478,8 @@ class SmolagentsEngine(DataChatEngine):
             cleanup_error = str(e)[:160]
 
         runtime_logger.info(
-            "cleanup_result engine=smolagents user=%s plots_dir_removed=%s user_dir_removed=%s cleanup_error=%s",
+            "cleanup_result request_id=%s engine=smolagents user=%s plots_dir_removed=%s user_dir_removed=%s cleanup_error=%s",
+            get_request_id(),
             self.user_name,
             plots_dir_removed,
             user_dir_removed,
