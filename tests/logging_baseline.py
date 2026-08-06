@@ -32,9 +32,6 @@ Value: number of violations recorded at that key.
 """
 
 BASELINE: dict[tuple[str, str, str], int] = {
-    ("A1b-binding", "utils/agent_logging.py", "MODULE"): 1,
-    ("A1b-binding", "utils/logging_config.py", "MODULE"): 1,
-    ("A1b-chained", "utils/agent_logging.py", "log_runresult"): 1,
     ("A2", "datachat/tools/aggregate_tool.py", "forward"): 3,
     ("A2", "datachat/tools/correlation_tool.py", "forward"): 2,
     ("A2", "datachat/tools/describe_tool.py", "forward"): 2,

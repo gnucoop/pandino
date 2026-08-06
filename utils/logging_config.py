@@ -79,6 +79,8 @@ _HOOKS_MARKER = "_maui_request_context_hooks"
 _request_id_var: ContextVar[str] = ContextVar("maui_request_id", default=CONTEXT_UNSET)
 _app_id_var: ContextVar[str] = ContextVar("maui_app_id", default=CONTEXT_UNSET)
 
+logger = logging.getLogger(__name__)
+
 
 class UtcIsoFormatter(logging.Formatter):
     """Formatter emitting UTC ISO-8601 timestamps.
@@ -248,8 +250,6 @@ def bootstrap_logging() -> logging.Logger:
         for handler in root.handlers:
             if getattr(handler, _HANDLER_MARKER, False):
                 handler.setLevel(level)
-
-    logger = logging.getLogger(__name__)
 
     if level_warning:
         logger.warning(level_warning)

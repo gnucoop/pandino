@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 __all__ = ["setup_agent_logger", "log_runresult"]
 
 _agent_logger = logging.getLogger("agent_runs")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -151,5 +152,5 @@ def log_runresult(
 
     except (AttributeError, TypeError, ValueError) as e:
         # Specific errors for failed getattr or wrong types
-        logging.getLogger(__name__).warning(f"[agentchat] Failed to log RunResult: {e}")
+        logger.warning(f"[agentchat] Failed to log RunResult: {e}")
 
