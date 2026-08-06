@@ -5,7 +5,8 @@ Python standard library, which walks the whole repository (excluding `venv/`)
 and asserts:
 
   violations(A1) union violations(A2) union violations(A5a) union
-  violations(A5b)  is a subset of  BASELINE union DECLARED_EXCEPTIONS
+  violations(A5b) union violations(A5c)  is a subset of  BASELINE union
+  DECLARED_EXCEPTIONS
 
 where BASELINE is an explicit, machine-readable registry of the call sites
 that are known to violate an invariant and are scheduled to be fixed by a
