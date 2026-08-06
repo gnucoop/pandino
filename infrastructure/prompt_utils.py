@@ -24,12 +24,12 @@ def load_prompt(
     if prompt:
         return prompt
 
-    logger.warning(f"Prompt '{title}' not found in DB. Using in-code default_text.")
+    logger.warning("event=prompt_default_used title=%s", title)
     if default_text:
         return default_text
 
     if fallback_env_var:
-        logger.warning(f"Default_text missing; trying env var '{fallback_env_var}'")
+        logger.warning("event=prompt_env_fallback_used env_var=%s", fallback_env_var)
         return os.getenv(fallback_env_var, "")
 
     return ""
@@ -52,9 +52,9 @@ def render_prompt(template: str, **kwargs) -> str:
     except KeyError as e:
         missing_key = e.args[0]
         logger.warning(
-            f"Missing placeholder '{missing_key}' in render_prompt substitution."
+            "event=prompt_placeholder_missing key=%s", missing_key
         )
         return template
     except Exception as e:
-        logger.error(f"Unexpected error in render_prompt: {str(e)}")
+        logger.error("event=prompt_render_failed error=%s", str(e))
         return template
