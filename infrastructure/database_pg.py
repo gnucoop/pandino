@@ -202,7 +202,7 @@ def add_user(
     if date_valid_until is None:
         date_valid_until = extend_expiration_date()
 
-    logger.info(f"Adding user: {username} with expiration: {date_valid_until}")
+    logger.info("event=user_add_started username=%s expires=%s", username, date_valid_until)
 
     conn = connect()
     cursor = conn.cursor()
@@ -216,10 +216,10 @@ def add_user(
         conn.commit()
         return None
     except psycopg.IntegrityError as e:
-        logger.warning(f"IntegrityError while adding user {username}: {str(e)}")
+        logger.warning("event=user_add_conflict username=%s error=%s", username, str(e))
         return f"Error adding new user: {e}"
     except Exception as e:
-        logger.exception("Unexpected error in add_user")
+        logger.exception("event=user_add_failed")
         return f"Error adding new user: {e}"
     finally:
         conn.close()
@@ -232,7 +232,7 @@ def remove_user(username: str) -> Optional[str]:
     :param username: The username of the user to be removed.
     :return: None if success, or an error message string if an exception occurs.
     """
-    logger.info(f"Attempting to remove user: {username}")
+    logger.info("event=user_remove_started username=%s", username)
 
     conn = connect()
     cursor = conn.cursor()
@@ -243,10 +243,10 @@ def remove_user(username: str) -> Optional[str]:
         conn.commit()
         return None
     except psycopg.IntegrityError as e:
-        logger.warning(f"IntegrityError while deleting user {username}: {str(e)}")
+        logger.warning("event=user_remove_conflict username=%s error=%s", username, str(e))
         return f"Error deleting user: {e}"
     except Exception as e:
-        logger.exception("Unexpected error in remove_user")
+        logger.exception("event=user_remove_failed")
         return f"Error deleting user: {e}"
     finally:
         conn.close()
@@ -261,7 +261,7 @@ def edit_tokens(username: str, tokens_quantity: int) -> tuple[bool, str]:
     :return: Tuple (True, message) on success, or (False, error message) on failure.
     """
     date_valid_until = extend_expiration_date()
-    logger.info(f"Editing tokens for user={username}, amount={tokens_quantity}")
+    logger.info("event=user_tokens_edit_started username=%s amount=%s", username, tokens_quantity)
 
     conn = connect()
     cursor = conn.cursor()
@@ -274,10 +274,10 @@ def edit_tokens(username: str, tokens_quantity: int) -> tuple[bool, str]:
         conn.commit()
         return True, "Tokens edited successfully"
     except psycopg.IntegrityError as e:
-        logger.warning(f"IntegrityError while editing tokens for {username}: {str(e)}")
+        logger.warning("event=user_tokens_edit_conflict username=%s error=%s", username, str(e))
         return False, "Error while editing tokens"
     except Exception as e:
-        logger.exception("Unexpected error in edit_tokens")
+        logger.exception("event=user_tokens_edit_failed")
         return False, "Error while editing tokens"
     finally:
         conn.close()
@@ -323,7 +323,7 @@ def get_user_by_username(user_name: str) -> Optional[dict[str, str | int]]:
     :param user_name: The username or email of the user to retrieve.
     :return: A dictionary containing user fields if found, or None if not found.
     """
-    logger.info(f"Looking up user by username: {user_name}")
+    logger.info("event=user_lookup_started username=%s", user_name)
 
     conn = connect()
     cursor = conn.cursor()
@@ -340,7 +340,7 @@ def get_user_by_username(user_name: str) -> Optional[dict[str, str | int]]:
         try:
             decrypted_key = get_cipher_suite().decrypt(user[2]).decode("utf-8")
         except Exception as e:
-            logger.error(f"Failed to decrypt API key for user {user_name}: {str(e)}")
+            logger.error("event=user_lookup_key_decrypt_failed username=%s error=%s", user_name, str(e))
             decrypted_key = "DECRYPTION_FAILED"
 
         user_data = {
@@ -353,7 +353,7 @@ def get_user_by_username(user_name: str) -> Optional[dict[str, str | int]]:
         logger.info("event=user_lookup_success username=%s", user_name)
         return user_data
 
-    logger.warning(f"No user found for username: {user_name}")
+    logger.warning("event=user_lookup_not_found username=%s", user_name)
     return None
 
 
@@ -364,11 +364,11 @@ def get_user_tokens(user_name: str) -> Optional[int]:
     :param user_name: The username of the user.
     :return: Number of tokens if user exists and the value is an int, otherwise None.
     """
-    logger.info(f"Retrieving token count for user: {user_name}")
+    logger.info("event=user_tokens_lookup_started username=%s", user_name)
 
     user = get_user_by_username(user_name)
     if user is None:
-        logger.warning(f"User not found: {user_name}")
+        logger.warning("event=user_tokens_lookup_not_found username=%s", user_name)
         return None
 
     token_value = user["tokens"]
@@ -384,7 +384,7 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
     :param user_email: The username/email associated with the key.
     :return: Tuple (True, "match") if valid, otherwise (False, reason).
     """
-    logger.info(f"Validating API key for user: {user_email}")
+    logger.info("event=api_key_validate_started username=%s", user_email)
 
     conn = connect()
     cursor = conn.cursor()
@@ -411,7 +411,9 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
             expiration = datetime.strptime(date_valid_until, "%Y-%m-%d %H:%M:%S").date()
         except Exception as e:
             logger.error(
-                f"Invalid date format in DB for user {user_email}: {date_valid_until}"
+                "event=api_key_validate_date_invalid username=%s date=%s",
+                user_email,
+                date_valid_until,
             )
             continue
 
@@ -554,7 +556,7 @@ def insert_rag_file(
         return True
     except Exception:
         conn.rollback()
-        logger.exception("Error inserting rag file")
+        logger.exception("event=rag_file_insert_failed")
         return False
     finally:
         conn.close()
@@ -614,7 +616,7 @@ def delete_rag_file(file_id: str, namespace: str) -> dict:
     # it here, because vector_store imports this module.
     table_name = namespace.strip().lower().replace("-", "_")
 
-    logger.info(f"Attempting to delete rag file: id={file_id} namespace={table_name}")
+    logger.info("event=rag_file_delete_started file_id=%s namespace=%s", file_id, table_name)
 
     conn = connect()
     cursor = conn.cursor()
@@ -656,7 +658,7 @@ def delete_rag_file(file_id: str, namespace: str) -> dict:
         return {"row_deleted": row_deleted, "chunks_deleted": chunks_deleted}
     except Exception:
         conn.rollback()
-        logger.exception("Error deleting rag file")
+        logger.exception("event=rag_file_delete_failed")
         raise
     finally:
         conn.close()
@@ -671,7 +673,7 @@ def table_exists(table_schema: str, table_name: str) -> bool:
         cursor.execute(query, params)
         return cursor.fetchone() is not None
     except Exception as e:
-        logger.exception("Error checking table existence")
+        logger.exception("event=table_exists_check_failed")
         return False
     finally:
         conn.close()
@@ -686,7 +688,7 @@ def pgvector_maui_id_exists(table_name: str, maui_id: str) -> bool:
         cursor.execute(query, params)
         return cursor.fetchone() is not None
     except Exception as e:
-        logger.exception("Error checking maui_id existence")
+        logger.exception("event=pgvector_maui_id_check_failed")
         return False
     finally:
         conn.close()
@@ -700,7 +702,7 @@ def get_prompt_from_db(title: str, version: Optional[int] = None) -> Optional[st
     :param version: Optional specific version to retrieve. If None, retrieves the most recent version.
     :return: The prompt message as a string, or None if not found.
     """
-    logger.info(f"Retrieving prompt from DB: title='{title}', version={version}")
+    logger.info("event=prompt_lookup_started title=%s version=%s", title, version)
 
     conn = connect()
     cursor = conn.cursor()
@@ -714,11 +716,13 @@ def get_prompt_from_db(title: str, version: Optional[int] = None) -> Optional[st
             return result[0]  # message
         else:
             logger.warning(
-                f"No prompt found in DB for title='{title}', version={version}"
+                "event=prompt_lookup_not_found title=%s version=%s",
+                title,
+                version,
             )
             return None
     except Exception as e:
-        logger.exception(f"Error retrieving prompt from DB: {str(e)}")
+        logger.exception("event=prompt_lookup_failed error=%s", str(e))
         return None
     finally:
         conn.close()
@@ -1219,7 +1223,7 @@ def add_cost(
         conn.commit()
         return None
     except Exception as e:
-        logger.exception("Unexpected error in add_cost")
+        logger.exception("event=cost_add_failed")
         return f"Error adding new cost: {e}"
     finally:
         conn.close()
@@ -1263,7 +1267,7 @@ def update_cost(
         conn.commit()
         return None
     except Exception as e:
-        logger.exception("Unexpected error in update_cost")
+        logger.exception("event=cost_update_failed")
         return f"Error updating cost: {e}"
     finally:
         conn.close()
@@ -1285,7 +1289,7 @@ def delete_cost(cost_id: int) -> Optional[str]:
         conn.commit()
         return None
     except Exception as e:
-        logger.exception("Unexpected error in delete_cost")
+        logger.exception("event=cost_delete_failed")
         return f"Error deleting cost: {e}"
     finally:
         conn.close()
@@ -1389,7 +1393,7 @@ def add_prompt(title: str, version: int, message: str) -> Optional[str]:
     :param message: Message of the prompt.
     :return: None if success, or an error message string if an exception occurs.
     """
-    logger.info(f"Adding prompt: {title}")
+    logger.info("event=prompt_add_started title=%s", title)
 
     conn = connect()
     cursor = conn.cursor()
@@ -1400,10 +1404,10 @@ def add_prompt(title: str, version: int, message: str) -> Optional[str]:
         conn.commit()
         return None
     except psycopg.IntegrityError as e:
-        logger.warning(f"IntegrityError while adding prompt {title}: {str(e)}")
+        logger.warning("event=prompt_add_conflict title=%s error=%s", title, str(e))
         return f"Error adding new prompt: {e}"
     except Exception as e:
-        logger.exception("Unexpected error in add_prompt")
+        logger.exception("event=prompt_add_failed")
         return f"Error adding new prompt: {e}"
     finally:
         conn.close()
@@ -1445,7 +1449,7 @@ def delete_prompt(prompt_id: int) -> bool:
     :param prompt_id: The ID of the prompt to be removed.
     :return: True if deletion was successful, False otherwise.
     """
-    logger.info(f"Attempting to remove prompt: {prompt_id}")
+    logger.info("event=prompt_delete_started prompt_id=%s", prompt_id)
 
     conn = connect()
     cursor = conn.cursor()
@@ -1456,7 +1460,7 @@ def delete_prompt(prompt_id: int) -> bool:
         conn.commit()
         return cursor.rowcount > 0
     except Exception as e:
-        logger.exception(f"Unexpected error in delete_prompt: {e}")
+        logger.exception("event=prompt_delete_failed error=%s", e)
         return False
     finally:
         conn.close()
@@ -1548,7 +1552,7 @@ def get_feedback_for_admin(
             "total_count": total_count,
         }
     except Exception as e:
-        logger.exception(f"Error retrieving feedback: {e}")
+        logger.exception("event=feedback_admin_lookup_failed error=%s", e)
         return {"feedbacks": [], "page": 1, "total_pages": 1, "total_count": 0}
     finally:
         conn.close()
@@ -1609,7 +1613,7 @@ def get_feedback_stats(
 
         return stats
     except Exception as e:
-        logger.exception(f"Error retrieving feedback stats: {e}")
+        logger.exception("event=feedback_stats_lookup_failed error=%s", e)
         return stats
     finally:
         conn.close()
