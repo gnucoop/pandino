@@ -47,7 +47,7 @@ def choose_llm(
     :return: An initialized chat model instance compatible with LangChain.
     :raises ValueError: If the llm_type is unsupported or required environment variables are missing.
     """
-    logger.info(f"Choosing LLM: type={llm_type}, model={model}")
+    logger.info("event=llm_selected type=%s model=%s", llm_type, model)
 
     if llm_type == "Groq":
         return ChatGroq(
@@ -88,7 +88,7 @@ def choose_llm(
             google_api_key=api_key or os.getenv("GOOGLE_API_KEY"),
         )
     elif llm_type == "Mistral":
-        logger.info("Note: ChatMistralAI does not support seed parameter")
+        logger.info("event=llm_seed_param_unsupported")
         return ChatMistralAI(
             model_name=model,
             temperature=temperature,
@@ -133,7 +133,7 @@ def choose_llm(
             api_key=SecretStr("ollama" or ""),
         )
     else:
-        logger.error(f"Unsupported llm_type: {llm_type}")
+        logger.error("event=llm_type_unsupported llm_type=%s", llm_type)
         raise ValueError(f"Unsupported llm_type: {llm_type}")
 
 
@@ -153,19 +153,19 @@ def choose_emb_model(
     :return: Initialized embeddings model instance.
     :raises ValueError: If the provider is unsupported or required configuration is missing.
     """
-    logger.info(f"Choosing Embeddings: type={emb_llm_type}, model={emb_model}")
+    logger.info("event=embedding_selected type=%s model=%s", emb_llm_type, emb_model)
 
     if emb_llm_type == "Mistral":
         key = api_key or os.getenv("MISTRAL_API_KEY")
         if not key:
-            logger.error("MISTRAL_API_KEY environment variable is not set")
+            logger.error("event=embedding_mistral_api_key_missing")
             raise ValueError("MISTRAL_API_KEY environment variable is not set")
         return MistralAIEmbeddings(model=emb_model, api_key=SecretStr(key))
 
     elif emb_llm_type == "OpenAI":
         key = api_key or os.getenv("OPENAI_API_KEY")
         if not key:
-            logger.error("OPENAI_API_KEY environment variable is not set")
+            logger.error("event=embedding_openai_api_key_missing")
             raise ValueError("OPENAI_API_KEY environment variable is not set")
         return OpenAIEmbeddings(model=emb_model, api_key=SecretStr(key))
 
@@ -176,12 +176,12 @@ def choose_emb_model(
     elif emb_llm_type == "Deepinfra":
         key = api_key or os.getenv("DEEPINFRA_API_KEY")
         if not key:
-            logger.error("DEEPINFRA_API_KEY environment variable is not set")
+            logger.error("event=embedding_deepinfra_api_key_missing")
             raise ValueError("DEEPINFRA_API_KEY environment variable is not set")
         return DeepInfraEmbeddings(model_id=emb_model, deepinfra_api_token=key)
 
     else:
-        logger.error(f"Unsupported emb_llm_type: {emb_llm_type}")
+        logger.error("event=embedding_type_unsupported emb_llm_type=%s", emb_llm_type)
         raise ValueError(f"Unsupported emb_llm_type: {emb_llm_type}")
 
 
@@ -204,7 +204,10 @@ def describe_image(
     :raises Exception: If the model invocation fails.
     """
     logger.info(
-        f"Describing image from URL: {url} using provider: {provider}, model: {model}"
+        "event=image_description_started url=%s provider=%s model=%s",
+        url,
+        provider,
+        model,
     )
 
     # Language directive + Fallback to English if unsupported language
@@ -242,7 +245,7 @@ def describe_image(
             else str(response.content)
         )
     except Exception as e:
-        logger.exception("Error while describing image")
+        logger.exception("event=image_description_failed")
         raise
 
 
@@ -308,7 +311,7 @@ def extract_text_from_image_with_usage(
         raise ValueError("mime_type must not be empty")
 
     logger.info(
-        "Extracting text from image using provider: %s, model: %s", provider, model
+        "event=image_text_extraction_started provider=%s model=%s", provider, model
     )
 
     encoded_image = base64.b64encode(image_bytes).decode("ascii")
@@ -352,7 +355,7 @@ def extract_text_from_image_with_usage(
             ),
         }
     except Exception:
-        logger.exception("Error while extracting text from image")
+        logger.exception("event=image_text_extraction_failed")
         raise
 
 
@@ -399,7 +402,7 @@ def asr_response(
     :return: The raw requests.Response from the provider.
     :raises ValueError: If provider requires a base_url that was not supplied.
     """
-    logger.info(f"Choosing ASR provider: provider={provider}, model={model}")
+    logger.info("event=asr_provider_selected provider=%s model=%s", provider, model)
 
     if provider == "Deepinfra":
         url = f"https://api.deepinfra.com/v1/inference/{model}"
