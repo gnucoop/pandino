@@ -80,7 +80,7 @@ def test_blank_values_become_an_explicit_category():
     )
     result = CrosstabTool(df).forward(rows="corso", columns="ruolo")
 
-    assert "(vuoto)" in result["data"][0]
+    assert "(empty)" in result["data"][0]
 
 
 def test_thin_cells_are_flagged_for_averages():

@@ -1,11 +1,12 @@
 """Stopword lists for text analysis on DataChat columns.
 
-scikit-learn ships an English list only, so `stop_words="english"` applied to Italian
-survey answers leaves the function words in place and they dominate the result -- cluster
-labels came back as "il, molto, poca, troppa, teoria", where only "teoria" carries meaning.
+scikit-learn ships an English list only, so `stop_words="english"` applied to non-English
+answers leaves the function words in place and they dominate the result -- Italian cluster
+labels came back as "il, molto, poca, troppa, teoria", where only "teoria" carried meaning.
 
-Kept as a plain frozenset rather than pulling in nltk or spacy: a word list is not worth a
-dependency, and neither package is currently installed.
+The four languages here match what the app declares in `datachat/bootstrap_static.py`
+(ITA/ENG/FRA/SPA). Kept as plain frozensets rather than pulling in nltk or spacy: a word list
+is not worth a dependency, and neither package is installed.
 """
 
 from typing import Iterable, Optional
@@ -47,41 +48,142 @@ ITALIAN_STOP_WORDS = frozenset(
     """.split()
 )
 
-# Neutral filler that appears in Italian *and* English free-text answers, plus the names
-# of HTML entities: survey exports carry markup (this dataset has 795 "&nbsp;") and an
-# unescaped entity name otherwise ranks as the most common "word" in the column.
+# French: articles, elided forms, prepositions, pronouns, auxiliaries, and the common
+# intensifiers ("tres", "beaucoup", "assez").
+FRENCH_STOP_WORDS = frozenset(
+    """
+    a à afin ai aie ainsi ait alors apres après as assez au aucun aucune aujourd auquel
+    aura aurait aussi autant autre autres aux avaient avais avait avant avec avoir ayant
+    beaucoup bien bon
+    c ca ça car ce ceci cela celle celles celui cependant certain certaine ces cet cette
+    ceux chacun chaque chez ci comme comment
+    d dans de dedans dehors deja déjà depuis des desquels deux devant devrait doit donc
+    dont du duquel durant
+    elle elles en encore entre es est et etaient étaient etais étais etait était etant
+    étant ete été etre être eu eux
+    fait faire fois font
+    grace grâce
+    hors
+    ici il ils
+    j jamais je jusqu jusque
+    l la laquelle le lequel les lesquels leur leurs lors lorsque lui
+    m ma mais malgre malgré me meme même memes mêmes mes mien moi moins mon
+    n ne ni non nos notre nous
+    on ont ou où oui
+    par parce parmi pas pendant peu peut peuvent plus plutot plutôt pour pourquoi pourtant
+    pu puis
+    qu quand que quel quelle quelles quels quelque quelques qui quoi
+    s sa sans se selon sera serait ses si sien soit son sont sous souvent sur
+    t ta tandis tel telle tes toi ton toujours tous tout toute toutes tres très trop tu
+    un une
+    va vers veut vos votre vous
+    y
+    """.split()
+)
+
+# Spanish: articles, prepositions, pronouns, auxiliaries ("ser"/"estar"/"haber"), and the
+# common intensifiers ("muy", "bastante", "poco").
+SPANISH_STOP_WORDS = frozenset(
+    """
+    a al algo algun alguna algunas alguno algunos ante antes aqui aquí asi así aun aún
+    aunque
+    bastante bien
+    cada casi como cómo con contra cual cuales cuando cuanto cuánto cuyo
+    de del demas demás desde donde dónde dos durante
+    e el ella ellas ello ellos en entre era eran eres es esa esas ese eso esos esta estaba
+    estaban estamos estan están estar estas este esto estos estoy
+    fue fueron fui
+    ha habia había han has hasta hay haya he hemos hizo hubo
+    igual incluso
+    ja
+    la las le les lo los luego
+    mas más me mediante mejor menos mi mientras mis mismo misma mucho muchos muy
+    nada ni ningun ninguna no nos nosotros nuestra nuestro nunca
+    o otra otras otro otros
+    para pero poco por porque pues
+    que qué quien quién quienes
+    se sea segun según ser si sí siempre sido siendo sin sino sobre solo sólo son soy su
+    sus
+    tal tambien también tampoco tan tanto te tener tengo ti tiene tienen todo toda todos
+    todas tras tu tus tuvo
+    un una uno unos usted ustedes
+    ya yo
+    """.split()
+)
+
+# Neutral filler that appears in any language's free-text answers, plus the names of HTML
+# entities: survey exports carry markup and an unescaped entity name otherwise ranks as the
+# most common "word" in the column.
 _GENERIC_STOP_WORDS = frozenset(
     {
-        "n", "na", "nan", "none", "null", "nd", "vari", "varie", "ecc",
+        "n", "na", "nan", "none", "null", "nd", "ecc", "etc",
         "nbsp", "amp", "quot", "apos", "lt", "gt", "ndash", "mdash",
     }
 )
 
-_ALL_STOP_WORDS = frozenset(ITALIAN_STOP_WORDS | set(ENGLISH_STOP_WORDS) | _GENERIC_STOP_WORDS)
+_BY_LANGUAGE: dict[str, frozenset[str]] = {
+    "italian": ITALIAN_STOP_WORDS,
+    "english": frozenset(ENGLISH_STOP_WORDS),
+    "french": FRENCH_STOP_WORDS,
+    "spanish": SPANISH_STOP_WORDS,
+}
+
+_ALIASES: dict[str, str] = {
+    "it": "italian", "ita": "italian", "italian": "italian", "italiano": "italian",
+    "en": "english", "eng": "english", "english": "english", "inglese": "english",
+    "fr": "french", "fra": "french", "french": "french",
+    "français": "french", "francais": "french", "francese": "french",
+    "es": "spanish", "spa": "spanish", "spanish": "spanish",
+    "español": "spanish", "espanol": "spanish", "spagnolo": "spanish",
+}
+
+_ALL_STOP_WORDS = frozenset(
+    set().union(*_BY_LANGUAGE.values()) | _GENERIC_STOP_WORDS
+)
+
+
+def _tokenize(texts: Iterable[str]) -> list[str]:
+    tokens: list[str] = []
+    for text in texts:
+        for token in str(text).lower().split():
+            token = token.strip(".,;:!?()[]\"'`-–—")
+            if token:
+                tokens.append(token)
+    return tokens
 
 
 def detect_language(texts: Iterable[str], threshold: float = 0.06) -> str:
     """
-    Return "italian" or "english" from the share of tokens that are Italian stopwords.
+    Guess the language from the share of tokens that are its function words.
 
-    Deliberately crude -- this only picks a stopword list, so a wrong guess costs a few
-    noisy terms, never a wrong number. `threshold` is the share of Italian function words
-    above which we treat the text as Italian; ordinary Italian prose sits well above it.
+    Deliberately crude -- this only selects a stopword list, so a wrong guess costs a few noisy
+    terms, never a wrong number. Returns "all" when no language is clearly ahead, which keeps
+    every language's function words out of a mixed-language column instead of guessing.
+
+    `threshold` is the share of function words a language must reach; ordinary prose sits well
+    above it in any of these four.
     """
-    total = 0
-    italian_hits = 0
-    for text in texts:
-        for token in str(text).lower().split():
-            token = token.strip(".,;:!?()[]\"'`-–—")
-            if not token:
-                continue
-            total += 1
-            if token in ITALIAN_STOP_WORDS:
-                italian_hits += 1
+    tokens = _tokenize(texts)
+    if not tokens:
+        return "all"
 
-    if total == 0:
-        return "english"
-    return "italian" if (italian_hits / total) >= threshold else "english"
+    total = len(tokens)
+    scores = {
+        language: sum(1 for token in tokens if token in words) / total
+        for language, words in _BY_LANGUAGE.items()
+    }
+
+    best = max(scores, key=lambda language: scores[language])
+    if scores[best] < threshold:
+        return "all"
+
+    # Italian, French and Spanish share many short words ("a", "la", "e", "no"), so require a
+    # clear margin before committing; otherwise exclude everything.
+    runner_up = max((s for lang, s in scores.items() if lang != best), default=0.0)
+    if runner_up > 0 and scores[best] < runner_up * 1.25:
+        return "all"
+
+    return best
 
 
 def get_stopwords(
@@ -91,25 +193,22 @@ def get_stopwords(
     """
     Stopwords for a vectorizer, as the list sklearn expects.
 
-    - lang="italian"/"english": that language plus generic filler
-    - lang="both" or None with no texts: everything (safe default -- a mixed dataset keeps
-      both languages' function words out)
-    - lang=None with texts: autodetect via detect_language
+    - an explicit `lang` (any alias in _ALIASES): that language plus generic filler
+    - `lang="all"`/"both"/"mixed", or nothing to go on: every language -- the safe default,
+      since a mixed-language column keeps all of their function words out
+    - `lang=None` with `texts`: autodetect via detect_language
 
-    Returned as a list, not a set: sklearn accepts a list and it keeps behaviour stable
+    Returned sorted as a list, not a set: sklearn accepts a list and it keeps behaviour stable
     across runs.
     """
     normalized = (lang or "").strip().lower()
 
-    if normalized in {"it", "ita", "italian", "italiano"}:
-        return sorted(ITALIAN_STOP_WORDS | _GENERIC_STOP_WORDS)
-    if normalized in {"en", "eng", "english", "inglese"}:
-        return sorted(set(ENGLISH_STOP_WORDS) | _GENERIC_STOP_WORDS)
-    if normalized in {"both", "all", "mixed"}:
+    if normalized in _ALIASES:
+        return sorted(_BY_LANGUAGE[_ALIASES[normalized]] | _GENERIC_STOP_WORDS)
+    if normalized in {"all", "both", "mixed"}:
         return sorted(_ALL_STOP_WORDS)
 
     if not normalized and texts is not None:
-        detected = detect_language(texts)
-        return get_stopwords(detected)
+        return get_stopwords(detect_language(texts))
 
     return sorted(_ALL_STOP_WORDS)

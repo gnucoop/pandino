@@ -225,7 +225,7 @@ class SentimentAnalysisTool(Tool):
             if agg:
                 counts = Counter(r["sentiment"] for r in records)
                 agg_records = [
-                    {"sentiment": label if label is not None else "not analyzed", "count": count}
+                    {"sentiment": label if label is not None else "(not analyzed)", "count": count}
                     for label, count in counts.most_common()
                 ]
                 return {

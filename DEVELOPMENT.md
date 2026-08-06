@@ -610,9 +610,18 @@ Notes for client implementors:
   table — tools use it to report caveats about their own result, e.g. the rows
   `sentiment_analysis` could not score.
 
-See **`DINO_TABLE_PREVIEW_SPEC.md`** for the client-side specification: exact payloads,
-deserialization rules, required UI behaviour, download-endpoint contract and an acceptance
-checklist.
+See **`DINO_CLIENT_SPEC.md`** for the full client-side specification — exact payloads,
+deserialization rules, required UI behaviour, the download-endpoint contract and an acceptance
+checklist. It covers both additions:
+
+- **Table previews and CSV download** — `total_rows` / `truncated` / `download_url` on
+  `dataframe`, plus `GET /datachat/export/<token>`.
+- **Charts as data** — a `type: "chart"` and an optional `charts[]` array on
+  `str`/`dataframe`/`chart`, carrying Chart.js specifications instead of base64 PNGs. Exists
+  because a response carries exactly one `kind`, so "commentary plus two charts" used to be
+  inexpressible and the agent silently dropped the charts.
+
+Implemented backend-side; **awaiting client support**.
 
 ---
 
@@ -721,7 +730,7 @@ def close(self) -> None
 | Aggregation | `aggregate`, `crosstab`, `trend` |
 | Statistics | `correlation`, `compare_groups` |
 | Text | `keywords`, `sentiment_analysis`, `classify` |
-| Output | `plot`, `export_csv` |
+| Output | `chart`, `plot`, `export_csv` |
 
 Tools worth knowing about when extending:
 
@@ -737,15 +746,27 @@ Tools worth knowing about when extending:
   `pearson`; omit `col_y` to rank every numeric column against one anchor.
 - **`filter_rows`** — beyond `eq`/`lt`/`gt`, supports `is_empty`/`is_not_empty` and
   `contains`/`not_contains` (literal substring, never regex).
+- **`chart`** — returns a Chart.js specification instead of an image, so several charts can
+  accompany a written answer. `plot` remains only for `box` and `hexbin`, which cannot be
+  expressed as data. Emits no colours: theming is the client's.
 
 Two shared conventions live in `datachat/tools/`:
 
 - **`limits.py`** — `resolve_limit()` (no implicit row caps; the transport layer previews
   and exports instead), `truncation_note()` and `sample_warning()`. **No tool may cap its
   own output silently**: a cap inside a tool shrinks the user's CSV export.
-- **`stopwords.py`** — `get_stopwords()` with Italian and English lists plus
-  autodetection. sklearn ships English only, so `stop_words="english"` on Italian answers
-  left the function words in and they dominated every result.
+- **`stopwords.py`** — `get_stopwords()` for **Italian, English, French and Spanish** (the
+  four languages `bootstrap_static.py` declares), with detection by function-word share and a
+  fallback that excludes all four when no language leads clearly. sklearn ships English only,
+  so `stop_words="english"` on non-English answers left the function words in and they
+  dominated every result.
+
+**Tool output must never presume the dataset's language.** These are test datasets; the tools
+run on anything. Emit language-neutral tokens — `count`, `density`, `(empty)`,
+`(not analyzed)` — and let the client localize, exactly as the backend refuses to choose
+colours. `tests/test_language_neutrality.py` guards this by walking every chart kind and
+asserting no Italian appears. Known gap: `note` prose is still English; localizing it needs
+structured note codes.
 
 Note the cost of adding a tool: definitions are re-sent to the model on **every** step
 (~7,600 tokens for the current 17). Prefer extending an existing tool when the output

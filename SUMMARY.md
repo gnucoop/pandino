@@ -1,11 +1,12 @@
 # Branch summary — `feature/new-datachat-tool`
 
 Branched from `4038ca4` (2026-07-21, *docs: update development guide for admin tools*).
-Everything below is work on the DataChat agent: **6 commits** plus a body of **uncommitted
-changes** that is substantially larger than the commits.
+Everything below is work on the DataChat agent, in three parts: **6 small commits**, then one
+large commit that dwarfs them, then a further body of **uncommitted** work on charts.
 
-**Status:** 221 tests pass. Nothing after the 6 commits is committed. A server restart is
-required to pick up any of it.
+**Status:** 339 tests pass. Committed through `69d7e92`; Part 3 is uncommitted. A server
+restart is required to pick up anything, and see *Open items* for two things that fail
+silently until acted on.
 
 ---
 
@@ -52,9 +53,12 @@ imports; no tests.
 
 ---
 
-## Part 2 — Uncommitted changes
+## Part 2 — Commit `69d7e92`
 
-19 files modified (+1,073 / −395), 18 new files. Five phases.
+*feat(datachat): honest table previews, CSV download, and analyst tools* — 38 files,
++4,738 / −395. Five phases, described below. Committed as one atomic change because
+`limits.py` is imported by nine modified tools and single files carry changes from several
+phases, so any split would have left an intermediate commit with a failing suite.
 
 ### 2.1 Table previews and CSV download
 
@@ -222,63 +226,205 @@ route logs its own line.
 
 ---
 
+## Part 3 — Uncommitted: charts as data
+
+12 files modified (+684 / −107), 5 new files. Prompted by a run where the user asked for a
+detailed comment **plus two charts** and received the comment alone — while its prose described
+*"Grafico 1 mostra…"*, narrating images that were never sent.
+
+### 3.1 Why the charts vanished
+
+Not a frontend bug. The contract allowed exactly one `kind` per answer
+(`text|table|image_path|error`) and `image_path` holds a single path, so *prose plus a chart*
+was inexpressible. The agent built both, had to choose, chose `text`, and the PNGs were
+orphaned on disk and deleted at `/enddatachat`.
+
+Charts were also matplotlib PNGs base64'd into the payload — ~200 KB each, fixed-size,
+non-interactive, and styled by the backend so they could not follow the client's theme.
+
+### 3.2 Charts became data
+
+New `chart` tool emitting a **Chart.js-ready specification** the client renders:
+`type`/`labels`/`datasets` (Chart.js's own `data` shape) plus semantic hints `title`,
+`x_label`, `y_label`, `stacked`, `horizontal`. Eight kinds — `bar`, `line`, `area`, `pie`,
+`doughnut`, `scatter`, `hist`, `kde` — with the backend computing histogram bins and the KDE
+curve. Every emitted `type` is a real Chart.js type, so there is no translation step: an area
+chart arrives as `line` + `fill: true`.
+
+`plot` is untouched apart from its description and remains the PNG path for **`box` and
+`hexbin`**, which have no data reduction. Client-side image rendering must therefore stay.
+
+**No colours and no `options` are ever sent** — palette, fonts and light/dark theming are the
+client's, which is the point of leaving server-rendered images. There is a test asserting it.
+
+Charts never contradict the table beside them: tests assert counts equal `unique_values` and
+aggregates equal `aggregate` on the same column. Missing series combinations stay `null`, never
+`0` — on a 1–4 scale a zero is not a possible answer, so drawing one would invent data.
+
+Measured: prose + two charts is **0.9 KB**, against ~400 KB for two PNGs.
+
+### 3.3 The fix that actually delivers them
+
+A `charts: [...]` array on `text`, `table` **and** `chart` payloads. A standalone `chart` kind
+would still have forced a choice between a chart and prose.
+
+Then the same failure recurred: the agent built two charts and called `final_answer` with a bare
+text payload, leaving the specs in local variables. **That was a design defect, not model
+error** — attaching them was bookkeeping the model gained nothing from, in a later step. So
+`ChartTool` now reports every spec it builds to the engine (`collector=self`, the pattern
+`ExportCsvTool` already uses for exports) and `chat()` attaches them when the model did not. A
+model-supplied list still wins, order included. `chat_end` logs
+`charts_attached=auto|model|none`.
+
+Guards: identical specs recorded once, 8 per run, cleared before each run so nothing leaks
+between requests, and a collector failure can never cost the user a chart.
+
+### 3.4 Three defects a real run then exposed
+
+1. **`agg="count"` was rejected** — `aggregate` accepts `op="count"`, the model carried that
+   vocabulary across, and the call failed. `final_answer` handed the error to the user as the
+   whole answer. Worse, `agg="count"` with no `y` describes *exactly* the tool's default. Now
+   accepted, and `agg` is validated **only when a `y` makes it applicable** — a parameter that
+   cannot affect the result must not be able to fail the call.
+2. **Extra charts dropped on a `chart` answer.** The model returned one chart with the comment
+   *"gli altri saranno disponibili nell'interfaccia"*; they were not. `chart` is now a chart
+   host, attaching only the non-primary charts so none is rendered twice.
+3. **The backend imposed Italian on every dataset.** Built against an Italian test file, the
+   tools had grown Italian *output*: `"numero di risposte"` on every count chart, `"densità"`,
+   `"(vuoto)"`, `"Export pronto: N righe."` — and the system prompt carried
+   `Example: 'Nella colonna "...qualunque commento" ci sono 212 righe compilate.'`, hardcoding
+   a column name and row count from the test data into every request.
+
+### 3.5 Generalisation
+
+Display language is the same kind of decision as colour, so the backend stopped making it.
+Output is now **language-neutral tokens** for the client to localize: `count`,
+`density(<column>)`, `(empty)`, `(not analyzed)`, `CSV ready: N rows`. The system prompt and its
+examples are dataset- and language-neutral.
+
+Stopwords extended from Italian+English to **all four languages the app declares**
+(`bootstrap_static.py`: ITA/ENG/FRA/SPA), with detection by function-word share and a fallback
+that excludes all four when none leads clearly — a mixed-language column is handled rather than
+guessed at.
+
+`tests/test_language_neutrality.py` guards the class: it walks every chart kind plus the
+crosstab and export output asserting no Italian appears. **It found a real bug on its first
+run** — `crosstab` ran `astype(str)` before replacing blanks, so a `None` category surfaced as
+the literal string `"None"`. Both tools now collapse every flavour of missing (`nan`, `None`,
+`<NA>`, `NaT`, `null`, blank) to one sentinel.
+
+### 3.6 Bar orientation
+
+Bar charts carry `horizontal`, decided automatically: horizontal above 10 categories or when
+labels are long (80th percentile over 20 characters), which is the common case for survey
+columns. Histograms stay vertical — bins belong on the x axis. With horizontal bars Chart.js
+renders the first entry at the top and series arrive sorted largest-first, so descending order
+and "largest at top" are the same thing; the spec tells the client not to re-sort.
+
+The percentile rather than the max deliberately: one freak long label can be truncated, a whole
+axis of them cannot.
+
+---
+
 ## Files
 
 ### New — code
 
-| File | Lines |
-|---|---|
-| `datachat/tools/compare_groups_tool.py` | 322 |
-| `datachat/tools/crosstab_tool.py` | 267 |
-| `datachat/tools/keywords_tool.py` | 215 |
-| `datachat/tools/stopwords.py` | 115 |
-| `datachat/tools/limits.py` | 83 |
+| File | Lines | Part |
+|---|---|---|
+| `datachat/tools/chart_tool.py` | 569 | 3 |
+| `datachat/tools/compare_groups_tool.py` | 322 | 2 |
+| `datachat/tools/crosstab_tool.py` | 267 | 2 |
+| `datachat/tools/keywords_tool.py` | 215 | 2 |
+| `datachat/tools/stopwords.py` | 214 | 2, extended in 3 |
+| `datachat/tools/limits.py` | 83 | 2 |
 
-### New — tests (1,790 lines, 156 tests)
+### New — tests (2,811 lines, 240 tests)
 
-`test_tool_row_limits.py` (16) · `test_filter_rows_empty_ops.py` (19) ·
-`test_compare_groups_tool.py` (17) · `test_crosstab_tool.py` (15) ·
-`test_output_normalizer_preview.py` (15) · `test_sentiment_tool_coverage.py` (14) ·
-`test_keywords_tool.py` (14) · `test_correlation_methods.py` (13) ·
-`test_filter_rows_contains.py` (12) · `test_aggregate_multi_group.py` (11) ·
-`test_datachat_export_route.py` (10)
+**Part 2** — `test_filter_rows_empty_ops.py` (19) · `test_compare_groups_tool.py` (17) ·
+`test_tool_row_limits.py` (16) · `test_crosstab_tool.py` (15) ·
+`test_sentiment_tool_coverage.py` (14) · `test_keywords_tool.py` (14) ·
+`test_correlation_methods.py` (13) · `test_filter_rows_contains.py` (12) ·
+`test_aggregate_multi_group.py` (11) · `test_datachat_export_route.py` (10)
+
+**Part 3** — `test_chart_tool.py` (41) · `test_chart_collection.py` (21) ·
+`test_language_neutrality.py` (13) · `test_output_normalizer_preview.py` (24, extended)
 
 ### New — docs
 
-- `DINO_TABLE_PREVIEW_SPEC.md` (340) — client spec: payloads (captured from real output),
-  deserialization rules, required UI behaviour, download contract, acceptance checklist
+- **`DINO_CLIENT_SPEC.md`** (678) — the single client specification, covering both additions:
+  the response envelope with every `type` and its optional fields; table previews and the
+  download endpoint; the chart specification, types, dataset shapes and orientation; the rules
+  shared by both (absent vs `null`, tolerating unknown fields, `note` handling, reserved label
+  tokens, defensive rendering); compatibility; known limitations; one acceptance checklist; and
+  a question back to the Dino team about the base64 wrapper (see *Open items* #3).
+
+  Started as two documents — `DINO_TABLE_PREVIEW_SPEC.md` (340) and `DINO_CHART_SPEC.md` (387)
+  — and merged into one on request. The merge unified genuine duplication rather than
+  concatenating: each had its own "absent vs null", "tolerate unknown fields" and `note`
+  section, and each carried half the type list. Every payload example was re-validated as JSON
+  and for internal consistency, and stale Italian labels (`numero di risposte`, `media (1-4)`)
+  were corrected to the neutral tokens the backend now emits.
 - `DATACHAT_TEST_PLAN.md` (249) — 48 questions against `Feedbacks.csv` with expected answers
   computed by running the tools
 
 ### Modified
 
-`datachat/output_normalizer.py` · `datachat/smolagents_engine.py` · `routes/datachat.py` ·
-9 tool files · `llm/litellm_factory.py` · `routes/admin.py` · `.env.example` ·
-`DEVELOPMENT.md`
+**Part 2** — `datachat/output_normalizer.py` · `datachat/smolagents_engine.py` ·
+`routes/datachat.py` · 9 tool files · `llm/litellm_factory.py` · `routes/admin.py` ·
+`.env.example` · `DEVELOPMENT.md`
+
+**Part 3** — `datachat/output_normalizer.py` · `datachat/smolagents_engine.py` ·
+`datachat/tools/` (`plot_tool`, `crosstab_tool`, `export_csv_tool`, `sentiment_tool`,
+`stopwords`) · `DEVELOPMENT.md`
+
+### Removed
+
+`DINO_TABLE_PREVIEW_SPEC.md` and `DINO_CHART_SPEC.md` — merged into `DINO_CLIENT_SPEC.md`.
+All references across `DEVELOPMENT.md`, the tool docstrings and the tests were repointed.
 
 ---
 
 ## Open items
 
-1. **Prompt guidance needs applying to the DB.** `load_prompt` prefers the `prompts` table,
-   so every prompt change on this branch is inert wherever a `data_chat_system` row exists.
-   Verify this first — it fails silently.
-2. **Dino must ship the client side.** The new response fields are additive and safe to
-   ignore, but a client that ignores them shows a 20-row preview with no indication that more
-   exists — worse than before, when the preview was 50. See `DINO_TABLE_PREVIEW_SPEC.md`; the
-   likeliest mistake is treating `download_url` as a plain link, which cannot send the
-   required headers.
-3. **Token accounting is failing.** `Cost not found for provider: Mistral and model:
-   mistral-large-latest` → `db_log_ok=False`, `log_id=none`. The flat per-request deduction
-   still happens; the per-request usage/cost audit row is lost. Needs a costs row for the
-   model actually in use.
-4. **`Feedbacks.csv` has two header rows.** Row 2 holds the question text and is read as
-   data, so 805 rows load for 804 responses and `unique_values`/`crosstab`/`is_not_empty`
-   counts are off by one. Consider handling in `dataset_loader.py`.
-5. **An unresolved LiteLLM exception.** The `LLM Provider NOT provided` line in the logs is a
+Ordered by how quietly each one fails.
+
+1. **Prompt guidance may never reach the model.** `load_prompt`
+   (`infrastructure/prompt_utils.py:21`) prefers the `prompts` DB table, so every prompt change
+   on this branch is inert wherever a `data_chat_system` row exists. The in-code default is
+   confirmed in use locally, but this must be checked per deployment — it fails with no error.
+   A startup `WARNING Prompt 'data_chat_system' not found in DB` means the in-code text is live.
+2. **Dino must ship the client side** — see `DINO_CLIENT_SPEC.md`. All new response fields are
+   additive and safe to ignore, but ignoring them is now *worse* than before: tables show a
+   20-row preview with no sign that more exists (the old preview was 50), and charts do not
+   render at all. Two likeliest mistakes:
+   - treating `download_url` as a plain link — it cannot send the required headers;
+   - dropping `type: "image"` support, which is still the only path for `box` and `hexbin`.
+3. **`fileToBase64` returns invalid base64.** `infrastructure/file_manager.py:15` returns
+   `str(base64.b64encode(...))`, i.e. the Python repr wrapped in a literal `b'`…`'`;
+   `b64decode(validate=True)` rejects it, and the correct line sits commented out beneath.
+   Images render today, so **the client is compensating** — which means fixing the backend
+   alone could break every image. `DINO_CLIENT_SPEC.md` §9 asks whether Dino's strip is
+   conditional or unconditional; that answer decides whether the one-liner is safe.
+4. **`note` prose is English.** Truncation warnings, small-sample cautions and the sentiment
+   coverage note are English sentences, on a backend that otherwise emits language-neutral
+   tokens. Localizing them needs structured note codes — a deliberate contract change, not a
+   side effect.
+5. **Two shapes of `Feedbacks.csv` exist.** The server export uses the question text as column
+   headers with 804 rows; the local copy uses `q4`/`q5`… headers plus a **second header row**
+   read as data, giving 805 rows for 804 responses and off-by-one
+   `unique_values`/`crosstab`/`is_not_empty` counts. Documented in `DATACHAT_TEST_PLAN.md` §0;
+   worth handling in `dataset_loader.py` if the local shape is ever uploaded.
+6. **An uncaptured LiteLLM exception.** The `LLM Provider NOT provided` line in the logs is a
    benign DEBUG artifact of litellm's failure-logging path calling `get_api_base()` with an
    already-stripped model name (`mistral/mistral-small-latest` resolves correctly). The real
-   exception above it has not been captured.
-6. **`exports/` in the project root** is empty, gitignored and referenced by no code — a
+   exception above it was never captured. `LITELLM_DEBUG=true` will surface it.
+7. **`exports/` in the project root** is empty, gitignored and referenced by no code — a
    leftover from manual testing, safe to delete.
-7. **Nothing after `5ca2494` is committed.**
+8. **Part 3 is uncommitted.**
+
+### Resolved since first writing
+
+- **Token accounting.** Was `Cost not found for provider: Mistral and model:
+  mistral-large-latest` → `db_log_ok=False`. Later logs show
+  `token usage logged log_id=862`, `db_log_ok=True`. A costs row was added.

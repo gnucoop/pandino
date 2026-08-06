@@ -118,7 +118,7 @@ def test_aggregate_counts_unscored_rows_separately():
 
     counts = {r["sentiment"]: r["count"] for r in result["data"]}
     assert counts["positive"] == 1
-    assert counts["not analyzed"] == 1
+    assert counts["(not analyzed)"] == 1
     assert "neutral" not in counts
 
 

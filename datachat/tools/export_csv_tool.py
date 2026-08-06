@@ -81,7 +81,7 @@ class ExportCsvTool(Tool):
             )
             return {
                 "kind": "text",
-                "text": f"Export pronto: {len(out_df)} righe.",
+                "text": f"CSV ready: {len(out_df)} rows.",
                 "download_url": f"/datachat/export/{token}",
                 "download_filename": download_filename,
             }

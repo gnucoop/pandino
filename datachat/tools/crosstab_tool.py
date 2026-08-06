@@ -24,7 +24,24 @@ def _to_json_scalar(value: Any) -> Any:
     return str(value)
 
 
-_BLANK_LABEL = "(vuoto)"
+# Language-neutral sentinel for missing categories; see DINO_CLIENT_SPEC.md.
+_BLANK_LABEL = "(empty)"
+
+# What pandas produces when a missing value has already been stringified upstream.
+_NULL_TEXTS = {"", "nan", "none", "<na>", "nat", "null"}
+
+
+def _labelled(series: pd.Series) -> pd.Series:
+    """
+    Categories as strings, with every flavour of missing collapsed to one sentinel.
+
+    isna() on the original series is authoritative; the string check catches values that were
+    already converted before reaching us -- astype(str) turns None into the literal "None",
+    which would otherwise appear as a category of its own.
+    """
+    text = series.astype(str).str.strip()
+    blank = series.isna() | text.str.lower().isin(_NULL_TEXTS)
+    return text.mask(blank, _BLANK_LABEL)
 
 
 class CrosstabTool(Tool):
@@ -188,8 +205,8 @@ class CrosstabTool(Tool):
 
             # Blank cells become an explicit label rather than vanishing: a crosstab that
             # quietly drops the non-responders misstates every percentage in the table.
-            row_series = df[row_col].astype(str).str.strip().replace({"": _BLANK_LABEL, "nan": _BLANK_LABEL})
-            col_series = df[col_col].astype(str).str.strip().replace({"": _BLANK_LABEL, "nan": _BLANK_LABEL})
+            row_series = _labelled(df[row_col])
+            col_series = _labelled(df[col_col])
 
             if op_clean == "count":
                 normalize_arg: Any = {

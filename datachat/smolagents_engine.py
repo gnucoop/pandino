@@ -15,6 +15,7 @@ from smolagents import CodeAgent, LiteLLMModel
 from datachat.bootstrap_static import get_static_bootstrap_html
 from datachat.engine_interface import DataChatEngine, EngineBootstrapResult
 from datachat.tools.aggregate_tool import AggregateTool
+from datachat.tools.chart_tool import ChartTool
 from datachat.tools.classify_tool import ClassifyTool
 from datachat.tools.compare_groups_tool import CompareGroupsTool
 from datachat.tools.correlation_tool import CorrelationTool
@@ -36,13 +37,21 @@ from infrastructure.prompt_utils import load_prompt, render_prompt
 
 runtime_logger = logging.getLogger("datachat.runtime")
 
-_ALLOWED_FINAL_KINDS = {"text", "table", "image_path", "error"}
+_ALLOWED_FINAL_KINDS = {"text", "table", "image_path", "chart", "error"}
 
 # Cap on full-result CSVs kept per session; older ones are deleted on overflow.
 _MAX_SESSION_EXPORTS = 20
 
 # Suggested download names come from column names, which can be full sentences.
 _MAX_EXPORT_NAME_LEN = 60
+
+# Charts collected per run, so a text answer can carry the charts the agent built even when it
+# forgets to attach them. Bounded so a retry loop cannot inflate the payload.
+_MAX_RUN_CHARTS = 8
+
+# Final answers that may carry charts. 'error' stays clean. 'chart' is included because the
+# agent tends to return one chart and assume the rest will surface -- they must.
+_CHART_HOST_KINDS = {"text", "table", "chart"}
 
 
 # ----------------------------
@@ -144,7 +153,26 @@ def _validate_contract_payload(payload: dict[str, Any]) -> Tuple[bool, Optional[
             return False, kind, "MISSING_PATH"
         return True, kind, "OK"
 
+    if kind == "chart":
+        chart = payload.get("chart")
+        if not isinstance(chart, dict):
+            return False, kind, "MISSING_CHART"
+        datasets = chart.get("datasets")
+        if not isinstance(datasets, list) or not datasets:
+            return False, kind, "EMPTY_CHART_DATASETS"
+        return True, kind, "OK"
+
     return False, (kind or None), "INVALID_KIND"
+
+
+def _chart_signature(spec: Any) -> Optional[str]:
+    """Stable identity for a chart spec, used to avoid showing the same chart twice."""
+    if not isinstance(spec, dict):
+        return None
+    try:
+        return json.dumps(spec, sort_keys=True, default=str)
+    except Exception:
+        return None
 
 
 def _coerce_final_payload(output: Any) -> Tuple[Optional[dict[str, Any]], bool, Optional[str], str]:
@@ -189,6 +217,9 @@ class SmolagentsEngine(DataChatEngine):
 
     # download token -> (absolute CSV path, suggested download name); see register_export
     _exports: dict[str, Tuple[str, str]] = field(default_factory=dict, init=False, repr=False)
+
+    # Chart specs built during the current run; see record_chart.
+    _run_charts: list[dict[str, Any]] = field(default_factory=list, init=False, repr=False)
 
     _last_run_result: Any = field(default=None, init=False, repr=False)
     _last_run_duration_ms: Optional[float] = field(default=None, init=False, repr=False)
@@ -309,15 +340,16 @@ class SmolagentsEngine(DataChatEngine):
               column whose name best matches it. Do not combine several columns into one
               answer unless the user asked for a combination.
             - Always state which column you used, quoting its name, so the user can correct
-              you. Example: 'Nella colonna "...qualunque commento" ci sono 212 righe compilate.'
+              you. Name the column exactly as it appears in the dataset, and write your answer
+              in the language the user asked in.
             - If two or more columns match the request equally well, say so and ask which
               one the user means instead of guessing or merging them.
 
             PICKING THE RIGHT TOOL
-            - Two dimensions ("X per A e per B", "distribuzione delle risposte per gruppo")
-              -> crosstab. Never issue two separate aggregate calls and stitch the numbers
-              together yourself.
-            - Free text mentioning a word ("commenti che parlano di orario")
+            - Two dimensions (a measure broken down by A *and* by B, or a distribution per
+              group) -> crosstab. Never issue two separate aggregate calls and stitch the
+              numbers together yourself.
+            - Free-text answers mentioning a word or phrase
               -> filter_rows with op="contains".
             - What open answers are about -> keywords first (it is free and instant), then
               classify or sentiment_analysis only if the user wants grouping or tone.
@@ -325,6 +357,17 @@ class SmolagentsEngine(DataChatEngine):
               average from aggregate cannot distinguish a real gap from noise.
             - Relationships between rating questions -> correlation with method="spearman",
               and omit col_y to rank every question against one of them at once.
+
+            VISUALISATIONS
+            - Use 'chart' for every visualisation. It returns chart data the interface draws,
+              so it is small, sharp and follows the user's theme.
+            - Use 'plot' ONLY for 'box' and 'hexbin', which cannot be expressed as chart data.
+            - To comment on charts in the same answer, call 'chart' once per chart and put the
+              returned "chart" objects into a "charts" list on your final text payload:
+              {"kind":"text","text":"...","charts":[{...},{...}]}
+            - NEVER describe a chart you have not included in the final payload. If you write
+              "the chart shows...", that chart must be in "charts" -- otherwise the user reads
+              a description of something invisible.
 
             REPORTING RESULTS HONESTLY
             - When a tool returns a "note", repeat its substance in your answer. It reports
@@ -352,7 +395,7 @@ class SmolagentsEngine(DataChatEngine):
             OUTPUT
             - The final result must be exactly one JSON object.
             - The JSON must contain a "kind" field.
-            - Valid kinds are: text, table, image_path, error.
+            - Valid kinds are: text, table, image_path, chart, error.
             - Do not add wrappers, metadata, or extra nesting.
             - Never use a "value" field in the final answer.
 
@@ -360,7 +403,12 @@ class SmolagentsEngine(DataChatEngine):
             - kind="text"       -> {"kind":"text","text":"..."}
             - kind="table"      -> {"kind":"table","data":[...]}
             - kind="image_path" -> {"kind":"image_path","path":"..."}
+            - kind="chart"      -> {"kind":"chart","chart":{...}}
             - kind="error"      -> {"kind":"error","message":"..."}
+
+            To return charts together with a written comment, or with a table, add a
+            "charts" list to that payload:
+            - {"kind":"text","text":"...","charts":[{...},{...}]}
 
             When a tool already returns a valid final contract object:
             - pass it directly to final_answer(...) without re-wrapping.
@@ -392,6 +440,7 @@ class SmolagentsEngine(DataChatEngine):
             CrosstabTool(self.data),
             CompareGroupsTool(self.data),
             KeywordsTool(self.data),
+            ChartTool(self.data, collector=self),
             PlotTool(self.data, output_dir=self._plots_dir or os.getenv("DATACHAT_PLOTS_DIR", "/tmp/datachat_plots")),
             TrendTool(self.data),
             SentimentAnalysisTool(self.data, model=self._model),
@@ -478,6 +527,9 @@ class SmolagentsEngine(DataChatEngine):
                 "code": "MISSING_CONFIG",
             }
 
+        # Charts are per-request: never carry one answer's charts into the next.
+        self._run_charts.clear()
+
         try:
             started = time.time()
             run_result = self._agent.run(str(message), reset=True, return_full_result=True)
@@ -513,14 +565,17 @@ class SmolagentsEngine(DataChatEngine):
             self._last_final_answer_check_passed = False
             self._last_final_kind = None
 
+        charts_attached = self._attach_run_charts(result_payload)
+
         runtime_logger.info(
-            "chat_end request_id=%s engine=smolagents user=%s duration_ms=%s response_kind=%s final_answer_check_passed=%s final_kind=%s",
+            "chat_end request_id=%s engine=smolagents user=%s duration_ms=%s response_kind=%s final_answer_check_passed=%s final_kind=%s charts_attached=%s",
             self._active_request_id,
             self.user_name,
             self._last_run_duration_ms,
             result_payload.get("kind"),
             bool(self._last_final_answer_check_passed),
             self._last_final_kind or "none",
+            charts_attached,
         )
         self._active_request_id = None
         return result_payload
@@ -529,6 +584,66 @@ class SmolagentsEngine(DataChatEngine):
         if self._last_run_result is None:
             return None
         return {"run_result": self._last_run_result, "duration_ms": self._last_run_duration_ms}
+
+    def _attach_run_charts(self, payload: dict[str, Any]) -> str:
+        """
+        Put the run's charts on the final answer when the model did not.
+
+        Returns "model" when the model supplied its own list (left untouched -- an explicit
+        list states intent, including order), "auto" when this filled it in, "none" otherwise.
+        """
+        kind = str(payload.get("kind") or "").strip().lower()
+        if kind not in _CHART_HOST_KINDS:
+            return "none"
+
+        existing = payload.get("charts")
+        if isinstance(existing, dict):
+            existing = [existing]
+        if isinstance(existing, list) and any(
+            isinstance(c, dict) and c.get("datasets") for c in existing
+        ):
+            return "model"
+
+        if not self._run_charts:
+            return "none"
+
+        # A 'chart' answer already shows one chart in its own right; attach only the others,
+        # so the primary is never rendered twice.
+        primary = _chart_signature(payload.get("chart")) if kind == "chart" else None
+        extras = [
+            spec for spec in self._run_charts
+            if primary is None or _chart_signature(spec) != primary
+        ]
+        if not extras:
+            return "none"
+
+        payload["charts"] = extras
+        return "auto"
+
+    # --- charts built during a run ---
+
+    def record_chart(self, spec: dict[str, Any]) -> None:
+        """
+        Remember a chart the agent built, so the final answer can carry it.
+
+        Charts live in the code interpreter's local variables, and attaching them to
+        final_answer is bookkeeping the model gains nothing from -- it produced two charts and
+        then returned prose describing them, with the specs left behind. Collecting them here
+        makes delivery independent of whether the model remembers.
+        """
+        if not isinstance(spec, dict) or not spec.get("datasets"):
+            return
+        if len(self._run_charts) >= _MAX_RUN_CHARTS:
+            return
+
+        # A retried chart() call produces an identical spec; show it once.
+        signature = _chart_signature(spec)
+        if signature is not None and any(
+            _chart_signature(existing) == signature for existing in self._run_charts
+        ):
+            return
+
+        self._run_charts.append(spec)
 
     # --- full-result CSV exports ---
 
@@ -597,6 +712,7 @@ class SmolagentsEngine(DataChatEngine):
         try:
             # export tokens die with the session: the CSVs live under _plots_dir
             self._exports.clear()
+            self._run_charts.clear()
 
             if self._plots_dir and os.path.exists(self._plots_dir):
                 shutil.rmtree(self._plots_dir, ignore_errors=True)

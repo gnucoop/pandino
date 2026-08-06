@@ -225,3 +225,101 @@ def test_plain_text_response_is_unchanged():
     response = normalize_datachat_response({"kind": "text", "text": "hello"})
 
     assert response == {"type": "str", "value": "hello"}
+
+
+# ---------------------------------------------------------------------------
+# Charts (see DINO_CLIENT_SPEC.md)
+#
+# Regression origin: a response carried exactly one `kind`, so an answer could not be prose
+# *and* charts. The agent generated two charts, returned only its commentary, and described
+# images the user could never see.
+# ---------------------------------------------------------------------------
+
+
+def _chart(label="Risposte"):
+    return {
+        "type": "bar",
+        "labels": ["1", "2"],
+        "datasets": [{"label": label, "data": [10, 20]}],
+        "title": None,
+        "x_label": "voto",
+        "y_label": "numero di risposte",
+        "stacked": False,
+    }
+
+
+def test_text_can_carry_several_charts():
+    """The reported bug: commentary plus two charts in one answer."""
+    response = normalize_datachat_response(
+        {"kind": "text", "text": "### Analisi", "charts": [_chart("a"), _chart("b")]}
+    )
+
+    assert response["type"] == "str"
+    assert response["value"] == "### Analisi"
+    assert len(response["charts"]) == 2
+    assert [c["datasets"][0]["label"] for c in response["charts"]] == ["a", "b"]
+
+
+def test_a_table_can_carry_a_chart(exporter):
+    response = normalize_datachat_response(
+        {"kind": "table", "data": _rows(5), "charts": [_chart()]}, exporter=exporter
+    )
+
+    assert response["type"] == "dataframe"
+    assert len(response["value"]) == 5
+    assert len(response["charts"]) == 1
+
+
+def test_chart_only_response():
+    response = normalize_datachat_response({"kind": "chart", "chart": _chart()})
+
+    assert response["type"] == "chart"
+    assert response["value"]["type"] == "bar"
+
+
+def test_a_single_chart_passed_unwrapped_is_accepted():
+    response = normalize_datachat_response({"kind": "text", "text": "x", "charts": _chart()})
+
+    assert len(response["charts"]) == 1
+
+
+def test_too_many_charts_are_capped_and_disclosed():
+    response = normalize_datachat_response(
+        {"kind": "text", "text": "x", "charts": [_chart()] * 9}
+    )
+
+    assert len(response["charts"]) == 6
+    assert "only the first 6" in response["note"]
+
+
+def test_malformed_charts_are_dropped_not_fatal():
+    """One bad spec must not cost the user the whole answer."""
+    response = normalize_datachat_response(
+        {"kind": "text", "text": "x", "charts": [_chart(), {"type": "bar"}, "nonsense"]}
+    )
+
+    assert len(response["charts"]) == 1
+    assert "could not be rendered" in response["note"]
+
+
+def test_an_incomplete_chart_kind_degrades_to_text():
+    response = normalize_datachat_response({"kind": "chart", "chart": {"type": "bar"}})
+
+    assert response["type"] == "str"
+    assert "could not be rendered" in response["value"]
+
+
+def test_absent_charts_key_leaves_the_payload_untouched():
+    assert normalize_datachat_response({"kind": "text", "text": "hi"}) == {
+        "type": "str",
+        "value": "hi",
+    }
+
+
+def test_charts_note_combines_with_a_tool_note():
+    response = normalize_datachat_response(
+        {"kind": "text", "text": "x", "note": "12 rows unscored.", "charts": [{"bad": 1}]}
+    )
+
+    assert "12 rows unscored." in response["note"]
+    assert "could not be rendered" in response["note"]

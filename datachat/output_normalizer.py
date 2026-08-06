@@ -16,6 +16,10 @@ _PREVIEW_COLUMNS = 10
 
 _EXPORT_URL_PREFIX = "/datachat/export"
 
+# Charts travel as data (see DINO_CLIENT_SPEC.md), so several can accompany one answer. Still
+# bounded: past a handful the client cannot show them meaningfully.
+_MAX_CHARTS = 6
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -88,6 +92,59 @@ def _sanitize_table_records(
     return sanitized
 
 
+def join_notes(*notes: Any) -> Optional[str]:
+    """
+    Combine caveats into one `note`, dropping the empty ones.
+
+    Mirrors datachat.tools.limits.join_notes deliberately rather than importing it: the
+    normalizer is the transport layer and must not depend on the tools package.
+    """
+    parts = [str(n).strip() for n in notes if n and str(n).strip()]
+    if not parts:
+        return None
+    return " ".join(parts)
+
+
+def _is_chart_spec(value: Any) -> bool:
+    """A chart spec must at least carry a type and a non-empty datasets list."""
+    return (
+        isinstance(value, dict)
+        and bool(str(value.get("type") or "").strip())
+        and isinstance(value.get("datasets"), list)
+        and bool(value.get("datasets"))
+    )
+
+
+def _extract_charts(response: dict[str, Any]) -> tuple[list[dict[str, Any]], Optional[str]]:
+    """
+    Pull a `charts` list off any payload, dropping malformed entries.
+
+    Tolerant on purpose: the list is assembled by the model from several tool results, so a
+    single bad entry must not cost the user the whole answer.
+    """
+    raw = response.get("charts")
+    if raw is None:
+        return [], None
+    if isinstance(raw, dict):  # a single spec passed unwrapped
+        raw = [raw]
+    if not isinstance(raw, list):
+        return [], None
+
+    charts = [c for c in raw if _is_chart_spec(c)]
+    dropped = len(raw) - len(charts)
+
+    note = None
+    if len(charts) > _MAX_CHARTS:
+        note = (
+            f"{len(charts)} charts were produced; only the first {_MAX_CHARTS} are shown."
+        )
+        charts = charts[:_MAX_CHARTS]
+    elif dropped:
+        note = f"{dropped} chart(s) could not be rendered and were left out."
+
+    return charts, note
+
+
 def _count_columns(records: list[Any]) -> int:
     """Number of distinct column names across all records."""
     keys: set[str] = set()
@@ -102,6 +159,7 @@ def _build_table_response(
     exporter: Any = None,
     hint: str = "export",
     note: Optional[str] = None,
+    charts: Optional[list[dict[str, Any]]] = None,
 ) -> dict[str, Any]:
     """
     Build the client response for a table result.
@@ -134,6 +192,10 @@ def _build_table_response(
     # A tool may flag a caveat about its own result (e.g. rows it could not analyze).
     if note:
         payload["note"] = str(note)
+
+    # Charts to render beside the table.
+    if charts:
+        payload["charts"] = charts
 
     if not truncated or exporter is None or not hasattr(exporter, "register_export"):
         return payload
@@ -208,6 +270,15 @@ def normalize_datachat_response(response: Any, exporter: Any = None) -> dict[str
             if isinstance(download_url, str) and download_url:
                 payload["download_url"] = download_url
                 payload["download_filename"] = response.get("download_filename")
+
+            # Charts alongside a written answer. This is the whole reason `charts` exists:
+            # the contract carries one "kind", so commentary and charts could not coexist.
+            charts, charts_note = _extract_charts(response)
+            if charts:
+                payload["charts"] = charts
+            note = join_notes(response.get("note"), charts_note)
+            if note:
+                payload["note"] = note
             return payload
 
         if kind == "error":
@@ -226,23 +297,44 @@ def normalize_datachat_response(response: Any, exporter: Any = None) -> dict[str
                 return {"type": "image", "value": fileToBase64(path)}
             return {"type": "str", "value": str(path)}
 
+        if kind == "chart":
+            chart = response.get("chart")
+            if not _is_chart_spec(chart):
+                return {
+                    "type": "str",
+                    "value": "The chart could not be rendered: the specification was incomplete.",
+                }
+            payload: dict[str, Any] = {"type": "chart", "value": chart}
+            # A chart answer can carry further charts the agent built; `value` is the primary
+            # and never repeated inside `charts`.
+            charts, charts_note = _extract_charts(response)
+            if charts:
+                payload["charts"] = charts
+            note = join_notes(response.get("note"), charts_note)
+            if note:
+                payload["note"] = note
+            return payload
+
         if kind == "table":
             data = response.get("data")
             # Optional label a tool can set to name the downloaded file.
             hint = str(response.get("export_name") or "export")
+            # Optional charts to show beside the table.
+            charts, charts_note = _extract_charts(response)
             # Optional caveat a tool can attach to its own result.
-            note = response.get("note")
+            note = join_notes(response.get("note"), charts_note)
 
             # Accept pandas DataFrame directly
             if isinstance(data, pd.DataFrame):
                 return _build_table_response(
-                    data.to_dict(orient="records"), exporter=exporter, hint=hint, note=note
+                    data.to_dict(orient="records"),
+                    exporter=exporter, hint=hint, note=note, charts=charts,
                 )
 
             # Preferred: list-of-dicts (records)
             if isinstance(data, list):
                 return _build_table_response(
-                    data, exporter=exporter, hint=hint, note=note
+                    data, exporter=exporter, hint=hint, note=note, charts=charts,
                 )
 
             # Rare: dict (already structured). Keep as dict to avoid guessing shape.
