@@ -155,7 +155,7 @@ def feedback_handler() -> Response | tuple[Response, int]:
         return jsonify({"feedback_id": feedback_id}), 200
 
     except Exception as e:
-        logger.error(f"[feedback] Unexpected error: {str(e)}")
+        logger.error("event=feedback_submit_failed error=%s", str(e))
         return jsonify({"error": "An unexpected error occurred"}), 500
 
 

@@ -152,5 +152,5 @@ def log_runresult(
 
     except (AttributeError, TypeError, ValueError) as e:
         # Specific errors for failed getattr or wrong types
-        logger.warning(f"[agentchat] Failed to log RunResult: {e}")
+        logger.warning("event=agent_run_log_failed error=%s", e)
 

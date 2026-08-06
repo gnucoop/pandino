@@ -172,7 +172,10 @@ def agentchat() -> Response | tuple[Response, int]:
         token_cost = config.completion_token_cost
 
         logger.info(
-            f"[agentchat] user={r['username']} ns={namespace} lang={language}"
+            "event=agentchat_request_started user=%s namespace=%s language=%s",
+            r["username"],
+            namespace,
+            language,
         )
 
         # === TOKEN CHECK ===
@@ -228,7 +231,7 @@ def agentchat() -> Response | tuple[Response, int]:
             )
 
         except Exception as e:
-            logger.error(f"[agentchat] Failed to log token usage: {e}")
+            logger.error("event=agentchat_token_usage_log_failed error=%s", e)
 
         # === TOKEN MANAGEMENT ===
 
@@ -237,10 +240,13 @@ def agentchat() -> Response | tuple[Response, int]:
             edit_tokens(r["username"], -token_cost)
 
         logger.info(
-            f"[agentchat] done user={r['username']} duration={duration_ms}ms "
-            f"tools={len(payload.get('tool_calls', []))} "
-            f"vectors={len(payload.get('vectors', []))} "
-            f"fu={len(payload.get('follow_ups', []))}"
+            "event=agentchat_request_completed user=%s duration_ms=%s "
+            "tools=%s vectors=%s follow_ups=%s",
+            r["username"],
+            duration_ms,
+            len(payload.get("tool_calls", [])),
+            len(payload.get("vectors", [])),
+            len(payload.get("follow_ups", [])),
         )
 
         if log_id is not None:
@@ -249,10 +255,10 @@ def agentchat() -> Response | tuple[Response, int]:
         return jsonify(payload), 200
 
     except RuntimeError as e:
-        logger.error(f"[agentchat] Runtime error: {str(e)}")
+        logger.error("event=agentchat_runtime_error error=%s", str(e))
         return jsonify({"error": str(e)}), 500
 
     except Exception as e:
-        logger.error(f"[agentchat] Unexpected error: {str(e)}")
-        logger.error(traceback.format_exc())
+        logger.error("event=agentchat_unexpected_error error=%s", str(e))
+        logger.error("event=agentchat_unexpected_error_trace trace=%s", traceback.format_exc())
         return jsonify({"error": "An unexpected error occurred"}), 500
