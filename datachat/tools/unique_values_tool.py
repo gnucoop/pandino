@@ -104,9 +104,9 @@ class UniqueValuesTool(Tool):
 
             records = replace_nan(records)
 
-            logger.info("[datachat][unique_values_tool] col=%s n=%s", col, n_int)
+            logger.info("col=%s n=%s", col, n_int)
             return {"kind": "table", "data": records}
 
         except Exception as e:
-            logger.exception("[datachat][unique_values_tool] failed")
+            logger.exception("failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

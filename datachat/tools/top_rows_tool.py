@@ -237,7 +237,7 @@ class TopRowsTool(Tool):
             safe_records = replace_nan(safe_records)
 
             logger.info(
-                "[datachat][top_rows_tool] sort_by=%s asc=%s n=%s offset=%s returned=%s total=%s cols=%s data_mode=%s",
+                "sort_by=%s asc=%s n=%s offset=%s returned=%s total=%s cols=%s data_mode=%s",
                 sort_by_clean,
                 asc,
                 n_int,
@@ -261,5 +261,5 @@ class TopRowsTool(Tool):
             }
 
         except Exception as e:
-            logger.exception("[datachat][top_rows_tool] failed")
+            logger.exception("failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

@@ -680,9 +680,9 @@ class PlotTool(Tool):
             plt.savefig(out_path, dpi=150)
             plt.close()
 
-            logger.info("[datachat][plot_tool] saved plot=%s", out_path)
+            logger.info("saved plot=%s", out_path)
             return {"kind": "image_path", "path": out_path}
 
         except Exception as e:
-            logger.exception("[datachat][plot_tool] failed")
+            logger.exception("failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

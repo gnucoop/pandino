@@ -149,9 +149,9 @@ class CorrelationTool(Tool):
             }
             records = replace_nan([row])
 
-            logger.info("[datachat][correlation_tool] x=%s y=%s n=%s corr=%.6f", x, y, len(tmp), corr)
+            logger.info("x=%s y=%s n=%s corr=%.6f", x, y, len(tmp), corr)
             return {"kind": "table", "data": records}
 
         except Exception as e:
-            logger.exception("[datachat][correlation_tool] failed")
+            logger.exception("failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

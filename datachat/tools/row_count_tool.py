@@ -54,11 +54,11 @@ class RowCountTool(Tool):
             else:
                 n_rows = int(len(self._df))
 
-            logger.info("[datachat][row_count_tool] n_rows=%s", n_rows)
+            logger.info("n_rows=%s", n_rows)
 
             return {"kind": "table", "data": [{"row_count": n_rows}]}
 
         except Exception as e:
-            logger.exception("[datachat][row_count_tool] failed")
+            logger.exception("failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}
         

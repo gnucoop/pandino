@@ -170,9 +170,9 @@ class DescribeTool(Tool):
 
             records = replace_nan(records)
 
-            logger.info("[datachat][describe_tool] cols=%s", len(records))
+            logger.info("cols=%s", len(records))
             return {"kind": "table", "data": records}
 
         except Exception as e:
-            logger.exception("[datachat][describe_tool] failed")
+            logger.exception("failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

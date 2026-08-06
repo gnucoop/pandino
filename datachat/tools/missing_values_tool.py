@@ -123,9 +123,9 @@ class MissingValuesTool(Tool):
 
             rows = replace_nan(rows)
 
-            logger.info("[datachat][missing_values_tool] cols=%s", len(rows))
+            logger.info("cols=%s", len(rows))
             return {"kind": "table", "data": rows}
 
         except Exception as e:
-            logger.exception("[datachat][missing_values_tool] failed")
+            logger.exception("failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

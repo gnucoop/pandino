@@ -315,7 +315,7 @@ class FilterRowsTool(Tool):
             safe_records = replace_nan(safe_records)
 
             logger.info(
-                "[datachat][filter_rows_tool] where_col=%s op=%s value=%s where_col2=%s op2=%s value2=%s n=%s rows=%s",
+                "where_col=%s op=%s value=%s where_col2=%s op2=%s value2=%s n=%s rows=%s",
                 where_col,
                 op_clean,
                 value,
@@ -337,5 +337,5 @@ class FilterRowsTool(Tool):
             }
 
         except Exception as e:
-            logger.exception("[datachat][filter_rows_tool] failed")
+            logger.exception("failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

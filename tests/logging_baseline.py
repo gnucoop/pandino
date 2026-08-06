@@ -32,17 +32,6 @@ Value: number of violations recorded at that key.
 """
 
 BASELINE: dict[tuple[str, str, str], int] = {
-    ("A2", "datachat/tools/aggregate_tool.py", "forward"): 3,
-    ("A2", "datachat/tools/correlation_tool.py", "forward"): 2,
-    ("A2", "datachat/tools/describe_tool.py", "forward"): 2,
-    ("A2", "datachat/tools/filter_rows_tool.py", "forward"): 2,
-    ("A2", "datachat/tools/missing_values_tool.py", "forward"): 2,
-    ("A2", "datachat/tools/plot_tool.py", "forward"): 2,
-    ("A2", "datachat/tools/row_count_tool.py", "forward"): 2,
-    ("A2", "datachat/tools/sample_rows_tool.py", "forward"): 2,
-    ("A2", "datachat/tools/top_rows_tool.py", "forward"): 2,
-    ("A2", "datachat/tools/trend_tool.py", "forward"): 2,
-    ("A2", "datachat/tools/unique_values_tool.py", "forward"): 2,
     ("A2", "infrastructure/retriever_tool.py", "forward"): 3,
     ("A2", "routes/datachat.py", "dataChat"): 5,
     ("A2", "routes/documents.py", "compare_docs"): 1,
