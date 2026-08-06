@@ -3,6 +3,8 @@ import logging
 from typing import Optional
 from infrastructure.database_pg import get_prompt_from_db
 
+logger = logging.getLogger(__name__)
+
 
 def load_prompt(
     title: str, 
@@ -22,12 +24,12 @@ def load_prompt(
     if prompt:
         return prompt
 
-    logging.warning(f"Prompt '{title}' not found in DB. Using in-code default_text.")
+    logger.warning(f"Prompt '{title}' not found in DB. Using in-code default_text.")
     if default_text:
         return default_text
 
     if fallback_env_var:
-        logging.warning(f"Default_text missing; trying env var '{fallback_env_var}'")
+        logger.warning(f"Default_text missing; trying env var '{fallback_env_var}'")
         return os.getenv(fallback_env_var, "")
 
     return ""
@@ -49,10 +51,10 @@ def render_prompt(template: str, **kwargs) -> str:
         return template.format(**kwargs)
     except KeyError as e:
         missing_key = e.args[0]
-        logging.warning(
+        logger.warning(
             f"Missing placeholder '{missing_key}' in render_prompt substitution."
         )
         return template
     except Exception as e:
-        logging.error(f"Unexpected error in render_prompt: {str(e)}")
+        logger.error(f"Unexpected error in render_prompt: {str(e)}")
         return template

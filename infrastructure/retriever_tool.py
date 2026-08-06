@@ -13,6 +13,8 @@ from typing import Any, Dict
 from smolagents import Tool
 from services.retrieval_service import retrieve_from_collection
 
+logger = logging.getLogger(__name__)
+
 
 class RetrieverTool(Tool):
     """
@@ -65,7 +67,7 @@ class RetrieverTool(Tool):
         # Namespace cannot be overridden by the LLM
         effective_namespace = self.default_namespace
 
-        logging.info(
+        logger.info(
             f"[retriever_tool] Executing retrieval: namespace={effective_namespace or '(default)'}"
         )
 
@@ -86,11 +88,11 @@ class RetrieverTool(Tool):
                 },
             }
 
-            logging.info(
+            logger.info(
                 f"[retriever_tool] Retrieved {len(vectors)} results successfully."
             )
             return result
 
         except Exception as e:
-            logging.exception("[retriever_tool] Error during retrieval execution")
+            logger.exception("[retriever_tool] Error during retrieval execution")
             return {"vectors": [], "error": str(e)}
