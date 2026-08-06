@@ -82,7 +82,9 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
             return jsonify({"text": text}), 200
         else:
             logger.error(
-                f"ASR failed: {response.status_code} - {response.text}"
+                "event=asr_request_failed status=%s body=%s",
+                response.status_code,
+                response.text,
             )
             return jsonify({"error": "ASR transcription failed"}), 500
 
@@ -204,5 +206,5 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
 
     edit_tokens(user_email, -token_cost)
 
-    logger.debug(f"Audio form compilation result: {result['content']}")
+    logger.debug("event=audio_form_compile_result content=%s", result["content"])
     return jsonify(result["content"]), 200

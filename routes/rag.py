@@ -124,7 +124,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
         return jsonify({"error": "No response from chat completion"}), 500
 
     except Exception as e:
-        logger.error(f"Unexpected error in completion_handler: {str(e)}")
+        logger.error("event=completion_request_failed error=%s", str(e))
         return jsonify({"error": "An unexpected error occurred"}), 500
 
 

@@ -54,7 +54,7 @@ def editTokens() -> tuple[Response, int]:
             )
 
     except Exception as e:
-        logger.error(f"Unexpected error in edit tokens: {str(e)}")
+        logger.error("event=edit_tokens_failed error=%s", str(e))
         return jsonify({"error": "An unexpected error occurred"}), 500
 
     return jsonify({"error": "Unhandled case in editTokens"}), 500

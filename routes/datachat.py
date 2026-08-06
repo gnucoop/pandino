@@ -122,7 +122,9 @@ def startChat() -> Response | tuple[Response, int]:
 
         # Language-aware prompt generation
         logger.info(
-            f"Invoking startdatachat engine bootstrap with language={lang}, user={user_email}"
+            "event=datachat_engine_bootstrap_started language=%s user=%s",
+            lang,
+            user_email,
         )
 
         bootstrap = engine.bootstrap(lang)
@@ -260,7 +262,7 @@ def dataChat() -> Response | tuple[Response, int]:
         try:
             trace = engine.get_last_trace()  # type: ignore[attr-defined]
         except Exception as e:
-            logger.warning(f"Failed to read engine trace: {e}")
+            logger.warning("event=datachat_trace_read_failed error=%s", e)
 
     trace_payload: Optional[dict[str, Any]] = None
     if isinstance(trace, dict) and trace.get("run_result") is not None:
@@ -269,7 +271,7 @@ def dataChat() -> Response | tuple[Response, int]:
             if isinstance(trace_payload.get("metrics"), dict):
                 trace_payload["metrics"]["duration_ms"] = trace.get("duration_ms")
         except Exception as e:
-            logger.error(f"Failed to serialize trace: {e}")
+            logger.error("event=datachat_trace_serialize_failed error=%s", e)
 
     if trace_payload is not None:
         try:
@@ -286,7 +288,7 @@ def dataChat() -> Response | tuple[Response, int]:
             )
             structured_log_ok = True
         except Exception as e:
-            logger.error(f"Structured logging failed: {e}")
+            logger.error("event=datachat_structured_log_failed error=%s", e)
 
         try:
             user = get_user_by_username(user_email)
@@ -309,9 +311,9 @@ def dataChat() -> Response | tuple[Response, int]:
                 provider=config.models.datachat_provider,
             )
             db_log_ok = True
-            logger.info(f"token usage logged log_id={log_id}")
+            logger.info("event=datachat_token_usage_logged log_id=%s", log_id)
         except Exception as e:
-            logger.error(f"Failed to log token usage: {e}")
+            logger.error("event=datachat_token_usage_log_failed error=%s", e)
 
     _logger.info(
         "datachat_trace_status request_id=%s user=%s engine=%s trace_present=%s structured_log_ok=%s db_log_ok=%s log_id=%s",
