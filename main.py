@@ -1,10 +1,13 @@
 # === Built-in ===
+import logging
 import os
 
 # Logging must be configured before any other runtime effect.
 from utils.logging_config import bootstrap_logging, register_request_context_hooks
 
 DATACHAT_RUNTIME_LOGGER = bootstrap_logging()
+
+logger = logging.getLogger(__name__)
 
 os.environ["MPLBACKEND"] = "Agg"
 
@@ -71,7 +74,7 @@ app.config["DATACHAT_RUNTIME_LOGGER"] = (
 )
 
 # Verify Matplotlib backend
-print(f"Matplotlib backend: {matplotlib.get_backend()}")
+logger.info("event=matplotlib_backend_selected backend=%s", matplotlib.get_backend())
 
 # Removing Pandas read csv columns limitations to avoid truncated dataFrames
 pd.set_option("display.max_columns", None)

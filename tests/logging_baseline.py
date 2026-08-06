@@ -32,8 +32,6 @@ Value: number of violations recorded at that key.
 """
 
 BASELINE: dict[tuple[str, str, str], int] = {
-    ("A5a", "main.py", "MODULE"): 1,
     ("A5b", "infrastructure/database_pg.py", "list_users"): 1,
     ("A5b", "infrastructure/database_pg.py", "print_stored_keys"): 2,
-    ("A5c", "main.py", "MODULE"): 1,
 }
