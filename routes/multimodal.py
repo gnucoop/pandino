@@ -1,4 +1,5 @@
 import base64
+import logging
 import os
 from typing import Union
 
@@ -13,6 +14,8 @@ from services.audio_form_service import audioFormCompilation, audioFormPromptBui
 from routes.utils import assert_valid_api_key
 
 multimodal_bp = Blueprint("multimodal", __name__)
+
+logger = logging.getLogger(__name__)
 
 
 # Define a route for the '/transcribe' endpoint
@@ -78,7 +81,7 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
                 )
             return jsonify({"text": text}), 200
         else:
-            current_app.logger.error(
+            logger.error(
                 f"ASR failed: {response.status_code} - {response.text}"
             )
             return jsonify({"error": "ASR transcription failed"}), 500
@@ -201,5 +204,5 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
 
     edit_tokens(user_email, -token_cost)
 
-    current_app.logger.debug(f"Audio form compilation result: {result['content']}")
+    logger.debug(f"Audio form compilation result: {result['content']}")
     return jsonify(result["content"]), 200

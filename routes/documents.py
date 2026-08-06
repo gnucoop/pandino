@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from typing import TypedDict
 from flask import Blueprint, jsonify, request, current_app
@@ -15,6 +16,8 @@ from services.document_text_service import DocumentInput
 from routes.utils import assert_valid_api_key
 
 documents_bp = Blueprint("documents", __name__)
+
+logger = logging.getLogger(__name__)
 
 
 class TokenUsageDict(TypedDict):
@@ -211,7 +214,7 @@ def compare_docs():
             )
 
         except Exception as error:
-            current_app.logger.error(
+            logger.error(
                 f"[compare_docs] Failed to log token usage: {error}"
             )
 

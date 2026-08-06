@@ -19,6 +19,8 @@ from routes.utils import assert_valid_api_key
 
 datachat_bp = Blueprint("datachat", __name__)
 
+logger = logging.getLogger(__name__)
+
 
 @datachat_bp.route("/enddatachat", methods=["POST"])
 def endChat() -> Response | tuple[Response, int]:
@@ -119,7 +121,7 @@ def startChat() -> Response | tuple[Response, int]:
         agentResponse: dict[str, Any] = {"Agent active": "active"}
 
         # Language-aware prompt generation
-        logging.info(
+        logger.info(
             f"Invoking startdatachat engine bootstrap with language={lang}, user={user_email}"
         )
 
@@ -258,7 +260,7 @@ def dataChat() -> Response | tuple[Response, int]:
         try:
             trace = engine.get_last_trace()  # type: ignore[attr-defined]
         except Exception as e:
-            current_app.logger.warning(f"[datachat] Failed to read engine trace: {e}")
+            logger.warning(f"[datachat] Failed to read engine trace: {e}")
 
     trace_payload: Optional[dict[str, Any]] = None
     if isinstance(trace, dict) and trace.get("run_result") is not None:
@@ -267,7 +269,7 @@ def dataChat() -> Response | tuple[Response, int]:
             if isinstance(trace_payload.get("metrics"), dict):
                 trace_payload["metrics"]["duration_ms"] = trace.get("duration_ms")
         except Exception as e:
-            current_app.logger.error(f"[datachat] Failed to serialize trace: {e}")
+            logger.error(f"[datachat] Failed to serialize trace: {e}")
 
     if trace_payload is not None:
         try:
@@ -284,7 +286,7 @@ def dataChat() -> Response | tuple[Response, int]:
             )
             structured_log_ok = True
         except Exception as e:
-            current_app.logger.error(f"[datachat] Structured logging failed: {e}")
+            logger.error(f"[datachat] Structured logging failed: {e}")
 
         try:
             user = get_user_by_username(user_email)
@@ -307,9 +309,9 @@ def dataChat() -> Response | tuple[Response, int]:
                 provider=config.models.datachat_provider,
             )
             db_log_ok = True
-            current_app.logger.info(f"[datachat] token usage logged log_id={log_id}")
+            logger.info(f"[datachat] token usage logged log_id={log_id}")
         except Exception as e:
-            current_app.logger.error(f"[datachat] Failed to log token usage: {e}")
+            logger.error(f"[datachat] Failed to log token usage: {e}")
 
     _logger.info(
         "datachat_trace_status request_id=%s user=%s engine=%s trace_present=%s structured_log_ok=%s db_log_ok=%s log_id=%s",

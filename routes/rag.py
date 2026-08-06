@@ -1,3 +1,4 @@
+import logging
 import os
 import traceback
 from typing import Union, Optional
@@ -14,6 +15,8 @@ from config import PROVIDER_API_KEY_MAP
 from routes.utils import assert_valid_api_key
 
 rag_bp = Blueprint("rag", __name__)
+
+logger = logging.getLogger(__name__)
 
 
 @rag_bp.route("/completion.json", methods=["POST"])
@@ -121,7 +124,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
         return jsonify({"error": "No response from chat completion"}), 500
 
     except Exception as e:
-        current_app.logger.error(f"Unexpected error in completion_handler: {str(e)}")
+        logger.error(f"Unexpected error in completion_handler: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
 
 
@@ -168,7 +171,7 @@ def agentchat() -> Response | tuple[Response, int]:
         language = r.get("language") or "ITA"
         token_cost = config.completion_token_cost
 
-        current_app.logger.info(
+        logger.info(
             f"[agentchat] user={r['username']} ns={namespace} lang={language}"
         )
 
@@ -225,7 +228,7 @@ def agentchat() -> Response | tuple[Response, int]:
             )
 
         except Exception as e:
-            current_app.logger.error(f"[agentchat] Failed to log token usage: {e}")
+            logger.error(f"[agentchat] Failed to log token usage: {e}")
 
         # === TOKEN MANAGEMENT ===
 
@@ -233,7 +236,7 @@ def agentchat() -> Response | tuple[Response, int]:
         if answer_text:
             edit_tokens(r["username"], -token_cost)
 
-        current_app.logger.info(
+        logger.info(
             f"[agentchat] done user={r['username']} duration={duration_ms}ms "
             f"tools={len(payload.get('tool_calls', []))} "
             f"vectors={len(payload.get('vectors', []))} "
@@ -246,10 +249,10 @@ def agentchat() -> Response | tuple[Response, int]:
         return jsonify(payload), 200
 
     except RuntimeError as e:
-        current_app.logger.error(f"[agentchat] Runtime error: {str(e)}")
+        logger.error(f"[agentchat] Runtime error: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
     except Exception as e:
-        current_app.logger.error(f"[agentchat] Unexpected error: {str(e)}")
-        current_app.logger.error(traceback.format_exc())
+        logger.error(f"[agentchat] Unexpected error: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({"error": "An unexpected error occurred"}), 500

@@ -1,9 +1,13 @@
+import logging
+
 from flask import Blueprint, jsonify, request, current_app, Response
 from infrastructure.database_pg import edit_tokens
 import infrastructure.database_pg as database_pg
 from routes.utils import assert_valid_api_key
 
 users_bp = Blueprint("users", __name__, url_prefix="")
+
+logger = logging.getLogger(__name__)
 
 
 # Define a route for the '/edittokens' endpoint that accepts POST requests
@@ -50,7 +54,7 @@ def editTokens() -> tuple[Response, int]:
             )
 
     except Exception as e:
-        current_app.logger.error(f"Unexpected error in edit tokens: {str(e)}")
+        logger.error(f"Unexpected error in edit tokens: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
 
     return jsonify({"error": "Unhandled case in editTokens"}), 500
@@ -151,7 +155,7 @@ def feedback_handler() -> Response | tuple[Response, int]:
         return jsonify({"feedback_id": feedback_id}), 200
 
     except Exception as e:
-        current_app.logger.error(f"[feedback] Unexpected error: {str(e)}")
+        logger.error(f"[feedback] Unexpected error: {str(e)}")
         return jsonify({"error": "An unexpected error occurred"}), 500
 
 
