@@ -68,7 +68,8 @@ class RetrieverTool(Tool):
         effective_namespace = self.default_namespace
 
         logger.info(
-            f"Executing retrieval: namespace={effective_namespace or '(default)'}"
+            "event=retrieval_started namespace=%s",
+            effective_namespace or "(default)",
         )
 
         try:
@@ -89,10 +90,11 @@ class RetrieverTool(Tool):
             }
 
             logger.info(
-                f"Retrieved {len(vectors)} results successfully."
+                "event=retrieval_completed count=%s",
+                len(vectors),
             )
             return result
 
         except Exception as e:
-            logger.exception("Error during retrieval execution")
+            logger.exception("event=retrieval_failed")
             return {"vectors": [], "error": str(e)}
