@@ -215,7 +215,7 @@ def compare_docs():
 
         except Exception as error:
             logger.error(
-                f"[compare_docs] Failed to log token usage: {error}"
+                f"Failed to log token usage: {error}"
             )
 
         edit_tokens(user_email, -token_cost)

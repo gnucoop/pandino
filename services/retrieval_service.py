@@ -57,7 +57,7 @@ def retrieve_from_collection(
     """
 
     logger.info(
-        f"[retrieval] Query started. namespace={namespace}, top_k={top_k}, min_sim={min_sim}"
+        f"Query started. namespace={namespace}, top_k={top_k}, min_sim={min_sim}"
     )
 
     try:
@@ -73,12 +73,12 @@ def retrieve_from_collection(
         )
 
         logger.info(
-            f"[retrieval] Query completed: {len(vectors)} matches found in '{namespace}'."
+            f"Query completed: {len(vectors)} matches found in '{namespace}'."
         )
         return vectors
 
     except Exception as e:
-        logger.exception("[retrieval] Error during vector retrieval")
+        logger.exception("Error during vector retrieval")
         raise RuntimeError(
             f"Error retrieving vectors from namespace '{namespace}': {e}"
         ) from e

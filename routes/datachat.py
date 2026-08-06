@@ -260,7 +260,7 @@ def dataChat() -> Response | tuple[Response, int]:
         try:
             trace = engine.get_last_trace()  # type: ignore[attr-defined]
         except Exception as e:
-            logger.warning(f"[datachat] Failed to read engine trace: {e}")
+            logger.warning(f"Failed to read engine trace: {e}")
 
     trace_payload: Optional[dict[str, Any]] = None
     if isinstance(trace, dict) and trace.get("run_result") is not None:
@@ -269,7 +269,7 @@ def dataChat() -> Response | tuple[Response, int]:
             if isinstance(trace_payload.get("metrics"), dict):
                 trace_payload["metrics"]["duration_ms"] = trace.get("duration_ms")
         except Exception as e:
-            logger.error(f"[datachat] Failed to serialize trace: {e}")
+            logger.error(f"Failed to serialize trace: {e}")
 
     if trace_payload is not None:
         try:
@@ -286,7 +286,7 @@ def dataChat() -> Response | tuple[Response, int]:
             )
             structured_log_ok = True
         except Exception as e:
-            logger.error(f"[datachat] Structured logging failed: {e}")
+            logger.error(f"Structured logging failed: {e}")
 
         try:
             user = get_user_by_username(user_email)
@@ -309,9 +309,9 @@ def dataChat() -> Response | tuple[Response, int]:
                 provider=config.models.datachat_provider,
             )
             db_log_ok = True
-            logger.info(f"[datachat] token usage logged log_id={log_id}")
+            logger.info(f"token usage logged log_id={log_id}")
         except Exception as e:
-            logger.error(f"[datachat] Failed to log token usage: {e}")
+            logger.error(f"Failed to log token usage: {e}")
 
     _logger.info(
         "datachat_trace_status request_id=%s user=%s engine=%s trace_present=%s structured_log_ok=%s db_log_ok=%s log_id=%s",
