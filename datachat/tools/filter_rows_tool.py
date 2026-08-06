@@ -315,7 +315,7 @@ class FilterRowsTool(Tool):
             safe_records = replace_nan(safe_records)
 
             logger.info(
-                "where_col=%s op=%s value=%s where_col2=%s op2=%s value2=%s n=%s rows=%s",
+                "event=tool_call_result where_col=%s op=%s value=%s where_col2=%s op2=%s value2=%s n=%s rows=%s",
                 where_col,
                 op_clean,
                 value,
@@ -337,5 +337,5 @@ class FilterRowsTool(Tool):
             }
 
         except Exception as e:
-            logger.exception("failed")
+            logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

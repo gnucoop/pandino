@@ -123,9 +123,9 @@ class MissingValuesTool(Tool):
 
             rows = replace_nan(rows)
 
-            logger.info("cols=%s", len(rows))
+            logger.info("event=tool_call_result cols=%s", len(rows))
             return {"kind": "table", "data": rows}
 
         except Exception as e:
-            logger.exception("failed")
+            logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

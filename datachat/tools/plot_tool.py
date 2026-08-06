@@ -680,9 +680,9 @@ class PlotTool(Tool):
             plt.savefig(out_path, dpi=150)
             plt.close()
 
-            logger.info("saved plot=%s", out_path)
+            logger.info("event=tool_call_result plot=%s", out_path)
             return {"kind": "image_path", "path": out_path}
 
         except Exception as e:
-            logger.exception("failed")
+            logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

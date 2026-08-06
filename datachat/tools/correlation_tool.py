@@ -149,9 +149,9 @@ class CorrelationTool(Tool):
             }
             records = replace_nan([row])
 
-            logger.info("x=%s y=%s n=%s corr=%.6f", x, y, len(tmp), corr)
+            logger.info("event=tool_call_result x=%s y=%s n=%s corr=%.6f", x, y, len(tmp), corr)
             return {"kind": "table", "data": records}
 
         except Exception as e:
-            logger.exception("failed")
+            logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

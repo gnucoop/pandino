@@ -297,7 +297,7 @@ class AggregateTool(Tool):
 
             if df_work.empty:
                 logger.info(
-                    "empty after filter where_col=%s value=%s where_col2=%s value2=%s",
+                    "event=tool_call_empty where_col=%s value=%s where_col2=%s value2=%s",
                     wc1 or None,
                     value,
                     wc2 or None,
@@ -360,7 +360,7 @@ class AggregateTool(Tool):
             safe_records = replace_nan(safe_records)
 
             logger.info(
-                "group_by=%s op=%s metric=%s n=%s asc=%s filter1=%s filter2=%s",
+                "event=tool_call_result group_by=%s op=%s metric=%s n=%s asc=%s filter1=%s filter2=%s",
                 group_by_clean,
                 op_clean,
                 metric_clean,
@@ -373,5 +373,5 @@ class AggregateTool(Tool):
             return {"kind": "table", "data": safe_records}
 
         except Exception as e:
-            logger.exception("failed")
+            logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

@@ -104,9 +104,9 @@ class UniqueValuesTool(Tool):
 
             records = replace_nan(records)
 
-            logger.info("col=%s n=%s", col, n_int)
+            logger.info("event=tool_call_result col=%s n=%s", col, n_int)
             return {"kind": "table", "data": records}
 
         except Exception as e:
-            logger.exception("failed")
+            logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

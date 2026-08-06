@@ -314,7 +314,7 @@ class TrendTool(Tool):
             safe_records = replace_nan(safe_records)
 
             logger.info(
-                "date_col=%s freq=%s op=%s metric=%s start=%s end=%s n=%s rows=%s include_empty=%s",
+                "event=tool_call_result date_col=%s freq=%s op=%s metric=%s start=%s end=%s n=%s rows=%s include_empty=%s",
                 date_col_clean,
                 freq,
                 op_clean,
@@ -329,5 +329,5 @@ class TrendTool(Tool):
             return {"kind": "table", "data": safe_records}
 
         except Exception as e:
-            logger.exception("failed")
+            logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

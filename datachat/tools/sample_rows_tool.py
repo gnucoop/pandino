@@ -185,7 +185,7 @@ class SampleRowsTool(Tool):
             records = replace_nan(records)  # in case truncation introduced weird values
 
             logger.info(
-                "n=%s offset=%s cols=%s source=%s returned=%s",
+                "event=tool_call_result n=%s offset=%s cols=%s source=%s returned=%s",
                 n_int,
                 offset_int,
                 len(sample.columns),
@@ -205,5 +205,5 @@ class SampleRowsTool(Tool):
             }
 
         except Exception as e:
-            logger.exception("failed")
+            logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}
