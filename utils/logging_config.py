@@ -252,7 +252,7 @@ def bootstrap_logging() -> logging.Logger:
                 handler.setLevel(level)
 
     if level_warning:
-        logger.warning(level_warning)
+        logger.warning("event=log_level_resolution_fallback detail=%s", level_warning)
 
     # --- Audit channel: FileHandler opens eagerly, so the parent directory
     # must exist first. It is gitignored and created by nothing in the image.
@@ -263,8 +263,7 @@ def bootstrap_logging() -> logging.Logger:
         setup_agent_logger(path=agent_runs_path)
     except Exception as exc:  # noqa: BLE001 - startup must never be aborted here
         logger.warning(
-            "Agent run logging disabled: cannot open %s (%s: %s). "
-            "The application will start without its audit channel.",
+            "event=agent_run_log_channel_unavailable path=%s error_type=%s error=%s",
             agent_runs_path,
             type(exc).__name__,
             exc,
