@@ -58,6 +58,8 @@ from infrastructure.database_methods import (
     build_delete_pgvector_by_file_id_query,
 )
 
+logger = logging.getLogger(__name__)
+
 KEY: Optional[bytes] = None
 PGUSER: Optional[str] = None
 PGPWD: Optional[str] = None
@@ -200,7 +202,7 @@ def add_user(
     if date_valid_until is None:
         date_valid_until = extend_expiration_date()
 
-    logging.info(f"Adding user: {username} with expiration: {date_valid_until}")
+    logger.info(f"Adding user: {username} with expiration: {date_valid_until}")
 
     conn = connect()
     cursor = conn.cursor()
@@ -214,10 +216,10 @@ def add_user(
         conn.commit()
         return None
     except psycopg.IntegrityError as e:
-        logging.warning(f"IntegrityError while adding user {username}: {str(e)}")
+        logger.warning(f"IntegrityError while adding user {username}: {str(e)}")
         return f"Error adding new user: {e}"
     except Exception as e:
-        logging.exception("Unexpected error in add_user")
+        logger.exception("Unexpected error in add_user")
         return f"Error adding new user: {e}"
     finally:
         conn.close()
@@ -230,7 +232,7 @@ def remove_user(username: str) -> Optional[str]:
     :param username: The username of the user to be removed.
     :return: None if success, or an error message string if an exception occurs.
     """
-    logging.info(f"Attempting to remove user: {username}")
+    logger.info(f"Attempting to remove user: {username}")
 
     conn = connect()
     cursor = conn.cursor()
@@ -241,10 +243,10 @@ def remove_user(username: str) -> Optional[str]:
         conn.commit()
         return None
     except psycopg.IntegrityError as e:
-        logging.warning(f"IntegrityError while deleting user {username}: {str(e)}")
+        logger.warning(f"IntegrityError while deleting user {username}: {str(e)}")
         return f"Error deleting user: {e}"
     except Exception as e:
-        logging.exception("Unexpected error in remove_user")
+        logger.exception("Unexpected error in remove_user")
         return f"Error deleting user: {e}"
     finally:
         conn.close()
@@ -259,7 +261,7 @@ def edit_tokens(username: str, tokens_quantity: int) -> tuple[bool, str]:
     :return: Tuple (True, message) on success, or (False, error message) on failure.
     """
     date_valid_until = extend_expiration_date()
-    logging.info(f"Editing tokens for user={username}, amount={tokens_quantity}")
+    logger.info(f"Editing tokens for user={username}, amount={tokens_quantity}")
 
     conn = connect()
     cursor = conn.cursor()
@@ -272,10 +274,10 @@ def edit_tokens(username: str, tokens_quantity: int) -> tuple[bool, str]:
         conn.commit()
         return True, "Tokens edited successfully"
     except psycopg.IntegrityError as e:
-        logging.warning(f"IntegrityError while editing tokens for {username}: {str(e)}")
+        logger.warning(f"IntegrityError while editing tokens for {username}: {str(e)}")
         return False, "Error while editing tokens"
     except Exception as e:
-        logging.exception("Unexpected error in edit_tokens")
+        logger.exception("Unexpected error in edit_tokens")
         return False, "Error while editing tokens"
     finally:
         conn.close()
@@ -321,7 +323,7 @@ def get_user_by_username(user_name: str) -> Optional[dict[str, str | int]]:
     :param user_name: The username or email of the user to retrieve.
     :return: A dictionary containing user fields if found, or None if not found.
     """
-    logging.info(f"Looking up user by username: {user_name}")
+    logger.info(f"Looking up user by username: {user_name}")
 
     conn = connect()
     cursor = conn.cursor()
@@ -338,7 +340,7 @@ def get_user_by_username(user_name: str) -> Optional[dict[str, str | int]]:
         try:
             decrypted_key = get_cipher_suite().decrypt(user[2]).decode("utf-8")
         except Exception as e:
-            logging.error(f"Failed to decrypt API key for user {user_name}: {str(e)}")
+            logger.error(f"Failed to decrypt API key for user {user_name}: {str(e)}")
             decrypted_key = "DECRYPTION_FAILED"
 
         user_data = {
@@ -348,10 +350,10 @@ def get_user_by_username(user_name: str) -> Optional[dict[str, str | int]]:
             "date_valid_until": user[3],
             "tokens": user[4],
         }
-        logging.info("event=user_lookup_success username=%s", user_name)
+        logger.info("event=user_lookup_success username=%s", user_name)
         return user_data
 
-    logging.warning(f"No user found for username: {user_name}")
+    logger.warning(f"No user found for username: {user_name}")
     return None
 
 
@@ -362,11 +364,11 @@ def get_user_tokens(user_name: str) -> Optional[int]:
     :param user_name: The username of the user.
     :return: Number of tokens if user exists and the value is an int, otherwise None.
     """
-    logging.info(f"Retrieving token count for user: {user_name}")
+    logger.info(f"Retrieving token count for user: {user_name}")
 
     user = get_user_by_username(user_name)
     if user is None:
-        logging.warning(f"User not found: {user_name}")
+        logger.warning(f"User not found: {user_name}")
         return None
 
     token_value = user["tokens"]
@@ -382,7 +384,7 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
     :param user_email: The username/email associated with the key.
     :return: Tuple (True, "match") if valid, otherwise (False, reason).
     """
-    logging.info(f"Validating API key for user: {user_email}")
+    logger.info(f"Validating API key for user: {user_email}")
 
     conn = connect()
     cursor = conn.cursor()
@@ -408,7 +410,7 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
         try:
             expiration = datetime.strptime(date_valid_until, "%Y-%m-%d %H:%M:%S").date()
         except Exception as e:
-            logging.error(
+            logger.error(
                 f"Invalid date format in DB for user {user_email}: {date_valid_until}"
             )
             continue
@@ -552,7 +554,7 @@ def insert_rag_file(
         return True
     except Exception:
         conn.rollback()
-        logging.exception("Error inserting rag file")
+        logger.exception("Error inserting rag file")
         return False
     finally:
         conn.close()
@@ -612,7 +614,7 @@ def delete_rag_file(file_id: str, namespace: str) -> dict:
     # it here, because vector_store imports this module.
     table_name = namespace.strip().lower().replace("-", "_")
 
-    logging.info(f"Attempting to delete rag file: id={file_id} namespace={table_name}")
+    logger.info(f"Attempting to delete rag file: id={file_id} namespace={table_name}")
 
     conn = connect()
     cursor = conn.cursor()
@@ -654,7 +656,7 @@ def delete_rag_file(file_id: str, namespace: str) -> dict:
         return {"row_deleted": row_deleted, "chunks_deleted": chunks_deleted}
     except Exception:
         conn.rollback()
-        logging.exception("Error deleting rag file")
+        logger.exception("Error deleting rag file")
         raise
     finally:
         conn.close()
@@ -669,7 +671,7 @@ def table_exists(table_schema: str, table_name: str) -> bool:
         cursor.execute(query, params)
         return cursor.fetchone() is not None
     except Exception as e:
-        logging.exception("Error checking table existence")
+        logger.exception("Error checking table existence")
         return False
     finally:
         conn.close()
@@ -684,7 +686,7 @@ def pgvector_maui_id_exists(table_name: str, maui_id: str) -> bool:
         cursor.execute(query, params)
         return cursor.fetchone() is not None
     except Exception as e:
-        logging.exception("Error checking maui_id existence")
+        logger.exception("Error checking maui_id existence")
         return False
     finally:
         conn.close()
@@ -698,7 +700,7 @@ def get_prompt_from_db(title: str, version: Optional[int] = None) -> Optional[st
     :param version: Optional specific version to retrieve. If None, retrieves the most recent version.
     :return: The prompt message as a string, or None if not found.
     """
-    logging.info(f"Retrieving prompt from DB: title='{title}', version={version}")
+    logger.info(f"Retrieving prompt from DB: title='{title}', version={version}")
 
     conn = connect()
     cursor = conn.cursor()
@@ -711,12 +713,12 @@ def get_prompt_from_db(title: str, version: Optional[int] = None) -> Optional[st
         if result:
             return result[0]  # message
         else:
-            logging.warning(
+            logger.warning(
                 f"No prompt found in DB for title='{title}', version={version}"
             )
             return None
     except Exception as e:
-        logging.exception(f"Error retrieving prompt from DB: {str(e)}")
+        logger.exception(f"Error retrieving prompt from DB: {str(e)}")
         return None
     finally:
         conn.close()
@@ -1217,7 +1219,7 @@ def add_cost(
         conn.commit()
         return None
     except Exception as e:
-        logging.exception("Unexpected error in add_cost")
+        logger.exception("Unexpected error in add_cost")
         return f"Error adding new cost: {e}"
     finally:
         conn.close()
@@ -1261,7 +1263,7 @@ def update_cost(
         conn.commit()
         return None
     except Exception as e:
-        logging.exception("Unexpected error in update_cost")
+        logger.exception("Unexpected error in update_cost")
         return f"Error updating cost: {e}"
     finally:
         conn.close()
@@ -1283,7 +1285,7 @@ def delete_cost(cost_id: int) -> Optional[str]:
         conn.commit()
         return None
     except Exception as e:
-        logging.exception("Unexpected error in delete_cost")
+        logger.exception("Unexpected error in delete_cost")
         return f"Error deleting cost: {e}"
     finally:
         conn.close()
@@ -1387,7 +1389,7 @@ def add_prompt(title: str, version: int, message: str) -> Optional[str]:
     :param message: Message of the prompt.
     :return: None if success, or an error message string if an exception occurs.
     """
-    logging.info(f"Adding prompt: {title}")
+    logger.info(f"Adding prompt: {title}")
 
     conn = connect()
     cursor = conn.cursor()
@@ -1398,10 +1400,10 @@ def add_prompt(title: str, version: int, message: str) -> Optional[str]:
         conn.commit()
         return None
     except psycopg.IntegrityError as e:
-        logging.warning(f"IntegrityError while adding prompt {title}: {str(e)}")
+        logger.warning(f"IntegrityError while adding prompt {title}: {str(e)}")
         return f"Error adding new prompt: {e}"
     except Exception as e:
-        logging.exception("Unexpected error in add_prompt")
+        logger.exception("Unexpected error in add_prompt")
         return f"Error adding new prompt: {e}"
     finally:
         conn.close()
@@ -1443,7 +1445,7 @@ def delete_prompt(prompt_id: int) -> bool:
     :param prompt_id: The ID of the prompt to be removed.
     :return: True if deletion was successful, False otherwise.
     """
-    logging.info(f"Attempting to remove prompt: {prompt_id}")
+    logger.info(f"Attempting to remove prompt: {prompt_id}")
 
     conn = connect()
     cursor = conn.cursor()
@@ -1454,7 +1456,7 @@ def delete_prompt(prompt_id: int) -> bool:
         conn.commit()
         return cursor.rowcount > 0
     except Exception as e:
-        logging.exception(f"Unexpected error in delete_prompt: {e}")
+        logger.exception(f"Unexpected error in delete_prompt: {e}")
         return False
     finally:
         conn.close()
@@ -1546,7 +1548,7 @@ def get_feedback_for_admin(
             "total_count": total_count,
         }
     except Exception as e:
-        logging.exception(f"Error retrieving feedback: {e}")
+        logger.exception(f"Error retrieving feedback: {e}")
         return {"feedbacks": [], "page": 1, "total_pages": 1, "total_count": 0}
     finally:
         conn.close()
@@ -1607,7 +1609,7 @@ def get_feedback_stats(
 
         return stats
     except Exception as e:
-        logging.exception(f"Error retrieving feedback stats: {e}")
+        logger.exception(f"Error retrieving feedback stats: {e}")
         return stats
     finally:
         conn.close()
