@@ -67,7 +67,7 @@ def audioFormPromptBuild(
     fieldTypes = formSchemaExampleData["fieldTypes"]
     fieldDescriptions = formSchemaExampleData["fieldDescriptions"]
 
-    logger.info("Building audio form prompts for schema: %s", formSchemaName)
+    logger.info("event=audio_form_prompt_build_started schema=%s", formSchemaName)
 
     language_instruction = (
         f"Please answer using the official language of the country corresponding "
@@ -151,7 +151,7 @@ def audioFormCompilation(
         )
 
     logger.info(
-        "Invoking audio form compilation with model=%s (provider=%s)",
+        "event=audio_form_compilation_started model=%s provider=%s",
         model,
         llm_type,
     )
@@ -177,5 +177,5 @@ def audioFormCompilation(
         }
 
     except Exception as e:
-        logger.exception("Error in audio form compilation")
+        logger.exception("event=audio_form_compilation_failed")
         raise RuntimeError(f"Audio form compilation failed: {str(e)}")

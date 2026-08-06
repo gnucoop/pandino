@@ -25,7 +25,7 @@ def reply_to_prompt(
     api_key: str | None = None,
 ) -> PromptServiceResult:
     if not prompt.strip():
-        logger.warning("Empty prompt provided to reply_to_prompt")
+        logger.warning("event=prompt_reply_empty_input")
         return PromptServiceResult(
             content="", token_usage=TokenUsage(input_tokens=0, output_tokens=0)
         )

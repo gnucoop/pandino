@@ -191,7 +191,7 @@ def process_rag_file(
 
     if not tracking_ok:
         logger.warning(
-            "RAG file tracking failed for file_id=%s, namespace=%s",
+            "event=rag_file_tracking_failed file_id=%s namespace=%s",
             file_id,
             normalized_namespace,
         )

@@ -101,8 +101,8 @@ def complete_chat(
     if not question:
         raise RuntimeError("No question found in chat history.")
 
-    logger.info(f"Starting chat completion with llm_type: {llm_type}, model: {model}")
-    logger.info(f"Processing question: {question}")
+    logger.info("event=completion_started llm_type=%s model=%s", llm_type, model)
+    logger.info("event=completion_question_received question=%s", question)
 
     vectors: list[dict[str, Any]] = []
 
@@ -110,7 +110,7 @@ def complete_chat(
         vectors = store.find_similar_vectors(
             text=question, top_k=top_k, min_similarity=min_sim
         )
-        logger.info(f"Found {len(vectors)} relevant paragraphs")
+        logger.info("event=completion_retrieval_result count=%s", len(vectors))
     except Exception as e:
         raise RuntimeError(f"Vector retrieval failed: {str(e)}")
 
@@ -238,5 +238,5 @@ def complete_chat(
         }
 
     except Exception as e:
-        logger.exception("Error in chat completion")
+        logger.exception("event=completion_failed")
         raise RuntimeError(f"Chat completion failed: {str(e)}")
