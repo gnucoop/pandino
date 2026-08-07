@@ -16,9 +16,11 @@ conftest.py, following the pattern in tests/test_logging_config.py.
 import io
 import json
 import logging
+from types import SimpleNamespace
 
 import pytest
 
+import services.agentchat_service as agentchat_service
 from utils.agent_logging import log_runresult
 from utils.logging_config import (
     CONTEXT_UNSET,
@@ -148,3 +150,79 @@ def test_request_id_is_top_level_not_nested_in_extra(isolated_agent_runs_logger)
     assert record["request_id"] == "0123456789abcdef"
     assert "request_id" in record
     assert "request_id" not in record["extra"]
+
+
+class _StubAgent:
+    """Stand-in for smolagents.CodeAgent: no LLM, no tool calls."""
+
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def run(self, *args, **kwargs):
+        return SimpleNamespace(
+            steps=[],
+            timing=None,
+            token_usage=None,
+            state=None,
+            output={"answer": "real answer", "follow_ups": []},
+        )
+
+
+def _stub_config():
+    models = SimpleNamespace(
+        completion_model_provider="stub-provider",
+        completion_model_agent_chat="stub-model",
+        completion_embedding_model_provider="stub-emb-provider",
+        completion_embedding_model="stub-emb-model",
+    )
+    rag = SimpleNamespace(top_k=3, min_sim=0.5)
+    return SimpleNamespace(models=models, rag=rag)
+
+
+def test_audit_log_failure_does_not_discard_agentchat_response(monkeypatch, caplog):
+    """Axis 6: run_agentchat must still return its result when log_runresult fails.
+
+    services/agentchat_service.py::run_agentchat calls log_runresult after the
+    agent has already produced its answer. A failure in that audit-logging
+    call must not turn an already-built AgentChatServiceResult into a
+    RuntimeError, discarding a response that was already generated.
+    """
+    monkeypatch.setattr(agentchat_service, "build_litellm_model", lambda **kwargs: object())
+    monkeypatch.setattr(agentchat_service, "RetrieverTool", lambda **kwargs: object())
+    monkeypatch.setattr(agentchat_service, "CodeAgent", _StubAgent)
+    monkeypatch.setattr(agentchat_service, "load_prompt", lambda *a, **kw: "template")
+    monkeypatch.setattr(agentchat_service, "render_prompt", lambda *a, **kw: "rendered")
+    monkeypatch.setattr(
+        agentchat_service,
+        "serialize_runresult",
+        lambda result: {
+            "answer": "real answer",
+            "follow_ups": [],
+            "tool_calls": [],
+            "vectors": [],
+            "metrics": {"token_usage": {}},
+        },
+    )
+
+    def _raise_on_log(*args, **kwargs):
+        raise OSError("audit unavailable")
+
+    monkeypatch.setattr(agentchat_service, "log_runresult", _raise_on_log)
+
+    caplog.set_level(logging.WARNING, logger="services.agentchat_service")
+
+    result = agentchat_service.run_agentchat(
+        chat=["hello"],
+        namespace="agentchat",
+        language="ENG",
+        username="user@example.com",
+        config=_stub_config(),
+    )
+
+    assert result["payload"]["answer"] == "real answer"
+    assert result["model"] == "stub-model"
+    assert result["provider"] == "stub-provider"
+    assert any(
+        "event=agentchat_audit_log_failed" in record.getMessage()
+        for record in caplog.records
+    )

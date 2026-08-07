@@ -1,3 +1,4 @@
+import logging
 import textwrap
 import time
 from typing import TypedDict
@@ -10,6 +11,8 @@ from infrastructure.retriever_tool import RetrieverTool
 from infrastructure.prompt_utils import load_prompt, render_prompt
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_AGENTCHAT_PROMPT = textwrap.dedent("""\
@@ -117,13 +120,16 @@ def run_agentchat(
 
         payload["metrics"]["duration_ms"] = duration_ms
 
-        log_runresult(
-            result,
-            user=username,
-            namespace=namespace,
-            language=language,
-            question=user_message,
-        )
+        try:
+            log_runresult(
+                result,
+                user=username,
+                namespace=namespace,
+                language=language,
+                question=user_message,
+            )
+        except Exception as audit_error:
+            logger.warning("event=agentchat_audit_log_failed error=%s", audit_error)
 
         return AgentChatServiceResult(
             payload=payload,
