@@ -306,7 +306,7 @@ def list_users():
             try:
                 decrypted_api_key = get_cipher_suite().decrypt(api_key).decode()
                 print(
-                    f"ID: {id}, Username: {user}, ApiKey: {decrypted_api_key}, Date Valid Until: {date_valid_until}, Tokens: {tokens}"
+                    f"ID: {id}, Username: {user}, Date Valid Until: {date_valid_until}, Tokens: {tokens}"
                 )
             except InvalidToken:
                 print(
@@ -457,10 +457,10 @@ def print_stored_keys() -> None:
 
     print("Stored API keys:")
     for username, encrypted_key in users:
-        print(f"Username: {username}, Encrypted key: {encrypted_key}")
+        print(f"Username: {username}, Key stored: yes")
         try:
-            decrypted_key = get_cipher_suite().decrypt(encrypted_key).decode()
-            print(f"  Decrypted key: {decrypted_key}")
+            get_cipher_suite().decrypt(encrypted_key).decode()
+            print("  Decrypted key: available")
         except Exception as e:
             print(f"  Error decrypting key: {str(e)}")
 

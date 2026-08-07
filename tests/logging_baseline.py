@@ -31,7 +31,4 @@ Key: (invariant, posix_relative_path, enclosing_function_name)
 Value: number of violations recorded at that key.
 """
 
-BASELINE: dict[tuple[str, str, str], int] = {
-    ("A5b", "infrastructure/database_pg.py", "list_users"): 1,
-    ("A5b", "infrastructure/database_pg.py", "print_stored_keys"): 2,
-}
+BASELINE: dict[tuple[str, str, str], int] = {}
