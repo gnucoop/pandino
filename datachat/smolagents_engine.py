@@ -184,9 +184,6 @@ class SmolagentsEngine(DataChatEngine):
     _max_steps: int = field(default=12, init=False, repr=False)
     _instructions: str = field(default="", init=False, repr=False)
 
-    _last_final_answer_check_passed: Optional[bool] = field(default=None, init=False, repr=False)
-    _last_final_kind: Optional[str] = field(default=None, init=False, repr=False)
-
     _final_answer_checks_supported: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -342,9 +339,6 @@ class SmolagentsEngine(DataChatEngine):
             )
             payload, passed, final_kind, reason = _coerce_final_payload(candidate)
 
-            self._last_final_answer_check_passed = passed
-            self._last_final_kind = final_kind
-
             runtime_logger.info(
                 "final_answer_check request_id=%s engine=smolagents user=%s passed=%s final_kind=%s reason=%s",
                 get_request_id(),
@@ -382,9 +376,6 @@ class SmolagentsEngine(DataChatEngine):
         return EngineBootstrapResult(suggested_questions_html=html)
 
     def chat(self, message: str) -> Any:
-        self._last_final_answer_check_passed = None
-        self._last_final_kind = None
-
         runtime_logger.info(
             "chat_start request_id=%s engine=smolagents user=%s message_len=%s",
             get_request_id(),
@@ -438,8 +429,7 @@ class SmolagentsEngine(DataChatEngine):
                 "text": safe_text or f"Nessun output finale valido prodotto dall'agente ({reason}).",
                 "format": "plain",
             }
-            self._last_final_answer_check_passed = False
-            self._last_final_kind = None
+            final_kind = None
 
         runtime_logger.info(
             "chat_end request_id=%s engine=smolagents user=%s duration_ms=%s response_kind=%s final_answer_check_passed=%s final_kind=%s",
@@ -447,8 +437,8 @@ class SmolagentsEngine(DataChatEngine):
             self.user_name,
             self._last_run_duration_ms,
             result_payload.get("kind"),
-            bool(self._last_final_answer_check_passed),
-            self._last_final_kind or "none",
+            bool(passed),
+            final_kind or "none",
         )
         return result_payload
 
