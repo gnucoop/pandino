@@ -15,6 +15,7 @@ import pytest
 
 from utils.logging_config import (
     CONTEXT_UNSET,
+    THIRD_PARTY_LOG_LEVELS,
     _app_id_var,
     _HANDLER_MARKER,
     _request_id_var,
@@ -46,7 +47,10 @@ def _discard(handlers):
 def restore_logging_state():
     """Snapshot and restore every logger this module touches."""
     root = logging.getLogger()
-    named = {name: logging.getLogger(name) for name in ("agent_runs", "datachat.runtime")}
+    named = {
+        name: logging.getLogger(name)
+        for name in ("agent_runs", "datachat.runtime", *THIRD_PARTY_LOG_LEVELS)
+    }
 
     saved_root = (list(root.handlers), root.level)
     saved_named = {
@@ -169,6 +173,58 @@ def test_bootstrap_is_idempotent(agent_runs_env):
         bootstrap_logging()
 
     assert len(_marker_handlers()) == 1
+    for name, level in THIRD_PARTY_LOG_LEVELS.items():
+        assert logging.getLogger(name).level == level
+
+
+# --------------------------------------------------------------------------
+# Third-party logger boundary
+# --------------------------------------------------------------------------
+
+
+def test_third_party_namespaces_are_explicitly_pinned(agent_runs_env):
+    """Levels come from Maui's own config, not inheritance from root."""
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        bootstrap_logging()
+
+    for name, level in THIRD_PARTY_LOG_LEVELS.items():
+        third_party_logger = logging.getLogger(name)
+        assert third_party_logger.level == level
+        # NOTSET would mean "inherits from root" rather than "Maui-owned".
+        assert third_party_logger.level != logging.NOTSET
+
+
+def test_root_info_does_not_expose_third_party_info(agent_runs_env):
+    stream = io.StringIO()
+    with patch.dict(os.environ, agent_runs_env(LOG_LEVEL="INFO"), clear=True):
+        bootstrap_logging()
+        _marker_handlers()[0].setStream(stream)
+        for name in THIRD_PARTY_LOG_LEVELS:
+            logging.getLogger(name).info("THIRDPARTY_INFO_MARKER")
+
+    assert "THIRDPARTY_INFO_MARKER" not in stream.getvalue()
+
+
+def test_third_party_warning_still_reaches_root(agent_runs_env):
+    stream = io.StringIO()
+    with patch.dict(os.environ, agent_runs_env(LOG_LEVEL="INFO"), clear=True):
+        bootstrap_logging()
+        _marker_handlers()[0].setStream(stream)
+        for name in THIRD_PARTY_LOG_LEVELS:
+            logging.getLogger(name).warning("THIRDPARTY_WARNING_MARKER")
+
+    output = stream.getvalue()
+    assert output.count("THIRDPARTY_WARNING_MARKER") == len(THIRD_PARTY_LOG_LEVELS)
+
+
+def test_maui_info_still_reaches_root_when_configured(agent_runs_env):
+    stream = io.StringIO()
+    with patch.dict(os.environ, agent_runs_env(LOG_LEVEL="INFO"), clear=True):
+        bootstrap_logging()
+        _marker_handlers()[0].setStream(stream)
+        logging.getLogger("some.maui.module").info("MAUI_INFO_MARKER")
+
+    assert "MAUI_INFO_MARKER" in stream.getvalue()
 
 
 # --------------------------------------------------------------------------

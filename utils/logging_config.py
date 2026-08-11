@@ -57,6 +57,18 @@ _ALLOWED_LEVELS = {
     "CRITICAL": logging.CRITICAL,
 }
 
+#: Third-party logger namespaces verified to (a) propagate to root and (b)
+#: emit INFO records on a Maui-reachable path, kept at WARNING so raising
+#: root's threshold to INFO exposes only Maui-owned events. ``getLogger``
+#: creates/returns the named logger whether or not the owning package has
+#: been imported yet, so pinning here is independent of import order -
+#: including httpx, which Maui loads (via langchain_openai) before the
+#: lazy litellm import that would otherwise suppress it as a side effect.
+THIRD_PARTY_LOG_LEVELS = {
+    "LiteLLM": logging.WARNING,
+    "httpx": logging.WARNING,
+}
+
 LOG_FORMAT = (
     "%(asctime)s %(levelname)s %(name)s "
     "request_id=%(request_id)s app_id=%(app_id)s %(message)s"
@@ -253,6 +265,11 @@ def bootstrap_logging() -> logging.Logger:
 
     if level_warning:
         logger.warning("event=log_level_resolution_fallback detail=%s", level_warning)
+
+    # --- Third-party boundary: independent of root's own level, so it
+    # constrains these namespaces even while root sits at WARNING today.
+    for name, third_party_level in THIRD_PARTY_LOG_LEVELS.items():
+        logging.getLogger(name).setLevel(third_party_level)
 
     # --- Audit channel: FileHandler opens eagerly, so the parent directory
     # must exist first. It is gitignored and created by nothing in the image.

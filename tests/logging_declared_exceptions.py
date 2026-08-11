@@ -108,6 +108,45 @@ DECLARED_EXCEPTIONS: dict[tuple[str, str, str], tuple[int, str]] = {
         "logger via the chained call is the point of the test, not a "
         "production emission awaiting migration.",
     ),
+    (
+        "A1b-chained",
+        "tests/test_logging_config.py",
+        "test_root_info_does_not_expose_third_party_info",
+    ): (
+        1,
+        "This test deliberately calls logging.getLogger(<third-party "
+        "namespace>).info(...) in chained form to prove the third-party "
+        "logger boundary filters INFO under the actual namespaces being "
+        "governed, not a Maui module logger; the chained call on the "
+        "third-party name is the point of the test, not a production "
+        "emission awaiting migration.",
+    ),
+    (
+        "A1b-chained",
+        "tests/test_logging_config.py",
+        "test_third_party_warning_still_reaches_root",
+    ): (
+        1,
+        "This test deliberately calls logging.getLogger(<third-party "
+        "namespace>).warning(...) in chained form to prove the third-party "
+        "logger boundary still lets WARNING through under the actual "
+        "namespaces being governed, not a Maui module logger; the chained "
+        "call on the third-party name is the point of the test, not a "
+        "production emission awaiting migration.",
+    ),
+    (
+        "A1b-chained",
+        "tests/test_logging_config.py",
+        "test_maui_info_still_reaches_root_when_configured",
+    ): (
+        1,
+        "This test deliberately calls "
+        "logging.getLogger(<arbitrary non-module name>).info(...) in "
+        "chained form to prove Maui-owned INFO still reaches root "
+        "alongside the third-party boundary; using a non-module logger via "
+        "the chained call is the point of the test, not a production "
+        "emission awaiting migration.",
+    ),
     ("A5c", "infrastructure/database_pg.py", "init_db"): (
         2,
         "These print() calls report progress of a command run by hand from "
