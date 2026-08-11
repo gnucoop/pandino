@@ -172,8 +172,7 @@ def agentchat() -> Response | tuple[Response, int]:
         token_cost = config.completion_token_cost
 
         logger.info(
-            "event=agentchat_request_started user=%s namespace=%s language=%s",
-            r["username"],
+            "event=agentchat_request_started namespace=%s language=%s",
             namespace,
             language,
         )
@@ -240,9 +239,8 @@ def agentchat() -> Response | tuple[Response, int]:
             edit_tokens(r["username"], -token_cost)
 
         logger.info(
-            "event=agentchat_request_completed user=%s duration_ms=%s "
+            "event=agentchat_request_completed duration_ms=%s "
             "tools=%s vectors=%s follow_ups=%s",
-            r["username"],
             duration_ms,
             len(payload.get("tool_calls", [])),
             len(payload.get("vectors", [])),

@@ -122,9 +122,8 @@ def startChat() -> Response | tuple[Response, int]:
 
         # Language-aware prompt generation
         logger.info(
-            "event=datachat_engine_bootstrap_started language=%s user=%s",
+            "event=datachat_engine_bootstrap_started language=%s",
             lang,
-            user_email,
         )
 
         bootstrap = engine.bootstrap(lang)
