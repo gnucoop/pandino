@@ -204,8 +204,7 @@ def describe_image(
     :raises Exception: If the model invocation fails.
     """
     logger.info(
-        "event=image_description_started url=%s provider=%s model=%s",
-        url,
+        "event=image_description_started provider=%s model=%s",
         provider,
         model,
     )
