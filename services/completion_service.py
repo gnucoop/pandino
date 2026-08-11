@@ -102,7 +102,7 @@ def complete_chat(
         raise RuntimeError("No question found in chat history.")
 
     logger.info("event=completion_started llm_type=%s model=%s", llm_type, model)
-    logger.info("event=completion_question_received question=%s", question)
+    logger.info("event=completion_question_received")
 
     vectors: list[dict[str, Any]] = []
 
