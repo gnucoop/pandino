@@ -161,6 +161,33 @@ def build_check_table_exists_query(
     return query, params
 
 
+def build_check_column_exists_query(
+    table_schema: str,
+    table_name: str,
+    column_name: str,
+) -> Tuple[sql.SQL, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to check whether a column exists on a given table.
+
+    :param table_schema: Schema name.
+    :param table_name: Table name.
+    :param column_name: Column name.
+    :return: Tuple with SQL query and parameters.
+    """
+    query = sql.SQL(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = %s
+          AND table_name = %s
+          AND column_name = %s
+        LIMIT 1
+        """
+    )
+    params = (table_schema, table_name, column_name)
+    return query, params
+
+
 def build_check_pgvector_maui_id_exists_query(
     table_name: str,
     maui_id: str,

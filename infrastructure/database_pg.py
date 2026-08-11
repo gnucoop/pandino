@@ -51,6 +51,7 @@ from infrastructure.database_methods import (
     build_get_total_users_count_query,
     build_check_pgvector_maui_id_exists_query,
     build_check_table_exists_query,
+    build_check_column_exists_query,
     build_insert_rag_file_query,
     build_get_all_rag_files_query,
     build_get_rag_file_for_delete_query,
@@ -674,6 +675,21 @@ def table_exists(table_schema: str, table_name: str) -> bool:
         return cursor.fetchone() is not None
     except Exception as e:
         logger.exception("event=table_exists_check_failed")
+        return False
+    finally:
+        conn.close()
+
+
+def column_exists(table_schema: str, table_name: str, column_name: str) -> bool:
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_check_column_exists_query(table_schema, table_name, column_name)
+        cursor.execute(query, params)
+        return cursor.fetchone() is not None
+    except Exception:
+        logger.exception("event=column_exists_check_failed")
         return False
     finally:
         conn.close()
