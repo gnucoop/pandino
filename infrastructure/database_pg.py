@@ -478,6 +478,7 @@ def log_token_usage(
     model: str,
     provider: str,
     service: str,
+    request_id: str,
 ) -> int:
     """
     Logs token usage for a user by calculating the cost based on input and output tokens,
@@ -489,6 +490,7 @@ def log_token_usage(
     :param model: The model used for token processing.
     :param provider: The provider of the model.
     :param service: The HTTP endpoint that produced this usage.
+    :param request_id: The canonical HTTP request id of the request that produced this usage.
     :return: The ID of the inserted log record.
     """
     conn = connect()
@@ -517,6 +519,7 @@ def log_token_usage(
         model,
         provider,
         service,
+        request_id,
     )
     cursor.execute(insert_query, insert_params)
 

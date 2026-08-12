@@ -9,6 +9,7 @@ from flask import Flask
 from werkzeug.datastructures import MultiDict
 
 from routes import documents as documents_route
+from utils.logging_config import register_request_context_hooks
 
 
 def _make_app() -> Flask:
@@ -22,6 +23,7 @@ def _make_app() -> Flask:
             vision_model="vision-ocr-model",
         ),
     )
+    register_request_context_hooks(app)
     app.register_blueprint(documents_route.documents_bp)
     return app
 
@@ -214,6 +216,7 @@ def test_compare_docs_uses_document_extraction_service_and_preserves_response(
             "model": "gemini-2.5-flash",
             "provider": "Google",
             "service": "/compare_docs",
+            "request_id": response.headers["X-Request-ID"],
         }
     ]
     assert edit_calls == [("user@example.com", -1)]
@@ -299,6 +302,7 @@ def test_compare_docs_with_zero_ocr_usage_logs_comparison_usage_once(monkeypatch
             "model": "gemini-2.5-flash",
             "provider": "Google",
             "service": "/compare_docs",
+            "request_id": response.headers["X-Request-ID"],
         }
     ]
     assert edit_calls == [("user@example.com", -1)]

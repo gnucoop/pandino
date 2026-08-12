@@ -5,6 +5,7 @@ from typing import TypedDict
 from flask import Blueprint, jsonify, request, current_app
 from config import PROVIDER_API_KEY_MAP
 from infrastructure.database_pg import edit_tokens, log_token_usage
+from utils.logging_config import get_request_id
 import infrastructure.database_pg as database_pg
 from services.document_comparison_service import (
     CONTEXT_WINDOW_ERROR_MESSAGE,
@@ -212,6 +213,7 @@ def compare_docs():
                 model=model,
                 provider=llm_type,
                 service="/compare_docs",
+                request_id=get_request_id(),
             )
 
         except Exception as error:

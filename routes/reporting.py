@@ -8,6 +8,7 @@ from infrastructure.database_pg import (
     log_token_usage,
     get_user_by_username,
 )
+from utils.logging_config import get_request_id
 import infrastructure.database_pg as database_pg
 from services.prompt_service import reply_to_prompt
 from routes.utils import assert_valid_api_key
@@ -69,6 +70,7 @@ def prompt_handler():
             model=model_name,
             provider=llm_type,
             service="/prompt.txt",
+            request_id=get_request_id(),
         )
 
     edit_tokens(username, -token_cost)

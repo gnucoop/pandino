@@ -7,6 +7,7 @@ from flask import Blueprint, Response, current_app, jsonify, request
 
 import infrastructure.database_pg as database_pg
 from infrastructure.database_pg import edit_tokens, get_user_by_username, log_token_usage
+from utils.logging_config import get_request_id
 from infrastructure.ai import choose_emb_model
 from infrastructure.vector_store import MauiVectorStore
 from services.completion_service import complete_chat, CompletionRequest
@@ -106,6 +107,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
                         model=model,
                         provider=llm_type,
                         service="/completion.json",
+                        request_id=get_request_id(),
                     )
 
             if resp["vectors"]:
@@ -229,6 +231,7 @@ def agentchat() -> Response | tuple[Response, int]:
                 model=model,
                 provider=provider,
                 service="/agentchat",
+                request_id=get_request_id(),
             )
 
         except Exception as e:

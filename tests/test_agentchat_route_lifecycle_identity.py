@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from flask import Flask
 
 from routes import rag as rag_route
+from utils.logging_config import register_request_context_hooks
 
 DISTINCTIVE_USERNAME = "distinctive-user@example.com"
 
@@ -25,6 +26,7 @@ def _make_app():
         rag=SimpleNamespace(default_namespace="default-ns"),
         completion_token_cost=1,
     )
+    register_request_context_hooks(app)
     app.register_blueprint(rag_route.rag_bp)
     return app
 
@@ -130,6 +132,7 @@ def test_log_token_usage_receives_agentchat_service_literal(monkeypatch):
     log_calls = captured["log_token_usage_calls"]
     assert len(log_calls) == 1
     assert log_calls[0]["service"] == "/agentchat"
+    assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]
 
 
 def test_username_still_reaches_business_operations(monkeypatch, caplog):

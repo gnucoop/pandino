@@ -7,6 +7,8 @@ tests/test_datachat_route_request_id.py, tests/test_agentchat_route_lifecycle_id
 and tests/test_documents_route.py respectively.
 """
 
+import ast
+from pathlib import Path
 from types import SimpleNamespace
 
 from flask import Flask
@@ -14,6 +16,36 @@ from flask import Flask
 from routes import multimodal as multimodal_route
 from routes import reporting as reporting_route
 from routes import rag as rag_route
+from utils.logging_config import register_request_context_hooks
+
+_ROUTES_DIR = Path(__file__).resolve().parent.parent / "routes"
+
+
+def _find_log_token_usage_calls():
+    """Return every ast.Call node invoking log_token_usage() across routes/*.py."""
+    calls = []
+    for path in sorted(_ROUTES_DIR.glob("*.py")):
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "log_token_usage"
+            ):
+                calls.append((path.name, node))
+    return calls
+
+
+def test_exactly_six_production_log_token_usage_call_sites_pass_request_id():
+    calls = _find_log_token_usage_calls()
+
+    assert len(calls) == 6
+
+    for filename, call in calls:
+        keywords = {kw.arg for kw in call.keywords}
+        assert "request_id" in keywords, (
+            f"log_token_usage() call in {filename} is missing request_id="
+        )
 
 
 def test_audio_form_compile_logs_usage_with_audioformcompilation_service(monkeypatch):
@@ -22,6 +54,7 @@ def test_audio_form_compile_logs_usage_with_audioformcompilation_service(monkeyp
         audio_form_token_cost="1",
         models=SimpleNamespace(audio_model="test-model", audio_provider="test-provider"),
     )
+    register_request_context_hooks(app)
     app.register_blueprint(multimodal_route.multimodal_bp)
 
     log_calls = []
@@ -67,6 +100,7 @@ def test_audio_form_compile_logs_usage_with_audioformcompilation_service(monkeyp
     assert response.status_code == 200
     assert len(log_calls) == 1
     assert log_calls[0]["service"] == "/audioformcompilation"
+    assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]
 
 
 def test_prompt_handler_logs_usage_with_prompt_txt_service(monkeypatch):
@@ -75,6 +109,7 @@ def test_prompt_handler_logs_usage_with_prompt_txt_service(monkeypatch):
         prompt_token_cost=1,
         models=SimpleNamespace(prompt_provider="test-provider", prompt_model="test-model"),
     )
+    register_request_context_hooks(app)
     app.register_blueprint(reporting_route.reporting_bp)
 
     log_calls = []
@@ -110,6 +145,7 @@ def test_prompt_handler_logs_usage_with_prompt_txt_service(monkeypatch):
     assert response.status_code == 200
     assert len(log_calls) == 1
     assert log_calls[0]["service"] == "/prompt.txt"
+    assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]
 
 
 def test_completion_handler_logs_usage_with_completion_json_service(monkeypatch):
@@ -124,6 +160,7 @@ def test_completion_handler_logs_usage_with_completion_json_service(monkeypatch)
             completion_embedding_model="test-emb-model",
         ),
     )
+    register_request_context_hooks(app)
     app.register_blueprint(rag_route.rag_bp)
 
     log_calls = []
@@ -160,3 +197,4 @@ def test_completion_handler_logs_usage_with_completion_json_service(monkeypatch)
     assert response.status_code == 200
     assert len(log_calls) == 1
     assert log_calls[0]["service"] == "/completion.json"
+    assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]

@@ -260,6 +260,7 @@ def test_log_token_usage_receives_datachat_service_literal(monkeypatch):
     assert response.status_code == 200
     assert len(log_calls) == 1
     assert log_calls[0]["service"] == "/datachat"
+    assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]
 
 
 def test_agent_runs_extra_has_channel_and_response_kind_but_not_request_id(monkeypatch):

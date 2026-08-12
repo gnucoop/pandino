@@ -10,6 +10,7 @@ from services.document_text_service import extract_and_normalize_document, Docum
 import infrastructure.database_pg as database_pg
 from infrastructure.ai import describe_image, asr_response
 from infrastructure.database_pg import edit_tokens, log_token_usage
+from utils.logging_config import get_request_id
 from services.audio_form_service import audioFormCompilation, audioFormPromptBuild
 from routes.utils import assert_valid_api_key
 
@@ -203,6 +204,7 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
             model=model_name,
             provider=llm_type,
             service="/audioformcompilation",
+            request_id=get_request_id(),
         )
 
     edit_tokens(user_email, -token_cost)
