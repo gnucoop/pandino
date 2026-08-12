@@ -188,6 +188,32 @@ def build_check_column_exists_query(
     return query, params
 
 
+def build_add_column_query(
+    table_schema: str,
+    table_name: str,
+    column_name: str,
+    column_type_sql: sql.SQL,
+) -> Tuple[sql.Composed, Tuple[()]]:
+    """
+    Builds a SQL query to add a new column to an existing table.
+
+    :param table_schema: Schema name.
+    :param table_name: Table name.
+    :param column_name: Name of the column to add.
+    :param column_type_sql: Pre-validated sql.SQL fragment for the column
+        type/definition (e.g. sql.SQL("TEXT")). Callers must resolve this
+        from a fixed allow-list rather than passing a raw string, so this
+        function never builds an unrestricted DDL injection surface.
+    :return: Tuple with SQL query and empty parameter tuple.
+    """
+    query = sql.SQL("ALTER TABLE {table} ADD COLUMN {column} {type}").format(
+        table=sql.Identifier(table_schema, table_name),
+        column=sql.Identifier(column_name),
+        type=column_type_sql,
+    )
+    return query, ()
+
+
 def build_check_pgvector_maui_id_exists_query(
     table_name: str,
     maui_id: str,

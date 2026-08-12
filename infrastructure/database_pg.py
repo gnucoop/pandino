@@ -5,6 +5,7 @@ from cryptography.fernet import Fernet, InvalidToken
 import os
 import base64
 from datetime import datetime, timedelta
+from enum import Enum
 from typing import Optional, Tuple, Dict, Any
 import logging
 import pandas as pd
@@ -52,6 +53,7 @@ from infrastructure.database_methods import (
     build_check_pgvector_maui_id_exists_query,
     build_check_table_exists_query,
     build_check_column_exists_query,
+    build_add_column_query,
     build_insert_rag_file_query,
     build_get_all_rag_files_query,
     build_get_rag_file_for_delete_query,
@@ -692,6 +694,117 @@ def column_exists(table_schema: str, table_name: str, column_name: str) -> bool:
         logger.exception("event=column_exists_check_failed")
         return False
     finally:
+        conn.close()
+
+
+class SchemaChangeResult(Enum):
+    """Outcome of a safe additive schema change, distinguishing a no-op
+    from an applied change from a failure the caller must not treat as
+    success."""
+
+    CHANGED = "changed"
+    UNCHANGED = "unchanged"
+    FAILED = "failed"
+
+
+# Fixed allow-list of column type/definition fragments. add_column_if_missing()
+# only accepts a key from this map, never a raw type string, so it cannot be
+# used as an unrestricted DDL injection surface.
+_ALLOWED_COLUMN_TYPES: Dict[str, sql.SQL] = {
+    "TEXT": sql.SQL("TEXT"),
+    "INTEGER": sql.SQL("INTEGER"),
+}
+
+
+def _column_exists_strict(cursor, table_schema: str, table_name: str, column_name: str) -> bool:
+    """
+    Strict column-existence check for use inside schema-mutation control flow.
+
+    Unlike column_exists(), this does not catch exceptions: a failed
+    inspection must propagate to the caller instead of being collapsed into
+    "column absent", because that ambiguity is exactly what would let a
+    failed inspection incorrectly authorize an ALTER TABLE.
+    """
+    query, params = build_check_column_exists_query(table_schema, table_name, column_name)
+    cursor.execute(query, params)
+    return cursor.fetchone() is not None
+
+
+def add_column_if_missing(
+    table_schema: str, table_name: str, column_name: str, column_type: str
+) -> SchemaChangeResult:
+    """
+    Adds a column to an existing table, only when its absence has been
+    positively established. Fails closed: if the pre-DDL inspection cannot
+    establish that the column is absent, no ALTER TABLE is executed.
+
+    :param table_schema: Schema name.
+    :param table_name: Table name.
+    :param column_name: Name of the column to add.
+    :param column_type: Key into the fixed allow-list of supported column
+        type/definition fragments (see _ALLOWED_COLUMN_TYPES).
+    :return: SchemaChangeResult.UNCHANGED if the column already existed,
+        CHANGED if it was added and verified, FAILED if inspection, DDL, or
+        post-DDL verification did not succeed.
+    """
+    if column_type not in _ALLOWED_COLUMN_TYPES:
+        raise ValueError(f"Unsupported column type: {column_type}")
+
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        try:
+            already_exists = _column_exists_strict(cursor, table_schema, table_name, column_name)
+        except Exception:
+            logger.exception(
+                "event=add_column_if_missing_inspection_failed table=%s column=%s",
+                table_name,
+                column_name,
+            )
+            return SchemaChangeResult.FAILED
+
+        if already_exists:
+            return SchemaChangeResult.UNCHANGED
+
+        try:
+            query, params = build_add_column_query(
+                table_schema, table_name, column_name, _ALLOWED_COLUMN_TYPES[column_type]
+            )
+            cursor.execute(query, params)
+        except Exception:
+            conn.rollback()
+            logger.exception(
+                "event=add_column_if_missing_ddl_failed table=%s column=%s",
+                table_name,
+                column_name,
+            )
+            return SchemaChangeResult.FAILED
+
+        try:
+            added = _column_exists_strict(cursor, table_schema, table_name, column_name)
+        except Exception:
+            conn.rollback()
+            logger.exception(
+                "event=add_column_if_missing_verification_failed table=%s column=%s",
+                table_name,
+                column_name,
+            )
+            return SchemaChangeResult.FAILED
+
+        if not added:
+            conn.rollback()
+            logger.error(
+                "event=add_column_if_missing_verification_mismatch table=%s column=%s",
+                table_name,
+                column_name,
+            )
+            return SchemaChangeResult.FAILED
+
+        conn.commit()
+        return SchemaChangeResult.CHANGED
+    finally:
+        cursor.close()
         conn.close()
 
 
