@@ -10,7 +10,7 @@ from typing import Optional, Tuple, Dict, Any
 import logging
 import pandas as pd
 
-from config import AppConfig
+from config import AppConfig, load_config
 from infrastructure.database_methods import (
     build_get_user_by_username_query,
     build_add_user_query,
@@ -1762,27 +1762,60 @@ def print_help():
     print("  print_keys                  Print all stored API keys")
 
 
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "init_db":
-            init_db()
-        elif sys.argv[1] == "add_user" and len(sys.argv) == 4:
-            username, api_key = sys.argv[2], sys.argv[3]
-            add_user(username, api_key)
-        elif sys.argv[1] == "remove_user" and len(sys.argv) == 3:
-            username = sys.argv[2]
-            remove_user(username)
-        elif sys.argv[1] == "get_user_by_username" and len(sys.argv) == 3:
-            user_name = sys.argv[2]
-            get_user_by_username(user_name)
-        elif sys.argv[1] == "edit_tokens" and len(sys.argv) == 4:
-            username, tokens_quantity = sys.argv[2], int(sys.argv[3])
-            edit_tokens(username, tokens_quantity)
-        elif sys.argv[1] == "list_users":
-            list_users()
-        elif sys.argv[1] == "print_keys":
-            print_stored_keys()
-        else:
-            print_help()
-    else:
+def _resolve_cli_command(argv: list[str]):
+    """
+    Validate argv against the known CLI commands and their expected argument
+    counts, without executing anything.
+
+    :return: A zero-argument callable that runs the selected command when
+        invoked, or None if argv does not match any known command with the
+        right argument count (help should be shown, no DB init required).
+    """
+    if len(argv) <= 1:
+        return None
+
+    command = argv[1]
+
+    if command == "init_db":
+        return init_db
+    if command == "add_user" and len(argv) == 4:
+        username, api_key = argv[2], argv[3]
+        return lambda: add_user(username, api_key)
+    if command == "remove_user" and len(argv) == 3:
+        username = argv[2]
+        return lambda: remove_user(username)
+    if command == "get_user_by_username" and len(argv) == 3:
+        user_name = argv[2]
+        return lambda: get_user_by_username(user_name)
+    if command == "edit_tokens" and len(argv) == 4:
+        username, tokens_quantity = argv[2], int(argv[3])
+        return lambda: edit_tokens(username, tokens_quantity)
+    if command == "list_users":
+        return list_users
+    if command == "print_keys":
+        return print_stored_keys
+
+    return None
+
+
+def run_cli(argv: list[str]) -> None:
+    """
+    CLI entry point for direct script invocation.
+
+    Validates the requested command and its argument count first; only a
+    syntactically valid, known DB command triggers configuration loading and
+    database_pg initialization. Help and invalid invocations never touch
+    load_config()/init(), so they don't require DB credentials or
+    ENCRYPTION_KEY to be set.
+    """
+    command = _resolve_cli_command(argv)
+    if command is None:
         print_help()
+        return
+
+    init(load_config())
+    command()
+
+
+if __name__ == "__main__":
+    run_cli(sys.argv)
