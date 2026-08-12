@@ -134,7 +134,8 @@ def init_db():
             cost REAL NOT NULL,
             model TEXT NOT NULL,
             provider TEXT NOT NULL,
-            service TEXT
+            service TEXT,
+            request_id TEXT
         );
         CREATE TABLE IF NOT EXISTS costs (
             id SERIAL PRIMARY KEY,
@@ -837,6 +838,32 @@ def add_usage_service_column() -> None:
         print("logs.service already present, no change needed.")
     else:
         raise RuntimeError("Failed to add logs.service column.")
+
+
+def add_usage_request_id_column() -> None:
+    """
+    Governed, application-owned schema operation for the Usage request_id
+    schema evolution: adds the nullable 'request_id' column to the existing
+    'logs' table if it is not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / logs / request_id / TEXT. This is the only
+    sanctioned way to reach add_column_if_missing() for this change; it does
+    not accept schema/table/column/type parameters, so it cannot be used to
+    mutate an arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "logs", "request_id", "TEXT")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("logs.request_id added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("logs.request_id already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add logs.request_id column.")
 
 
 def pgvector_maui_id_exists(table_name: str, maui_id: str) -> bool:
@@ -1794,6 +1821,7 @@ def print_help():
     print("  list_users                  List all users")
     print("  print_keys                  Print all stored API keys")
     print("  add_usage_service_column    Add the nullable logs.service column if missing")
+    print("  add_usage_request_id_column Add the nullable logs.request_id column if missing")
 
 
 def _resolve_cli_command(argv: list[str]):
@@ -1830,6 +1858,8 @@ def _resolve_cli_command(argv: list[str]):
         return print_stored_keys
     if command == "add_usage_service_column" and len(argv) == 2:
         return add_usage_service_column
+    if command == "add_usage_request_id_column" and len(argv) == 2:
+        return add_usage_request_id_column
 
     return None
 
