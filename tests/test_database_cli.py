@@ -147,3 +147,31 @@ def test_add_usage_request_id_column_rejects_unexpected_argument(monkeypatch):
     database_pg.run_cli(["database_pg.py", "add_usage_request_id_column", "foo"])
 
     assert events == ["print_help"]
+
+
+def test_add_usage_duration_ms_column_initializes_before_execution(monkeypatch):
+    events = []
+
+    fake_config = object()
+    monkeypatch.setattr(database_pg, "load_dotenv", lambda: events.append("load_dotenv"))
+    monkeypatch.setattr(database_pg, "load_config", lambda: (events.append("load_config"), fake_config)[1])
+    monkeypatch.setattr(database_pg, "init", lambda config: events.append(("init", config)))
+    monkeypatch.setattr(database_pg, "add_usage_duration_ms_column", lambda: events.append("add_usage_duration_ms_column"))
+
+    database_pg.run_cli(["database_pg.py", "add_usage_duration_ms_column"])
+
+    assert events == ["load_dotenv", "load_config", ("init", fake_config), "add_usage_duration_ms_column"]
+
+
+def test_add_usage_duration_ms_column_rejects_unexpected_argument(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(database_pg, "load_dotenv", lambda: events.append("load_dotenv"))
+    monkeypatch.setattr(database_pg, "load_config", lambda: events.append("load_config"))
+    monkeypatch.setattr(database_pg, "init", lambda config: events.append("init"))
+    monkeypatch.setattr(database_pg, "print_help", lambda: events.append("print_help"))
+    monkeypatch.setattr(database_pg, "add_usage_duration_ms_column", lambda: events.append("add_usage_duration_ms_column"))
+
+    database_pg.run_cli(["database_pg.py", "add_usage_duration_ms_column", "foo"])
+
+    assert events == ["print_help"]

@@ -135,7 +135,8 @@ def init_db():
             model TEXT NOT NULL,
             provider TEXT NOT NULL,
             service TEXT,
-            request_id TEXT
+            request_id TEXT,
+            duration_ms INTEGER
         );
         CREATE TABLE IF NOT EXISTS costs (
             id SERIAL PRIMARY KEY,
@@ -867,6 +868,32 @@ def add_usage_request_id_column() -> None:
         print("logs.request_id already present, no change needed.")
     else:
         raise RuntimeError("Failed to add logs.request_id column.")
+
+
+def add_usage_duration_ms_column() -> None:
+    """
+    Governed, application-owned schema operation for the Usage duration_ms
+    schema evolution: adds the nullable 'duration_ms' column to the existing
+    'logs' table if it is not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / logs / duration_ms / INTEGER. This is the only
+    sanctioned way to reach add_column_if_missing() for this change; it does
+    not accept schema/table/column/type parameters, so it cannot be used to
+    mutate an arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "logs", "duration_ms", "INTEGER")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("logs.duration_ms added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("logs.duration_ms already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add logs.duration_ms column.")
 
 
 def pgvector_maui_id_exists(table_name: str, maui_id: str) -> bool:
@@ -1825,6 +1852,7 @@ def print_help():
     print("  print_keys                  Print all stored API keys")
     print("  add_usage_service_column    Add the nullable logs.service column if missing")
     print("  add_usage_request_id_column Add the nullable logs.request_id column if missing")
+    print("  add_usage_duration_ms_column Add the nullable logs.duration_ms column if missing")
 
 
 def _resolve_cli_command(argv: list[str]):
@@ -1863,6 +1891,8 @@ def _resolve_cli_command(argv: list[str]):
         return add_usage_service_column
     if command == "add_usage_request_id_column" and len(argv) == 2:
         return add_usage_request_id_column
+    if command == "add_usage_duration_ms_column" and len(argv) == 2:
+        return add_usage_duration_ms_column
 
     return None
 
