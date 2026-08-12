@@ -83,3 +83,29 @@ def test_argument_forwarding_for_command_with_args(monkeypatch):
     database_pg.run_cli(["database_pg.py", "add_user", "alice", "secret-key"])
 
     assert events == [("alice", "secret-key")]
+
+
+def test_add_usage_service_column_initializes_before_execution(monkeypatch):
+    events = []
+
+    fake_config = object()
+    monkeypatch.setattr(database_pg, "load_config", lambda: (events.append("load_config"), fake_config)[1])
+    monkeypatch.setattr(database_pg, "init", lambda config: events.append(("init", config)))
+    monkeypatch.setattr(database_pg, "add_usage_service_column", lambda: events.append("add_usage_service_column"))
+
+    database_pg.run_cli(["database_pg.py", "add_usage_service_column"])
+
+    assert events == ["load_config", ("init", fake_config), "add_usage_service_column"]
+
+
+def test_add_usage_service_column_rejects_unexpected_argument(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(database_pg, "load_config", lambda: events.append("load_config"))
+    monkeypatch.setattr(database_pg, "init", lambda config: events.append("init"))
+    monkeypatch.setattr(database_pg, "print_help", lambda: events.append("print_help"))
+    monkeypatch.setattr(database_pg, "add_usage_service_column", lambda: events.append("add_usage_service_column"))
+
+    database_pg.run_cli(["database_pg.py", "add_usage_service_column", "foo"])
+
+    assert events == ["print_help"]

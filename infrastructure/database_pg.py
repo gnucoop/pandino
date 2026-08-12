@@ -132,7 +132,8 @@ def init_db():
             token_output INTEGER NOT NULL,
             cost REAL NOT NULL,
             model TEXT NOT NULL,
-            provider TEXT NOT NULL
+            provider TEXT NOT NULL,
+            service TEXT
         );
         CREATE TABLE IF NOT EXISTS costs (
             id SERIAL PRIMARY KEY,
@@ -806,6 +807,32 @@ def add_column_if_missing(
     finally:
         cursor.close()
         conn.close()
+
+
+def add_usage_service_column() -> None:
+    """
+    Governed, application-owned schema operation for the first Usage Service
+    schema evolution: adds the nullable 'service' column to the existing
+    'logs' table if it is not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / logs / service / TEXT. This is the only sanctioned
+    way to reach add_column_if_missing() for this change; it does not accept
+    schema/table/column/type parameters, so it cannot be used to mutate an
+    arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "logs", "service", "TEXT")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("logs.service added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("logs.service already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add logs.service column.")
 
 
 def pgvector_maui_id_exists(table_name: str, maui_id: str) -> bool:
@@ -1760,6 +1787,7 @@ def print_help():
     )
     print("  list_users                  List all users")
     print("  print_keys                  Print all stored API keys")
+    print("  add_usage_service_column    Add the nullable logs.service column if missing")
 
 
 def _resolve_cli_command(argv: list[str]):
@@ -1794,6 +1822,8 @@ def _resolve_cli_command(argv: list[str]):
         return list_users
     if command == "print_keys":
         return print_stored_keys
+    if command == "add_usage_service_column" and len(argv) == 2:
+        return add_usage_service_column
 
     return None
 
