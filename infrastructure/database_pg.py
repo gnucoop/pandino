@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Optional, Tuple, Dict, Any
 import logging
 import pandas as pd
+from dotenv import load_dotenv
 
 from config import AppConfig, load_config
 from infrastructure.database_methods import (
@@ -1833,16 +1834,17 @@ def run_cli(argv: list[str]) -> None:
     CLI entry point for direct script invocation.
 
     Validates the requested command and its argument count first; only a
-    syntactically valid, known DB command triggers configuration loading and
-    database_pg initialization. Help and invalid invocations never touch
-    load_config()/init(), so they don't require DB credentials or
-    ENCRYPTION_KEY to be set.
+    syntactically valid, known DB command triggers .env loading,
+    configuration loading and database_pg initialization. Help and invalid
+    invocations never touch load_dotenv()/load_config()/init(), so they
+    don't require DB credentials or ENCRYPTION_KEY to be set.
     """
     command = _resolve_cli_command(argv)
     if command is None:
         print_help()
         return
 
+    load_dotenv()
     init(load_config())
     command()
 
