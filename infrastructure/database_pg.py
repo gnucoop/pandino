@@ -27,6 +27,7 @@ from infrastructure.database_methods import (
     build_get_total_tokens_query,
     build_get_logs_for_admin_query,
     build_update_user_tokens_query,
+    build_update_usage_duration_query,
     build_get_total_log_stats_query,
     build_get_daily_log_stats_query,
     build_get_top_users_by_token_usage_query,
@@ -1234,6 +1235,33 @@ def update_user_tokens(user_id, new_tokens):
         query, params = build_update_user_tokens_query(
             user_id, new_tokens, one_year_from_today
         )
+        cursor.execute(query, params)
+        conn.commit()
+
+        if cursor.rowcount > 0:
+            return True
+        else:
+            return False
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def update_usage_duration(log_id: int, duration_ms: int) -> bool:
+    """
+    Update the duration_ms field for a specific logs row.
+
+    :param log_id: ID of the log row to update.
+    :param duration_ms: New duration value, in milliseconds.
+    :return: True if a row was updated, False if no row matched log_id.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_update_usage_duration_query(log_id, duration_ms)
         cursor.execute(query, params)
         conn.commit()
 

@@ -580,6 +580,24 @@ def build_update_user_tokens_query(
     return query, (new_tokens, date_valid_until, user_id)
 
 
+def build_update_usage_duration_query(
+    log_id: int, duration_ms: int
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to update the duration_ms of a logs row.
+
+    :param log_id: ID of the log row to update.
+    :param duration_ms: New duration value, in milliseconds.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL("UPDATE {table} SET {duration_ms} = %s WHERE {id} = %s").format(
+        table=sql.Identifier("logs"),
+        duration_ms=sql.Identifier("duration_ms"),
+        id=sql.Identifier("id"),
+    )
+    return query, (duration_ms, log_id)
+
+
 def build_get_total_log_stats_query(
     start_date: Optional[str] = None, end_date: Optional[str] = None
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
