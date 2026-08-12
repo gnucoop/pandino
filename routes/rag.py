@@ -105,6 +105,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
                         token_output=token_out,
                         model=model,
                         provider=llm_type,
+                        service="/completion.json",
                     )
 
             if resp["vectors"]:
@@ -227,6 +228,7 @@ def agentchat() -> Response | tuple[Response, int]:
                 token_output=token_output,
                 model=model,
                 provider=provider,
+                service="/agentchat",
             )
 
         except Exception as e:

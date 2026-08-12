@@ -68,6 +68,7 @@ def prompt_handler():
             token_output=token_usage["output_tokens"],
             model=model_name,
             provider=llm_type,
+            service="/prompt.txt",
         )
 
     edit_tokens(username, -token_cost)

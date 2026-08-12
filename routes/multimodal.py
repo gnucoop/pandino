@@ -202,6 +202,7 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
             token_output=token_usage["output_tokens"],
             model=model_name,
             provider=llm_type,
+            service="/audioformcompilation",
         )
 
     edit_tokens(user_email, -token_cost)

@@ -59,7 +59,12 @@ def _patch_success_dependencies(monkeypatch, captured):
         return {"id": 7, "username": username}
 
     monkeypatch.setattr(rag_route, "get_user_by_username", fake_get_user_by_username)
-    monkeypatch.setattr(rag_route, "log_token_usage", lambda **kwargs: 999)
+
+    def fake_log_token_usage(**kwargs):
+        captured.setdefault("log_token_usage_calls", []).append(kwargs)
+        return 999
+
+    monkeypatch.setattr(rag_route, "log_token_usage", fake_log_token_usage)
 
     def fake_edit_tokens(username, amount):
         captured["edit_tokens_arg"] = username
@@ -112,6 +117,19 @@ def test_lifecycle_events_emitted_without_identity_but_with_technical_fields(
     for message in (started_message, completed_message):
         assert DISTINCTIVE_USERNAME not in message
         assert "user=" not in message
+
+
+def test_log_token_usage_receives_agentchat_service_literal(monkeypatch):
+    app = _make_app()
+    captured = {}
+    _patch_success_dependencies(monkeypatch, captured)
+
+    response = _post_agentchat(app.test_client())
+
+    assert response.status_code == 200
+    log_calls = captured["log_token_usage_calls"]
+    assert len(log_calls) == 1
+    assert log_calls[0]["service"] == "/agentchat"
 
 
 def test_username_still_reaches_business_operations(monkeypatch, caplog):

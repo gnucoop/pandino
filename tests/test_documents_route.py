@@ -213,6 +213,7 @@ def test_compare_docs_uses_document_extraction_service_and_preserves_response(
             "token_output": 12,
             "model": "gemini-2.5-flash",
             "provider": "Google",
+            "service": "/compare_docs",
         }
     ]
     assert edit_calls == [("user@example.com", -1)]
@@ -297,6 +298,7 @@ def test_compare_docs_with_zero_ocr_usage_logs_comparison_usage_once(monkeypatch
             "token_output": 6,
             "model": "gemini-2.5-flash",
             "provider": "Google",
+            "service": "/compare_docs",
         }
     ]
     assert edit_calls == [("user@example.com", -1)]

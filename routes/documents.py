@@ -211,6 +211,7 @@ def compare_docs():
                 + ocr_token_usage["output_tokens"],
                 model=model,
                 provider=llm_type,
+                service="/compare_docs",
             )
 
         except Exception as error:

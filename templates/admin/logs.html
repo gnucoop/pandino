@@ -123,6 +123,7 @@
                         <th>Cost</th>
                         <th>Model</th>
                         <th>Provider</th>
+                        <th>Service</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -140,6 +141,7 @@
                         <td class="text-end">${{ "%.4f"|format(log.cost|float) }}</td>
                         <td><span class="badge bg-info">{{ log.model }}</span></td>
                         <td><span class="badge bg-primary">{{ log.provider }}</span></td>
+                        <td><span class="badge bg-secondary">{{ log.service }}</span></td>
                     </tr>
                     {% endfor %}
                 </tbody>

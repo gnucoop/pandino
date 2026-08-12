@@ -308,6 +308,7 @@ def dataChat() -> Response | tuple[Response, int]:
                 token_output=token_output,
                 model=config.models.datachat_model,
                 provider=config.models.datachat_provider,
+                service="/datachat",
             )
             db_log_ok = True
             logger.info("event=datachat_token_usage_logged log_id=%s", log_id)

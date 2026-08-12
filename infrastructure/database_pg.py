@@ -476,6 +476,7 @@ def log_token_usage(
     token_output: int,
     model: str,
     provider: str,
+    service: str,
 ) -> int:
     """
     Logs token usage for a user by calculating the cost based on input and output tokens,
@@ -486,6 +487,7 @@ def log_token_usage(
     :param token_output: Number of output tokens generated.
     :param model: The model used for token processing.
     :param provider: The provider of the model.
+    :param service: The HTTP endpoint that produced this usage.
     :return: The ID of the inserted log record.
     """
     conn = connect()
@@ -513,6 +515,7 @@ def log_token_usage(
         cost,
         model,
         provider,
+        service,
     )
     cursor.execute(insert_query, insert_params)
 
@@ -1120,6 +1123,7 @@ def get_logs_for_admin(page=1, limit=50, start_date=None, end_date=None, search=
             cost,
             model,
             provider,
+            service,
         ) in logs_raw:
             # Formatta la data
             if date and hasattr(date, "strftime"):
@@ -1138,6 +1142,7 @@ def get_logs_for_admin(page=1, limit=50, start_date=None, end_date=None, search=
                     "cost": cost or 0,
                     "model": model or "N/A",
                     "provider": provider or "N/A",
+                    "service": service or "N/A",
                 }
             )
 

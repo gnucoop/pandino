@@ -403,6 +403,7 @@ def build_insert_token_log_query(
     cost: float,
     model: str,
     provider: str,
+    service: str,
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to insert a new usage log into the 'logs' table
@@ -411,8 +412,8 @@ def build_insert_token_log_query(
     :return: Tuple of SQL query and parameters.
     """
     query = sql.SQL(
-        "INSERT INTO {table} ({col_date}, {col_user}, {col_in}, {col_out}, {col_cost}, {col_model}, {col_provider}) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+        "INSERT INTO {table} ({col_date}, {col_user}, {col_in}, {col_out}, {col_cost}, {col_model}, {col_provider}, {col_service}) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
         "RETURNING id"
     ).format(
         table=sql.Identifier("logs"),
@@ -423,8 +424,9 @@ def build_insert_token_log_query(
         col_cost=sql.Identifier("cost"),
         col_model=sql.Identifier("model"),
         col_provider=sql.Identifier("provider"),
+        col_service=sql.Identifier("service"),
     )
-    params = (date, user_id, token_input, token_output, cost, model, provider)
+    params = (date, user_id, token_input, token_output, cost, model, provider, service)
     return query, params
 
 
@@ -489,7 +491,7 @@ def build_get_logs_for_admin_query(
     query = sql.SQL(
         """
         SELECT l.id, l.user_id, u.username, l.date, l.token_input,
-               l.token_output, l.cost, l.model, l.provider
+               l.token_output, l.cost, l.model, l.provider, l.service
         FROM {logs} l
         LEFT JOIN {users} u ON l.user_id = u.id
         {where_clause}
