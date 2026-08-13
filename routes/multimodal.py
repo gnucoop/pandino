@@ -11,6 +11,7 @@ import infrastructure.database_pg as database_pg
 from infrastructure.ai import describe_image, asr_response
 from infrastructure.database_pg import edit_tokens, log_token_usage
 from utils.logging_config import get_request_id
+from utils.usage_request_state import set_usage_log_id
 from services.audio_form_service import audioFormCompilation, audioFormPromptBuild
 from routes.utils import assert_valid_api_key
 
@@ -197,7 +198,7 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
     token_usage = result["token_usage"]
     user = database_pg.get_user_by_username(user_email)
     if user and (token_usage["input_tokens"] > 0 or token_usage["output_tokens"] > 0):
-        log_token_usage(
+        log_id = log_token_usage(
             user_id=user["id"],
             token_input=token_usage["input_tokens"],
             token_output=token_usage["output_tokens"],
@@ -206,6 +207,7 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
             service="/audioformcompilation",
             request_id=get_request_id(),
         )
+        set_usage_log_id(log_id)
 
     edit_tokens(user_email, -token_cost)
 

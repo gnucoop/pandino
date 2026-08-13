@@ -8,6 +8,7 @@ from flask import Blueprint, Response, current_app, jsonify, request
 import infrastructure.database_pg as database_pg
 from infrastructure.database_pg import edit_tokens, get_user_by_username, log_token_usage
 from utils.logging_config import get_request_id
+from utils.usage_request_state import set_usage_log_id
 from infrastructure.ai import choose_emb_model
 from infrastructure.vector_store import MauiVectorStore
 from services.completion_service import complete_chat, CompletionRequest
@@ -109,6 +110,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
                         service="/completion.json",
                         request_id=get_request_id(),
                     )
+                    set_usage_log_id(log_id)
 
             if resp["vectors"]:
                 for vec in resp["vectors"]:
@@ -233,6 +235,7 @@ def agentchat() -> Response | tuple[Response, int]:
                 service="/agentchat",
                 request_id=get_request_id(),
             )
+            set_usage_log_id(log_id)
 
         except Exception as e:
             logger.error("event=agentchat_token_usage_log_failed error=%s", e)

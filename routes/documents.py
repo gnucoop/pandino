@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request, current_app
 from config import PROVIDER_API_KEY_MAP
 from infrastructure.database_pg import edit_tokens, log_token_usage
 from utils.logging_config import get_request_id
+from utils.usage_request_state import set_usage_log_id
 import infrastructure.database_pg as database_pg
 from services.document_comparison_service import (
     CONTEXT_WINDOW_ERROR_MESSAGE,
@@ -204,7 +205,7 @@ def compare_docs():
             # because OCR and comparison share provider/model/cost basis there.
             # Usage stays separate internally so operation-level logging can
             # be introduced later if those models diverge.
-            log_token_usage(
+            log_id = log_token_usage(
                 user_id=user_id,
                 token_input=token_usage.get("input_tokens", 0)
                 + ocr_token_usage["input_tokens"],
@@ -215,6 +216,7 @@ def compare_docs():
                 service="/compare_docs",
                 request_id=get_request_id(),
             )
+            set_usage_log_id(log_id)
 
         except Exception as error:
             logger.error(

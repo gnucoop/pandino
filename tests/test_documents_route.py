@@ -442,3 +442,141 @@ def test_compare_docs_extraction_value_error_keeps_existing_400_mapping(
     assert comparison_calls == []
     assert log_calls == []
     assert edit_calls == []
+
+
+def test_compare_docs_hands_off_log_id_without_exposing_it(monkeypatch):
+    """Usage Duration Slice B3: /compare_docs previously discarded the
+    returned log_id entirely. It must now capture it internally and hand
+    it off via set_usage_log_id(), while the response contract - no
+    log_id field - stays exactly as before."""
+    app = _make_app()
+    _patch_success_dependencies(monkeypatch)
+
+    handoff_calls = []
+
+    def fake_extract_document_text_with_metadata(doc_input, **kwargs):
+        return {
+            "document": {
+                "text": f"normalized {doc_input['filename']}",
+                "filename": doc_input["filename"],
+                "role": doc_input["role"],
+            },
+            "ocr_token_usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
+
+    def fake_compare_documents(**kwargs):
+        return {
+            "comparison": {
+                "score": 91,
+                "summary": "Documents match",
+                "reasoning": "Mocked comparison",
+            },
+            "token_usage": {"input_tokens": 13, "output_tokens": 6, "total_tokens": 19},
+        }
+
+    monkeypatch.setattr(
+        documents_route,
+        "extract_document_text_with_metadata",
+        fake_extract_document_text_with_metadata,
+    )
+    monkeypatch.setattr(documents_route, "compare_documents", fake_compare_documents)
+    monkeypatch.setattr(documents_route, "log_token_usage", lambda **kwargs: 555)
+    monkeypatch.setattr(
+        documents_route,
+        "set_usage_log_id",
+        lambda log_id: handoff_calls.append(log_id),
+    )
+    monkeypatch.setattr(documents_route, "edit_tokens", lambda *a, **k: None)
+
+    data = {
+        "prompt": "Compare these documents",
+        "text_documents": json.dumps(
+            [
+                {"content": "first document", "filename": "first.txt", "role": "a"},
+                {"content": "second document", "filename": "second.txt", "role": "b"},
+            ]
+        ),
+    }
+
+    response = app.test_client().post(
+        "/compare_docs",
+        data=data,
+        headers={"X-API-KEY": "test-key", "X-USER-EMAIL": "user@example.com"},
+    )
+
+    assert response.status_code == 200
+    assert handoff_calls == [555]
+    assert "log_id" not in response.get_json()
+
+
+def test_compare_docs_usage_write_failure_registers_no_log_id(monkeypatch):
+    """Usage Duration Slice B3 invariant: the handoff only ever follows a
+    successful Usage INSERT. When log_token_usage() raises, /compare_docs
+    keeps its existing behavior (caught, logged, 200 preserved) and
+    set_usage_log_id() must not be called."""
+    app = _make_app()
+    _patch_success_dependencies(monkeypatch)
+
+    handoff_calls = []
+
+    def fake_extract_document_text_with_metadata(doc_input, **kwargs):
+        return {
+            "document": {
+                "text": f"normalized {doc_input['filename']}",
+                "filename": doc_input["filename"],
+                "role": doc_input["role"],
+            },
+            "ocr_token_usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
+
+    def fake_compare_documents(**kwargs):
+        return {
+            "comparison": {"score": 91, "summary": "s", "reasoning": "r"},
+            "token_usage": {"input_tokens": 13, "output_tokens": 6, "total_tokens": 19},
+        }
+
+    def raising_log_token_usage(**kwargs):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(
+        documents_route,
+        "extract_document_text_with_metadata",
+        fake_extract_document_text_with_metadata,
+    )
+    monkeypatch.setattr(documents_route, "compare_documents", fake_compare_documents)
+    monkeypatch.setattr(documents_route, "log_token_usage", raising_log_token_usage)
+    monkeypatch.setattr(
+        documents_route,
+        "set_usage_log_id",
+        lambda log_id: handoff_calls.append(log_id),
+    )
+    monkeypatch.setattr(documents_route, "edit_tokens", lambda *a, **k: None)
+
+    data = {
+        "prompt": "Compare these documents",
+        "text_documents": json.dumps(
+            [
+                {"content": "first document", "filename": "first.txt", "role": "a"},
+                {"content": "second document", "filename": "second.txt", "role": "b"},
+            ]
+        ),
+    }
+
+    response = app.test_client().post(
+        "/compare_docs",
+        data=data,
+        headers={"X-API-KEY": "test-key", "X-USER-EMAIL": "user@example.com"},
+    )
+
+    # Existing behavior preserved: the exception is caught inside
+    # compare_docs's own try/except, response stays a valid 200.
+    assert response.status_code == 200
+    assert handoff_calls == []

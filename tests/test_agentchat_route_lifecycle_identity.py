@@ -135,6 +135,52 @@ def test_log_token_usage_receives_agentchat_service_literal(monkeypatch):
     assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]
 
 
+def test_agentchat_hands_off_captured_log_id_and_keeps_exposing_it(monkeypatch):
+    """Usage Duration Slice B3: /agentchat already captured log_id locally
+    and already exposes it in the response. B3 must reuse that existing
+    local value for the request-local handoff without changing either
+    behavior."""
+    app = _make_app()
+    captured = {}
+    _patch_success_dependencies(monkeypatch, captured)
+
+    handoff_calls = []
+    monkeypatch.setattr(
+        rag_route, "set_usage_log_id", lambda log_id: handoff_calls.append(log_id)
+    )
+
+    response = _post_agentchat(app.test_client())
+
+    assert response.status_code == 200
+    assert handoff_calls == [999]
+    assert response.get_json()["log_id"] == 999
+
+
+def test_agentchat_usage_write_failure_registers_no_log_id(monkeypatch):
+    """B3 invariant: no handoff when the Usage INSERT fails. /agentchat
+    already catches this exception and keeps log_id None; that existing
+    behavior must be unchanged."""
+    app = _make_app()
+    captured = {}
+    _patch_success_dependencies(monkeypatch, captured)
+
+    def raising_log_token_usage(**kwargs):
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr(rag_route, "log_token_usage", raising_log_token_usage)
+
+    handoff_calls = []
+    monkeypatch.setattr(
+        rag_route, "set_usage_log_id", lambda log_id: handoff_calls.append(log_id)
+    )
+
+    response = _post_agentchat(app.test_client())
+
+    assert response.status_code == 200
+    assert "log_id" not in response.get_json()
+    assert handoff_calls == []
+
+
 def test_username_still_reaches_business_operations(monkeypatch, caplog):
     """The username is removed only from the two lifecycle log lines, not from
     authentication, token accounting, or agent execution."""

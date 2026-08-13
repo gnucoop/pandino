@@ -14,6 +14,7 @@ from datachat.engine_output_adapter import adapt_engine_output, consume_adapter_
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult
 from utils.logging_config import get_request_id
+from utils.usage_request_state import set_usage_log_id
 from config import PROVIDER_API_KEY_MAP
 from routes.utils import assert_valid_api_key
 
@@ -311,6 +312,7 @@ def dataChat() -> Response | tuple[Response, int]:
                 service="/datachat",
                 request_id=request_id,
             )
+            set_usage_log_id(log_id)
             db_log_ok = True
             logger.info("event=datachat_token_usage_logged log_id=%s", log_id)
         except Exception as e:
