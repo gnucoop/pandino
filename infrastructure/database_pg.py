@@ -138,7 +138,8 @@ def init_db():
             provider TEXT NOT NULL,
             service TEXT,
             request_id TEXT,
-            duration_ms INTEGER
+            duration_ms INTEGER,
+            source TEXT
         );
         CREATE TABLE IF NOT EXISTS costs (
             id SERIAL PRIMARY KEY,
@@ -922,6 +923,32 @@ def add_user_client_column() -> None:
         print("users.client already present, no change needed.")
     else:
         raise RuntimeError("Failed to add users.client column.")
+
+
+def add_usage_source_column() -> None:
+    """
+    Governed, application-owned schema operation for the Usage source
+    schema foundation: adds the nullable 'source' column to the existing
+    'logs' table if it is not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / logs / source / TEXT. This is the only
+    sanctioned way to reach add_column_if_missing() for this change; it does
+    not accept schema/table/column/type parameters, so it cannot be used to
+    mutate an arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "logs", "source", "TEXT")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("logs.source added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("logs.source already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add logs.source column.")
 
 
 def pgvector_maui_id_exists(table_name: str, maui_id: str) -> bool:
@@ -1913,6 +1940,7 @@ def print_help():
     print("  add_usage_request_id_column Add the nullable logs.request_id column if missing")
     print("  add_usage_duration_ms_column Add the nullable logs.duration_ms column if missing")
     print("  add_user_client_column      Add the nullable users.client column if missing")
+    print("  add_usage_source_column     Add the nullable logs.source column if missing")
 
 
 def _resolve_cli_command(argv: list[str]):
@@ -1955,6 +1983,8 @@ def _resolve_cli_command(argv: list[str]):
         return add_usage_duration_ms_column
     if command == "add_user_client_column" and len(argv) == 2:
         return add_user_client_column
+    if command == "add_usage_source_column" and len(argv) == 2:
+        return add_usage_source_column
 
     return None
 

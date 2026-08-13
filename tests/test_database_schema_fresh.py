@@ -113,3 +113,22 @@ def test_fresh_users_schema_client_column_is_scoped_to_users_table(monkeypatch):
     for statement in statements:
         if "CREATE TABLE IF NOT EXISTS users" not in statement:
             assert "client" not in statement
+
+
+def test_fresh_logs_schema_includes_nullable_source_column(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+    logs_statement = _logs_table_statement(statements)
+
+    assert "source TEXT" in logs_statement
+    assert "source TEXT NOT NULL" not in logs_statement
+    assert "source TEXT DEFAULT" not in logs_statement
+
+
+def test_fresh_logs_schema_source_column_is_scoped_to_logs_and_feedback_tables(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+
+    for statement in statements:
+        if "CREATE TABLE IF NOT EXISTS logs" not in statement and (
+            "CREATE TABLE IF NOT EXISTS feedback" not in statement
+        ):
+            assert "source" not in statement
