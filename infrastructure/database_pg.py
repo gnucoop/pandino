@@ -124,7 +124,8 @@ def init_db():
             api_key TEXT NOT NULL UNIQUE,
             date_valid_until TEXT NOT NULL DEFAULT '2024-12-31',
             tokens INT NOT NULL DEFAULT 0
-            CONSTRAINT tokens_nonnegative check (tokens >= 0)
+            CONSTRAINT tokens_nonnegative check (tokens >= 0),
+            client TEXT
         );
         CREATE TABLE IF NOT EXISTS logs (
             id SERIAL PRIMARY KEY,
@@ -895,6 +896,32 @@ def add_usage_duration_ms_column() -> None:
         print("logs.duration_ms already present, no change needed.")
     else:
         raise RuntimeError("Failed to add logs.duration_ms column.")
+
+
+def add_user_client_column() -> None:
+    """
+    Governed, application-owned schema operation for the Source client
+    schema foundation: adds the nullable 'client' column to the existing
+    'users' table if it is not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / users / client / TEXT. This is the only
+    sanctioned way to reach add_column_if_missing() for this change; it does
+    not accept schema/table/column/type parameters, so it cannot be used to
+    mutate an arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "users", "client", "TEXT")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("users.client added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("users.client already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add users.client column.")
 
 
 def pgvector_maui_id_exists(table_name: str, maui_id: str) -> bool:
@@ -1885,6 +1912,7 @@ def print_help():
     print("  add_usage_service_column    Add the nullable logs.service column if missing")
     print("  add_usage_request_id_column Add the nullable logs.request_id column if missing")
     print("  add_usage_duration_ms_column Add the nullable logs.duration_ms column if missing")
+    print("  add_user_client_column      Add the nullable users.client column if missing")
 
 
 def _resolve_cli_command(argv: list[str]):
@@ -1925,6 +1953,8 @@ def _resolve_cli_command(argv: list[str]):
         return add_usage_request_id_column
     if command == "add_usage_duration_ms_column" and len(argv) == 2:
         return add_usage_duration_ms_column
+    if command == "add_user_client_column" and len(argv) == 2:
+        return add_user_client_column
 
     return None
 

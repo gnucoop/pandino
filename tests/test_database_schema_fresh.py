@@ -43,6 +43,13 @@ def _logs_table_statement(statements):
     raise AssertionError("No 'logs' table creation statement found")
 
 
+def _users_table_statement(statements):
+    for statement in statements:
+        if "CREATE TABLE IF NOT EXISTS users" in statement:
+            return statement
+    raise AssertionError("No 'users' table creation statement found")
+
+
 def test_fresh_logs_schema_includes_nullable_service_column(monkeypatch):
     statements = _run_init_db_and_capture_statements(monkeypatch)
     logs_statement = _logs_table_statement(statements)
@@ -89,3 +96,20 @@ def test_fresh_logs_schema_duration_ms_column_is_scoped_to_logs_table(monkeypatc
     for statement in statements:
         if "CREATE TABLE IF NOT EXISTS logs" not in statement:
             assert "duration_ms" not in statement
+
+
+def test_fresh_users_schema_includes_nullable_client_column(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+    users_statement = _users_table_statement(statements)
+
+    assert "client TEXT" in users_statement
+    assert "client TEXT NOT NULL" not in users_statement
+    assert "client TEXT DEFAULT" not in users_statement
+
+
+def test_fresh_users_schema_client_column_is_scoped_to_users_table(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+
+    for statement in statements:
+        if "CREATE TABLE IF NOT EXISTS users" not in statement:
+            assert "client" not in statement

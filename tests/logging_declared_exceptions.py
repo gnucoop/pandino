@@ -161,7 +161,7 @@ DECLARED_EXCEPTIONS: dict[tuple[str, str, str], tuple[int, str]] = {
         "effect.",
     ),
     ("A5c", "infrastructure/database_pg.py", "print_help"): (
-        12,
+        13,
         "This function prints the CLI's help text; stdout output is the "
         "function's entire purpose and print_help() has no caller anywhere "
         "else in the tree.",
@@ -194,6 +194,15 @@ DECLARED_EXCEPTIONS: dict[tuple[str, str, str], tuple[int, str]] = {
         2,
         "This CLI-only governed schema command reports its CHANGED/UNCHANGED "
         "outcome to stdout by design; add_usage_duration_ms_column() has no "
+        "caller anywhere else in the tree, so its stdout output is the "
+        "function's purpose, not a side effect. The FAILED outcome does not "
+        "print: it raises RuntimeError instead, same treatment as "
+        "add_usage_service_column() per DC-16.",
+    ),
+    ("A5c", "infrastructure/database_pg.py", "add_user_client_column"): (
+        2,
+        "This CLI-only governed schema command reports its CHANGED/UNCHANGED "
+        "outcome to stdout by design; add_user_client_column() has no "
         "caller anywhere else in the tree, so its stdout output is the "
         "function's purpose, not a side effect. The FAILED outcome does not "
         "print: it raises RuntimeError instead, same treatment as "
