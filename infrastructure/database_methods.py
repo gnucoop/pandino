@@ -599,6 +599,30 @@ def build_update_usage_duration_query(
     return query, (duration_ms, log_id)
 
 
+def build_set_user_client_if_missing_query(
+    username: str, client: str
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to set a user's client only if it is not already set.
+
+    The fill-if-empty invariant is enforced by the WHERE clause itself
+    (client IS NULL), so the row is only updated when no client has been
+    persisted yet - no application-side read/decide/write ownership check.
+
+    :param username: The username of the user to update.
+    :param client: Candidate client value to persist.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "UPDATE {table} SET {client} = %s WHERE {username} = %s AND {client} IS NULL"
+    ).format(
+        table=sql.Identifier("users"),
+        client=sql.Identifier("client"),
+        username=sql.Identifier("username"),
+    )
+    return query, (client, username)
+
+
 def build_get_total_log_stats_query(
     start_date: Optional[str] = None, end_date: Optional[str] = None
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:

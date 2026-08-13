@@ -28,6 +28,7 @@ from infrastructure.database_methods import (
     build_get_logs_for_admin_query,
     build_update_user_tokens_query,
     build_update_usage_duration_query,
+    build_set_user_client_if_missing_query,
     build_get_total_log_stats_query,
     build_get_daily_log_stats_query,
     build_get_top_users_by_token_usage_query,
@@ -1293,6 +1294,38 @@ def update_user_tokens(user_id, new_tokens):
         query, params = build_update_user_tokens_query(
             user_id, new_tokens, one_year_from_today
         )
+        cursor.execute(query, params)
+        conn.commit()
+
+        if cursor.rowcount > 0:
+            return True
+        else:
+            return False
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def set_user_client_if_missing(username: str, client: str) -> bool:
+    """
+    Persist a candidate client for an existing user, only if users.client
+    is currently NULL (fill-if-empty). The invariant is enforced by the
+    UPDATE's WHERE clause itself, not by a prior SELECT: a row whose
+    client is already set is left unchanged, and unknown usernames do not
+    create a row (this is not an upsert).
+
+    :param username: The username of the user to update.
+    :param client: Candidate client value to persist.
+    :return: True if the row was updated (client was NULL and is now set),
+        False if no row was updated (unknown username, or client already set).
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_set_user_client_if_missing_query(username, client)
         cursor.execute(query, params)
         conn.commit()
 
