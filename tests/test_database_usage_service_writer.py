@@ -5,10 +5,13 @@ Covers:
   list and parameter tuple, and preserves RETURNING id.
 - log_token_usage() requires `service` (no default) and passes it through
   unchanged to the INSERT parameters.
-- build_get_logs_for_admin_query() selects l.service.
-- get_logs_for_admin() maps a persisted service value through unchanged and
-  maps historical NULL rows to "N/A", following the existing model/provider
-  `value or "N/A"` convention.
+- build_get_logs_for_admin_query() selects l.service, l.request_id,
+  l.duration_ms.
+- get_logs_for_admin() maps a persisted service/request_id/duration_ms value
+  through unchanged and maps historical NULL rows to "N/A", following the
+  existing model/provider `value or "N/A"` convention. duration_ms uses an
+  explicit `is not None` check so a real `0` is preserved rather than
+  collapsed to "N/A".
 
 No live PostgreSQL: all coverage uses fake cursor/connection objects, same
 style as tests/test_database_schema_fresh.py.
@@ -119,6 +122,14 @@ def test_build_get_logs_for_admin_query_selects_service():
     assert "l.service" in query.as_string(None)
 
 
+def test_build_get_logs_for_admin_query_selects_request_id_and_duration_ms():
+    query, _params = build_get_logs_for_admin_query(limit=50)
+
+    query_str = query.as_string(None)
+    assert "l.request_id" in query_str
+    assert "l.duration_ms" in query_str
+
+
 class _FakeAdminCursor:
     def __init__(self, rows, total):
         self._rows = rows
@@ -148,7 +159,7 @@ class _FakeAdminConnection:
 
 def test_get_logs_for_admin_maps_non_null_service_through_unchanged(monkeypatch):
     rows = [
-        (1, 10, "alice", "2026-08-12 00:00:00", 5, 3, 0.01, "gpt-4", "openai", "/datachat"),
+        (1, 10, "alice", "2026-08-12 00:00:00", 5, 3, 0.01, "gpt-4", "openai", "/datachat", "9bf218009db0127d", 18308),
     ]
     cursor = _FakeAdminCursor(rows, total=1)
     monkeypatch.setattr(database_pg, "connect", lambda: _FakeAdminConnection(cursor))
@@ -160,7 +171,7 @@ def test_get_logs_for_admin_maps_non_null_service_through_unchanged(monkeypatch)
 
 def test_get_logs_for_admin_maps_historical_null_service_to_n_a(monkeypatch):
     rows = [
-        (1, 10, "alice", "2026-08-12 00:00:00", 5, 3, 0.01, "gpt-4", "openai", None),
+        (1, 10, "alice", "2026-08-12 00:00:00", 5, 3, 0.01, "gpt-4", "openai", None, None, None),
     ]
     cursor = _FakeAdminCursor(rows, total=1)
     monkeypatch.setattr(database_pg, "connect", lambda: _FakeAdminConnection(cursor))
@@ -170,3 +181,41 @@ def test_get_logs_for_admin_maps_historical_null_service_to_n_a(monkeypatch):
     assert result["logs"][0]["service"] == "N/A"
     assert result["logs"][0]["model"] == "gpt-4"
     assert result["logs"][0]["provider"] == "openai"
+
+
+def test_get_logs_for_admin_maps_non_null_request_id_and_duration_through_unchanged(monkeypatch):
+    rows = [
+        (1, 10, "alice", "2026-08-12 00:00:00", 5, 3, 0.01, "gpt-4", "openai", "/agentchat", "9bf218009db0127d", 18308),
+    ]
+    cursor = _FakeAdminCursor(rows, total=1)
+    monkeypatch.setattr(database_pg, "connect", lambda: _FakeAdminConnection(cursor))
+
+    result = database_pg.get_logs_for_admin()
+
+    assert result["logs"][0]["request_id"] == "9bf218009db0127d"
+    assert result["logs"][0]["duration_ms"] == 18308
+
+
+def test_get_logs_for_admin_maps_historical_null_request_id_and_duration_to_n_a(monkeypatch):
+    rows = [
+        (1, 10, "alice", "2026-08-12 00:00:00", 5, 3, 0.01, "gpt-4", "openai", "/agentchat", None, None),
+    ]
+    cursor = _FakeAdminCursor(rows, total=1)
+    monkeypatch.setattr(database_pg, "connect", lambda: _FakeAdminConnection(cursor))
+
+    result = database_pg.get_logs_for_admin()
+
+    assert result["logs"][0]["request_id"] == "N/A"
+    assert result["logs"][0]["duration_ms"] == "N/A"
+
+
+def test_get_logs_for_admin_preserves_real_zero_duration_ms(monkeypatch):
+    rows = [
+        (1, 10, "alice", "2026-08-12 00:00:00", 5, 3, 0.01, "gpt-4", "openai", "/agentchat", "9bf218009db0127d", 0),
+    ]
+    cursor = _FakeAdminCursor(rows, total=1)
+    monkeypatch.setattr(database_pg, "connect", lambda: _FakeAdminConnection(cursor))
+
+    result = database_pg.get_logs_for_admin()
+
+    assert result["logs"][0]["duration_ms"] == 0

@@ -1,4 +1,5 @@
-"""Usage Service Slice B: admin logs template shows the Service column.
+"""Usage Admin Visibility: admin logs template shows Service, Request ID,
+Duration columns, and the Usage terminology labels.
 
 Renders templates/admin/logs.html directly through a bare Jinja2 environment
 (no Flask app/blueprint/session machinery), stubbing only the handful of
@@ -7,6 +8,7 @@ get_flashed_messages). This repo has no existing Flask/template test seam for
 admin templates to extend, so this is the lightest verification available.
 """
 
+import re
 from types import SimpleNamespace
 
 from jinja2 import Environment, FileSystemLoader
@@ -45,6 +47,8 @@ def test_service_column_header_is_present():
             "model": "gpt-4",
             "provider": "openai",
             "service": "/datachat",
+            "request_id": "9bf218009db0127d",
+            "duration_ms": 18308,
         }
     ]
 
@@ -66,6 +70,8 @@ def test_service_row_value_is_displayed_for_non_null_service():
             "model": "gpt-4",
             "provider": "openai",
             "service": "/datachat",
+            "request_id": "9bf218009db0127d",
+            "duration_ms": 18308,
         }
     ]
 
@@ -87,9 +93,173 @@ def test_service_row_value_displays_n_a_for_historical_null_service():
             "model": "gpt-4",
             "provider": "openai",
             "service": "N/A",
+            "request_id": "N/A",
+            "duration_ms": "N/A",
         }
     ]
 
     html = _render_logs_template(logs=logs)
 
     assert "N/A" in html
+
+
+_SAMPLE_LOG = {
+    "id": 1,
+    "user_id": 10,
+    "username": "alice",
+    "date": "2026-08-12 00:00:00",
+    "token_input": 5,
+    "token_output": 3,
+    "cost": 0.01,
+    "model": "gpt-4",
+    "provider": "openai",
+    "service": "/agentchat",
+    "request_id": "9bf218009db0127d",
+    "duration_ms": 18308,
+}
+
+
+def test_request_id_column_header_is_present():
+    html = _render_logs_template(logs=[_SAMPLE_LOG])
+
+    assert "<th>Request ID</th>" in html
+
+
+def test_full_request_id_is_rendered_without_truncation():
+    logs = [
+        {
+            "id": 1,
+            "user_id": 10,
+            "username": "alice",
+            "date": "2026-08-12 00:00:00",
+            "token_input": 5,
+            "token_output": 3,
+            "cost": 0.01,
+            "model": "gpt-4",
+            "provider": "openai",
+            "service": "/agentchat",
+            "request_id": "9bf218009db0127d",
+            "duration_ms": 18308,
+        }
+    ]
+
+    html = _render_logs_template(logs=logs)
+
+    assert "9bf218009db0127d" in html
+
+
+def test_request_id_displays_n_a_for_historical_null_rows():
+    logs = [
+        {
+            "id": 1,
+            "user_id": 10,
+            "username": "alice",
+            "date": "2026-08-12 00:00:00",
+            "token_input": 5,
+            "token_output": 3,
+            "cost": 0.01,
+            "model": "gpt-4",
+            "provider": "openai",
+            "service": "N/A",
+            "request_id": "N/A",
+            "duration_ms": "N/A",
+        }
+    ]
+
+    html = _render_logs_template(logs=logs)
+
+    assert "<td><code>N/A</code></td>" in html
+
+
+def test_duration_column_header_is_present():
+    html = _render_logs_template(logs=[_SAMPLE_LOG])
+
+    assert "<th>Duration</th>" in html
+
+
+def test_duration_at_or_above_one_second_renders_as_seconds_with_one_decimal():
+    logs = [
+        {
+            "id": 1,
+            "user_id": 10,
+            "username": "alice",
+            "date": "2026-08-12 00:00:00",
+            "token_input": 5,
+            "token_output": 3,
+            "cost": 0.01,
+            "model": "gpt-4",
+            "provider": "openai",
+            "service": "/agentchat",
+            "request_id": "9bf218009db0127d",
+            "duration_ms": 18308,
+        }
+    ]
+
+    html = _render_logs_template(logs=logs)
+
+    assert "18.3 s" in html
+
+
+def test_duration_below_one_second_renders_as_integer_milliseconds():
+    logs = [
+        {
+            "id": 1,
+            "user_id": 10,
+            "username": "alice",
+            "date": "2026-08-12 00:00:00",
+            "token_input": 5,
+            "token_output": 3,
+            "cost": 0.01,
+            "model": "gpt-4",
+            "provider": "openai",
+            "service": "/agentchat",
+            "request_id": "9bf218009db0127d",
+            "duration_ms": 842,
+        }
+    ]
+
+    html = _render_logs_template(logs=logs)
+
+    assert "842 ms" in html
+
+
+def test_missing_duration_displays_n_a_and_never_zero():
+    logs = [
+        {
+            "id": 1,
+            "user_id": 10,
+            "username": "alice",
+            "date": "2026-08-12 00:00:00",
+            "token_input": 5,
+            "token_output": 3,
+            "cost": 0.01,
+            "model": "gpt-4",
+            "provider": "openai",
+            "service": "N/A",
+            "request_id": "N/A",
+            "duration_ms": "N/A",
+        }
+    ]
+
+    html = _render_logs_template(logs=logs)
+
+    assert re.search(r"^\s*0 ms\s*$", html, re.MULTILINE) is None
+    assert re.search(r"^\s*0\.0 s\s*$", html, re.MULTILINE) is None
+
+
+def test_page_title_contains_usage():
+    html = _render_logs_template(logs=[])
+
+    assert "Usage - Admin Panel" in html
+
+
+def test_card_caption_is_recent_usage():
+    html = _render_logs_template(logs=[])
+
+    assert "Recent Usage" in html
+
+
+def test_sidebar_nav_label_is_usage():
+    html = _render_logs_template(logs=[])
+
+    assert "fa-list me-2\"></i> Usage" in html
