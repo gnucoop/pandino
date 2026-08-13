@@ -200,7 +200,10 @@ def extend_expiration_date():
 
 
 def add_user(
-    username: str, api_key: str, date_valid_until: Optional[str] = None
+    username: str,
+    api_key: str,
+    date_valid_until: Optional[str] = None,
+    client: Optional[str] = None,
 ) -> Optional[str]:
     """
     Adds a new user to the 'users' table with an encrypted API key and optional expiration date.
@@ -208,6 +211,7 @@ def add_user(
     :param username: Unique username of the user.
     :param api_key: API key to be stored (will be encrypted before insertion).
     :param date_valid_until: Optional expiration date (ISO format). If not provided, 1 year is added.
+    :param client: Authenticated client to persist at creation time, or None when not known.
     :return: None if success, or an error message string if an exception occurs.
     """
     if date_valid_until is None:
@@ -221,7 +225,7 @@ def add_user(
 
     try:
         query, params = build_add_user_query(
-            username, encrypted_api_key, date_valid_until
+            username, encrypted_api_key, date_valid_until, client
         )
         cursor.execute(query, params)
         conn.commit()

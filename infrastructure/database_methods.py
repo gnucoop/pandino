@@ -21,7 +21,10 @@ def build_get_user_by_username_query(username: str) -> Tuple[sql.Composed, Tuple
 
 
 def build_add_user_query(
-    username: str, encrypted_api_key: str, date_valid_until: str
+    username: str,
+    encrypted_api_key: str,
+    date_valid_until: str,
+    client: Optional[str] = None,
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to insert a new user into the 'users' table.
@@ -29,18 +32,21 @@ def build_add_user_query(
     :param username: Unique username of the user.
     :param encrypted_api_key: API key already encrypted as string.
     :param date_valid_until: Expiration date in ISO format.
+    :param client: Authenticated client to persist at creation time, or
+        None when not known (e.g. CLI-created users).
     :return: Tuple with SQL query and parameters.
     """
     query = sql.SQL(
-        "INSERT INTO {table} ({col_username}, {col_api_key}, {col_date}) "
-        "VALUES (%s, %s, %s)"
+        "INSERT INTO {table} ({col_username}, {col_api_key}, {col_date}, {col_client}) "
+        "VALUES (%s, %s, %s, %s)"
     ).format(
         table=sql.Identifier("users"),
         col_username=sql.Identifier("username"),
         col_api_key=sql.Identifier("api_key"),
         col_date=sql.Identifier("date_valid_until"),
+        col_client=sql.Identifier("client"),
     )
-    params = (username, encrypted_api_key, date_valid_until)
+    params = (username, encrypted_api_key, date_valid_until, client)
     return query, params
 
 

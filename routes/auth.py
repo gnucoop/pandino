@@ -1,3 +1,4 @@
+import logging
 import secrets
 from datetime import datetime
 from typing import Union
@@ -10,6 +11,8 @@ from infrastructure.dino import dino_authenticate
 from infrastructure.external_auth import external_authenticate
 
 auth_bp = Blueprint("auth", __name__)
+
+logger = logging.getLogger(__name__)
 
 
 @auth_bp.route("/checkpandinouser", methods=["POST"])
@@ -46,7 +49,10 @@ def addNewUser() -> Union[tuple[Response, int], tuple[str, int, dict[str, str]]]
         currentDate = datetime.now()
         expirationDate = currentDate.replace(year=currentDate.year + 2)
         addUserResult = database_pg.add_user(
-            user_email, generatedKey, expirationDate.strftime("%Y-%m-%d %H:%M:%S")
+            user_email,
+            generatedKey,
+            expirationDate.strftime("%Y-%m-%d %H:%M:%S"),
+            client,
         )
         if addUserResult is None:
             return (
@@ -69,6 +75,12 @@ def addNewUser() -> Union[tuple[Response, int], tuple[str, int, dict[str, str]]]
                 500,
             )
     else:
+        try:
+            database_pg.set_user_client_if_missing(user_email, client)
+        except Exception as e:
+            logger.error("event=user_client_persist_failed error=%s", str(e))
+            return jsonify({"error": "An unexpected error occurred"}), 500
+
         return (
             jsonify(
                 {
