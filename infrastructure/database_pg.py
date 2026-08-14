@@ -391,14 +391,16 @@ def get_user_tokens(user_name: str) -> Optional[int]:
     return token_value if isinstance(token_value, int) else None
 
 
-def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
+def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str, Optional[str]]:
     """
     Validates whether the provided API key matches the user's stored (encrypted) key
     and is still within the valid date range.
 
     :param api_key: The plain API key provided by the user.
     :param user_email: The username/email associated with the key.
-    :return: Tuple (True, "match") if valid, otherwise (False, reason).
+    :return: Tuple (True, "match", client) if valid, otherwise (False, reason, None).
+        ``client`` is the persisted ``users.client`` for the matched row, or
+        ``None`` when it is NULL. Never populated on a failed match.
     """
     logger.info("event=api_key_validate_started username=%s", user_email)
 
@@ -413,12 +415,12 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
         conn.close()
 
     if not encrypted_keys:
-        return False, "No matching API key found"
+        return False, "No matching API key found", None
 
     current_date = datetime.now().date()
     found_expired = False
 
-    for encrypted_key, date_valid_until in encrypted_keys:
+    for encrypted_key, date_valid_until, client in encrypted_keys:
         try:
             expiration = datetime.strptime(date_valid_until, "%Y-%m-%d").date()
         except Exception:
@@ -440,16 +442,16 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
         try:
             decrypted_key = get_cipher_suite().decrypt(encrypted_key).decode().strip()
             if decrypted_key == api_key.strip():
-                return True, "API key match found"
+                return True, "API key match found", client
         except InvalidToken:
             continue
         except Exception:
             continue
 
     if found_expired:
-        return False, "API key expired"
+        return False, "API key expired", None
 
-    return False, "No matching API key found"
+    return False, "No matching API key found", None
 
 
 def print_stored_keys() -> None:

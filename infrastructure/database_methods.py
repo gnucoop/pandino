@@ -361,16 +361,17 @@ def build_print_stored_keys_query() -> Tuple[sql.Composed, Tuple[()]]:
 
 def build_validate_api_key_query(username: str) -> Tuple[sql.Composed, Tuple[str]]:
     """
-    Builds a SQL query to retrieve API keys and expiration dates for a given user.
+    Builds a SQL query to retrieve API keys, expiration dates and client for a given user.
 
     :param username: The username to search for.
     :return: Tuple of SQL query and parameters.
     """
     query = sql.SQL(
-        "SELECT {col_key}, {col_date} FROM {table} WHERE {col_user} = %s"
+        "SELECT {col_key}, {col_date}, {col_client} FROM {table} WHERE {col_user} = %s"
     ).format(
         col_key=sql.Identifier("api_key"),
         col_date=sql.Identifier("date_valid_until"),
+        col_client=sql.Identifier("client"),
         table=sql.Identifier("users"),
         col_user=sql.Identifier("username"),
     )

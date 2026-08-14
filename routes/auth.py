@@ -105,7 +105,7 @@ def validate() -> tuple[Response, int]:
         return jsonify({"error": "Missing X-API-KEY header"}), 400
     if not user_email:
         return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
-    result, message = validate_api_key(api_key, user_email)
+    result, message, _client = validate_api_key(api_key, user_email)
 
     if not result:
         if "expired" in message:

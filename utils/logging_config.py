@@ -30,6 +30,7 @@ from utils.agent_logging import setup_agent_logger
 from utils.runtime_logging import setup_datachat_runtime_logger
 
 __all__ = [
+    "bind_request_context",
     "bootstrap_logging",
     "get_request_id",
     "register_request_context_hooks",
@@ -77,7 +78,12 @@ LOG_FORMAT = (
 #: Value rendered when no request context is bound.
 CONTEXT_UNSET = "-"
 
-#: Attribute under which the request-context tokens are parked on ``flask.g``.
+#: Attribute under which the request-context token stack is parked on
+#: ``flask.g``. A list, not a single tuple: every :func:`set_request_context`
+#: call made during a request - the initial ``before_request`` bind plus any
+#: mid-request enrichment via :func:`bind_request_context` - pushes one more
+#: ``(request_token, app_token)`` pair, and teardown pops them off in LIFO
+#: order, matching ``contextvars.Token`` reset-order semantics.
 _G_TOKENS_ATTR = "_maui_log_context_tokens"
 
 #: Marker attribute recording that the hooks are already registered on an app.
@@ -162,6 +168,45 @@ def reset_request_context(tokens) -> None:
         _app_id_var.reset(app_token)
 
 
+def bind_request_context(request_id=None, app_id=None) -> tuple:
+    """Enrich the current request's logging context and self-register cleanup.
+
+    :func:`set_request_context` is the low-level primitive: it mutates the
+    ContextVars and hands the reset token back to the caller, who must keep
+    it and pass it to :func:`reset_request_context` themselves. That is
+    correct for the initial ``before_request`` bind, which already owns a
+    teardown hook - but any other caller enriching the context mid-request
+    (for example, binding ``app_id`` once API-key auth succeeds) has no
+    teardown of its own to hand the token to, so a discarded token means the
+    binding is never undone and leaks into whatever request reuses this
+    execution context next.
+
+    This function closes that gap: it calls :func:`set_request_context` and
+    pushes the returned token pair onto the same request-owned stack
+    :func:`register_request_context_hooks` already pops from at teardown, so
+    the caller does not need to manage the token at all. Safe to call more
+    than once per request; each call adds one more binding to be unwound,
+    in LIFO order, alongside the initial request id bind.
+
+    Requires an active Flask request context - the same one
+    :func:`register_request_context_hooks` binds ``_G_TOKENS_ATTR`` into.
+    Calling it outside of one raises the same ``RuntimeError`` any other
+    ``flask.g`` access would.
+
+    :return: the ``(request_id_token, app_id_token)`` pair, for symmetry with
+        :func:`set_request_context`. Callers do not need to keep it.
+    """
+    from flask import g  # noqa: PLC0415
+
+    tokens = set_request_context(request_id=request_id, app_id=app_id)
+    stack = getattr(g, _G_TOKENS_ATTR, None)
+    if stack is None:
+        stack = []
+        setattr(g, _G_TOKENS_ATTR, stack)
+    stack.append(tokens)
+    return tokens
+
+
 def register_request_context_hooks(app) -> None:
     """Bind a fresh request id for the lifetime of each HTTP request.
 
@@ -173,10 +218,12 @@ def register_request_context_hooks(app) -> None:
     accidental double registration cannot bind two ids per request or leave
     a token pair orphaned on ``flask.g``.
 
-    ``app_id`` is deliberately left at ``"-"``: the system has no reliable
-    tenant concept yet (``X-CLIENT`` is read only in ``routes/auth.py``,
-    defaulted to "dino", and discarded), so populating it is a Phase 3
-    decision. :func:`set_request_context` already accepts it.
+    ``app_id`` starts every request unset (``"-"``): this hook only
+    generates and binds ``request_id``. Whatever else enriches the context
+    during the request - currently just ``app_id``, bound via
+    :func:`bind_request_context` once API-key auth succeeds - pushes onto
+    the same per-request token stack this hook initialises, so a single
+    teardown unwinds every binding regardless of who made it.
     """
     # Function-local by design: this module is imported as the first
     # statement of main.py, before Flask exists. By the time this function
@@ -190,7 +237,11 @@ def register_request_context_hooks(app) -> None:
 
     @app.before_request
     def _bind_request_context():
-        setattr(g, _G_TOKENS_ATTR, set_request_context(request_id=secrets.token_hex(8)))
+        setattr(
+            g,
+            _G_TOKENS_ATTR,
+            [set_request_context(request_id=secrets.token_hex(8))],
+        )
 
     @app.after_request
     def _emit_request_id_header(response):
@@ -207,7 +258,13 @@ def register_request_context_hooks(app) -> None:
         # it entirely, and only teardown is guaranteed. Without the reset a
         # keep-alive greenlet, which serves several sequential requests,
         # would attribute the next request's records to this id.
-        reset_request_context(getattr(g, _G_TOKENS_ATTR, None))
+        #
+        # Reset order is LIFO: contextvars.Token objects must be reset in
+        # the reverse order their .set() calls were made, so the most
+        # recent enrichment (e.g. app_id, bound mid-request) is unwound
+        # before the initial before_request request_id bind.
+        for tokens in reversed(getattr(g, _G_TOKENS_ATTR, None) or []):
+            reset_request_context(tokens)
 
 
 def _resolve_level(raw: str) -> "tuple[int, str | None]":

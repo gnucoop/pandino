@@ -86,6 +86,24 @@ DECLARED_EXCEPTIONS: dict[tuple[str, str, str], tuple[int, str]] = {
         "logger via the chained call is the point of the test, not a "
         "production emission awaiting migration.",
     ),
+    ("A1b-chained", "tests/test_logging_config.py", "authping"): (
+        1,
+        "This test module deliberately calls "
+        "logging.getLogger(<arbitrary or parametrized name>).warning(...) "
+        "in chained form to exercise the logging bootstrap's own "
+        "handler-attachment and isolation behaviour; using a non-module "
+        "logger via the chained call is the point of the test, not a "
+        "production emission awaiting migration.",
+    ),
+    ("A1b-chained", "tests/test_logging_config.py", "authkaboom"): (
+        1,
+        "This test module deliberately calls "
+        "logging.getLogger(<arbitrary or parametrized name>).warning(...) "
+        "in chained form to exercise the logging bootstrap's own "
+        "handler-attachment and isolation behaviour; using a non-module "
+        "logger via the chained call is the point of the test, not a "
+        "production emission awaiting migration.",
+    ),
     (
         "A1b-chained",
         "tests/test_logging_config.py",

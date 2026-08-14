@@ -19,6 +19,7 @@ from utils.logging_config import (
     _app_id_var,
     _HANDLER_MARKER,
     _request_id_var,
+    bind_request_context,
     bootstrap_logging,
     get_request_id,
     register_request_context_hooks,
@@ -385,6 +386,29 @@ def _make_app():
         logging.getLogger(_ROUTE_LOGGER).warning("KABOOM_MARKER")
         raise RuntimeError("unhandled")
 
+    @app.route("/authping")
+    def authping():
+        """Mid-request enrichment probe, one or two bind_request_context() calls.
+
+        Mirrors what routes/utils.py::assert_valid_api_key does after a
+        successful auth, without depending on routes/ at all - this module
+        stays scoped to the logging infrastructure itself.
+        """
+        client = request.args.get("client")
+        if client:
+            bind_request_context(app_id=client)
+        client2 = request.args.get("client2")
+        if client2:
+            bind_request_context(app_id=client2)
+        logging.getLogger(_ROUTE_LOGGER).warning("AUTHBIND_EVENT")
+        return {"request_id": get_request_id(), "app_id": _app_id_var.get()}
+
+    @app.route("/authkaboom")
+    def authkaboom():
+        bind_request_context(app_id="dino")
+        logging.getLogger(_ROUTE_LOGGER).warning("AUTHBIND_RAISE_EVENT")
+        raise RuntimeError("unhandled-with-app-id")
+
     return app
 
 
@@ -587,3 +611,108 @@ def test_hooks_isolate_context_across_concurrent_requests(agent_runs_env):
         assert f"request_id={request_id}" in line, f"crossover on line: {line!r}"
 
     assert get_request_id() == CONTEXT_UNSET
+
+
+# --------------------------------------------------------------------------
+# bind_request_context: mid-request enrichment token bookkeeping
+# --------------------------------------------------------------------------
+
+
+def test_mid_request_app_id_enrichment_is_reset_after_teardown(agent_runs_env):
+    """The bug this helper fixes: a discarded set_request_context() token
+    used to leave app_id bound forever, because only the initial
+    before_request tuple was ever passed to reset_request_context()."""
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        bootstrap_logging()
+        response = _make_app().test_client().get("/authping?client=dino")
+
+    assert response.status_code == 200
+    assert response.get_json()["app_id"] == "dino"
+    # Teardown has already run by the time the test client call returns.
+    assert get_request_id() == CONTEXT_UNSET
+    assert _app_id_var.get() == CONTEXT_UNSET
+
+
+def test_bind_request_context_does_not_alter_request_id(agent_runs_env):
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        bootstrap_logging()
+        response = _make_app().test_client().get("/authping?client=dino")
+
+    body = response.get_json()
+    assert body["app_id"] == "dino"
+    assert re.fullmatch(r"[0-9a-f]{16}", body["request_id"])
+    assert body["request_id"] == response.headers["X-Request-ID"]
+
+
+def test_sequential_requests_do_not_leak_app_id(agent_runs_env):
+    """Regression test for the exact keep-alive-execution-context scenario
+    the teardown docstring warns about: Request A binds app_id, Request B
+    (same app, same test client, no enrichment of its own) must not
+    inherit it. Fails against the discarded-token implementation, passes
+    once bind_request_context's stack is unwound at teardown."""
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        stream = _bootstrapped_stream()
+        client = _make_app().test_client()
+
+        response_a = client.get("/authping?client=dino")
+        assert response_a.get_json()["app_id"] == "dino"
+
+        client.get("/ping")
+
+    ping_line = next(l for l in stream.getvalue().splitlines() if "PING_MARKER" in l)
+    assert "app_id=-" in ping_line
+
+
+def test_app_id_reset_when_view_raises_unhandled_after_binding(agent_runs_env):
+    """Parallel to test_context_is_reset_when_view_raises_unhandled, but with
+    an app_id binding in play: teardown, not route-local cleanup, must still
+    unwind it when the view never returns normally."""
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        stream = _bootstrapped_stream()
+        app = _make_app()
+        app.testing = True
+        with pytest.raises(RuntimeError, match="unhandled-with-app-id"):
+            app.test_client().get("/authkaboom")
+
+    line = next(l for l in stream.getvalue().splitlines() if "AUTHBIND_RAISE_EVENT" in l)
+    assert "app_id=dino" in line
+    assert get_request_id() == CONTEXT_UNSET
+    assert _app_id_var.get() == CONTEXT_UNSET
+
+
+def test_multiple_enrichments_reset_in_lifo_order(agent_runs_env):
+    """Guards the reset ordering itself, not just the end-to-end leak.
+
+    contextvars.Token.reset() must be called in the reverse order of the
+    matching .set() calls; resetting out of order does not raise, it just
+    silently restores the wrong intermediate value. Two enrichments in one
+    request (dino, then coopi) must fully unwind back to "-", not settle on
+    "dino" - which is exactly what a FIFO/overwrite bookkeeping bug would
+    produce instead.
+    """
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        bootstrap_logging()
+        response = _make_app().test_client().get(
+            "/authping?client=dino&client2=coopi"
+        )
+
+    assert response.get_json()["app_id"] == "coopi"
+    assert _app_id_var.get() == CONTEXT_UNSET
+    assert get_request_id() == CONTEXT_UNSET
+
+
+def test_valid_auth_with_null_client_leaves_no_app_id_across_requests(agent_runs_env):
+    """client=None must never create a persistent app_id mutation: no bind
+    happens at all (set_request_context(app_id=None) is a no-op), so there
+    is nothing to leak into the next request either."""
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        stream = _bootstrapped_stream()
+        client = _make_app().test_client()
+
+        response_a = client.get("/authping")  # no ?client= at all
+        assert response_a.get_json()["app_id"] == CONTEXT_UNSET
+
+        client.get("/ping")
+
+    ping_line = next(l for l in stream.getvalue().splitlines() if "PING_MARKER" in l)
+    assert "app_id=-" in ping_line
