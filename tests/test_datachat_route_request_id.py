@@ -26,11 +26,13 @@ import pytest
 from flask import Flask
 
 from routes import datachat as datachat_route
+from routes import utils as routes_utils
 from utils.logging_config import (
     CONTEXT_UNSET,
     _request_id_var,
     register_request_context_hooks,
 )
+from utils.runtime_logging import setup_datachat_runtime_logger
 
 RUNTIME_LOGGER_NAME = "datachat.runtime"
 AGENT_RUNS_LOGGER_NAME = "agent_runs"
@@ -229,6 +231,45 @@ def test_runtime_request_id_is_ambient_sixteen_hex_not_legacy_eight_hex(monkeypa
     match = re.search(r"request_id=([0-9a-f]+)", start_line)
     assert match is not None
     assert re.fullmatch(r"[0-9a-f]{16}", match.group(1))
+
+
+def test_datachat_runtime_renders_app_id_after_auth_binding(monkeypatch):
+    """Source Slice D2: datachat.runtime must render the same request_id/app_id
+    that root Operational logging already shows post-auth.
+
+    Uses the real assert_valid_api_key() (only the DB call underneath is
+    mocked) so app_id is bound the same way it is in production, and rewires
+    the runtime logger through the real setup_datachat_runtime_logger() so
+    the production filter/formatter - not this module's bare %(message)s
+    override used by the other tests here - is what gets exercised.
+    """
+    app, _stream, _agent_runs_stream = _make_app()
+    engine = _StubEngine()
+    monkeypatch.setattr(
+        routes_utils, "validate_api_key", lambda *a, **k: (True, "ok", "dino")
+    )
+    monkeypatch.setattr(datachat_route, "get_user_tokens", lambda user_email: 10)
+    monkeypatch.setattr(datachat_route, "getAgent", lambda api_key: engine)
+    monkeypatch.setattr(datachat_route, "edit_tokens", lambda *a, **k: None)
+    monkeypatch.setattr(
+        datachat_route,
+        "get_user_by_username",
+        lambda user_email: {"id": 123, "username": user_email, "client": "dino"},
+    )
+    monkeypatch.setattr(datachat_route, "log_token_usage", lambda **kwargs: 999)
+
+    runtime_logger = app.config["DATACHAT_RUNTIME_LOGGER"]
+    runtime_logger.handlers = []
+    setup_datachat_runtime_logger()
+    production_stream = io.StringIO()
+    runtime_logger.handlers[0].setStream(production_stream)
+
+    response = _post_chat(app.test_client())
+
+    assert response.status_code == 200
+    header_id = response.headers["X-Request-ID"]
+    output = production_stream.getvalue()
+    assert f"request_id={header_id} app_id=dino" in output
 
 
 def test_agent_runs_record_carries_ambient_request_id(monkeypatch):

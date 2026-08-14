@@ -16,6 +16,7 @@ import pytest
 from utils.logging_config import (
     CONTEXT_UNSET,
     THIRD_PARTY_LOG_LEVELS,
+    ContextDefaultsFilter,
     _app_id_var,
     _HANDLER_MARKER,
     _request_id_var,
@@ -345,6 +346,59 @@ def test_returns_datachat_runtime_logger(agent_runs_env):
 
     assert logger.name == "datachat.runtime"
     assert logger.propagate is False
+
+
+def test_datachat_runtime_handler_has_context_defaults_filter(agent_runs_env):
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        logger = bootstrap_logging()
+
+    assert len(logger.handlers) == 1
+    handler = logger.handlers[0]
+    assert any(isinstance(f, ContextDefaultsFilter) for f in handler.filters)
+
+
+def test_datachat_runtime_renders_bound_request_and_app_id(agent_runs_env):
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        logger = bootstrap_logging()
+
+    stream = io.StringIO()
+    logger.handlers[0].setStream(stream)
+
+    tokens = set_request_context(request_id="abc123", app_id="dino")
+    try:
+        logger.info("chat_start request_id=abc123")
+    finally:
+        reset_request_context(tokens)
+
+    output = stream.getvalue()
+    assert "request_id=abc123" in output
+    assert "app_id=dino" in output
+
+
+def test_datachat_runtime_renders_unset_app_id_as_dash(agent_runs_env):
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        logger = bootstrap_logging()
+
+    stream = io.StringIO()
+    logger.handlers[0].setStream(stream)
+
+    logger.info("chat_start")
+
+    output = stream.getvalue()
+    assert "request_id=-" in output
+    assert "app_id=-" in output
+
+
+def test_datachat_runtime_repeated_bootstrap_keeps_single_handler_and_filter(
+    agent_runs_env,
+):
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        bootstrap_logging()
+        logger = bootstrap_logging()
+
+    assert len(logger.handlers) == 1
+    handler = logger.handlers[0]
+    assert sum(isinstance(f, ContextDefaultsFilter) for f in handler.filters) == 1
 
 
 # --------------------------------------------------------------------------
