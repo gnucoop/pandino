@@ -118,6 +118,7 @@
                         <th>User</th>
                         <th>Date</th>
                         <th>Service</th>
+                        <th>Source</th>
                         <th>Request ID</th>
                         <th>Duration</th>
                         <th>Input Tokens</th>
@@ -137,6 +138,7 @@
                         </td>
                         <td class="small">{{ log.date }}</td>
                         <td><span class="badge bg-secondary">{{ log.service }}</span></td>
+                        <td><span class="badge bg-secondary">{{ log.source }}</span></td>
                         <td><code>{{ log.request_id }}</code></td>
                         <td class="text-end">
                             {% if log.duration_ms == "N/A" %}

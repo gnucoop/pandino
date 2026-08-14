@@ -514,7 +514,7 @@ def build_get_logs_for_admin_query(
         """
         SELECT l.id, l.user_id, u.username, l.date, l.token_input,
                l.token_output, l.cost, l.model, l.provider, l.service,
-               l.request_id, l.duration_ms
+               l.request_id, l.duration_ms, l.source
         FROM {logs} l
         LEFT JOIN {users} u ON l.user_id = u.id
         {where_clause}

@@ -1249,6 +1249,7 @@ def get_logs_for_admin(page=1, limit=50, start_date=None, end_date=None, search=
             service,
             request_id,
             duration_ms,
+            source,
         ) in logs_raw:
             # Formatta la data
             if date and hasattr(date, "strftime"):
@@ -1270,6 +1271,7 @@ def get_logs_for_admin(page=1, limit=50, start_date=None, end_date=None, search=
                     "service": service or "N/A",
                     "request_id": request_id or "N/A",
                     "duration_ms": duration_ms if duration_ms is not None else "N/A",
+                    "source": source or "N/A",
                 }
             )
 

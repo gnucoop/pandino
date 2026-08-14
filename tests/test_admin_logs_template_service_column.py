@@ -1,5 +1,5 @@
-"""Usage Admin Visibility: admin logs template shows Service, Request ID,
-Duration columns, and the Usage terminology labels.
+"""Usage Admin Visibility: admin logs template shows Service, Source,
+Request ID, Duration columns, and the Usage terminology labels.
 
 Renders templates/admin/logs.html directly through a bare Jinja2 environment
 (no Flask app/blueprint/session machinery), stubbing only the handful of
@@ -114,9 +114,46 @@ _SAMPLE_LOG = {
     "model": "gpt-4",
     "provider": "openai",
     "service": "/agentchat",
+    "source": "dino",
     "request_id": "9bf218009db0127d",
     "duration_ms": 18308,
 }
+
+
+def test_source_column_header_is_present():
+    html = _render_logs_template(logs=[_SAMPLE_LOG])
+
+    assert "<th>Source</th>" in html
+
+
+def test_source_row_value_is_displayed_for_non_null_source():
+    html = _render_logs_template(logs=[_SAMPLE_LOG])
+
+    assert "dino" in html
+
+
+def test_source_row_value_displays_n_a_for_historical_null_source():
+    logs = [
+        {
+            **_SAMPLE_LOG,
+            "source": "N/A",
+        }
+    ]
+
+    html = _render_logs_template(logs=logs)
+
+    assert "N/A" in html
+
+
+def test_column_order_is_service_then_source_then_request_id_then_duration():
+    html = _render_logs_template(logs=[_SAMPLE_LOG])
+
+    service_index = html.index("<th>Service</th>")
+    source_index = html.index("<th>Source</th>")
+    request_id_index = html.index("<th>Request ID</th>")
+    duration_index = html.index("<th>Duration</th>")
+
+    assert service_index < source_index < request_id_index < duration_index
 
 
 def test_request_id_column_header_is_present():
