@@ -138,7 +138,7 @@ def _patch_success_dependencies(monkeypatch, engine, log_calls=None):
     monkeypatch.setattr(
         datachat_route,
         "get_user_by_username",
-        lambda user_email: {"id": 123, "username": user_email},
+        lambda user_email: {"id": 123, "username": user_email, "client": "dino"},
     )
 
     def fake_log_token_usage(**kwargs):
@@ -261,6 +261,7 @@ def test_log_token_usage_receives_datachat_service_literal(monkeypatch):
     assert len(log_calls) == 1
     assert log_calls[0]["service"] == "/datachat"
     assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]
+    assert log_calls[0]["source"] == "dino"
 
 
 def test_datachat_hands_off_captured_log_id_and_keeps_exposing_it(monkeypatch):

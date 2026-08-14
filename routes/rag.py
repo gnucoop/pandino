@@ -109,6 +109,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
                         provider=llm_type,
                         service="/completion.json",
                         request_id=get_request_id(),
+                        source=user.get("client"),
                     )
                     set_usage_log_id(log_id)
 
@@ -234,6 +235,7 @@ def agentchat() -> Response | tuple[Response, int]:
                 provider=provider,
                 service="/agentchat",
                 request_id=get_request_id(),
+                source=user.get("client"),
             )
             set_usage_log_id(log_id)
 

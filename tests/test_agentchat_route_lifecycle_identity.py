@@ -58,7 +58,7 @@ def _patch_success_dependencies(monkeypatch, captured):
 
     def fake_get_user_by_username(username):
         captured["get_user_by_username_arg"] = username
-        return {"id": 7, "username": username}
+        return {"id": 7, "username": username, "client": "dino"}
 
     monkeypatch.setattr(rag_route, "get_user_by_username", fake_get_user_by_username)
 
@@ -133,6 +133,7 @@ def test_log_token_usage_receives_agentchat_service_literal(monkeypatch):
     assert len(log_calls) == 1
     assert log_calls[0]["service"] == "/agentchat"
     assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]
+    assert log_calls[0]["source"] == "dino"
 
 
 def test_agentchat_hands_off_captured_log_id_and_keeps_exposing_it(monkeypatch):

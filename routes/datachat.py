@@ -311,6 +311,7 @@ def dataChat() -> Response | tuple[Response, int]:
                 provider=config.models.datachat_provider,
                 service="/datachat",
                 request_id=request_id,
+                source=user.get("client"),
             )
             set_usage_log_id(log_id)
             db_log_ok = True

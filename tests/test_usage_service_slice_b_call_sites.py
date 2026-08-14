@@ -48,6 +48,18 @@ def test_exactly_six_production_log_token_usage_call_sites_pass_request_id():
         )
 
 
+def test_exactly_six_production_log_token_usage_call_sites_pass_source():
+    calls = _find_log_token_usage_calls()
+
+    assert len(calls) == 6
+
+    for filename, call in calls:
+        keywords = {kw.arg for kw in call.keywords}
+        assert "source" in keywords, (
+            f"log_token_usage() call in {filename} is missing source="
+        )
+
+
 def _find_log_token_usage_assignments():
     """Return (filename, target_name) for every ``x = log_token_usage(...)``.
 
@@ -132,7 +144,7 @@ def test_audio_form_compile_logs_usage_with_audioformcompilation_service(monkeyp
     monkeypatch.setattr(
         multimodal_route.database_pg,
         "get_user_by_username",
-        lambda user_email: {"id": 42, "username": user_email},
+        lambda user_email: {"id": 42, "username": user_email, "client": "dino"},
     )
     monkeypatch.setattr(
         multimodal_route,
@@ -173,6 +185,7 @@ def test_audio_form_compile_logs_usage_with_audioformcompilation_service(monkeyp
     assert len(log_calls) == 1
     assert log_calls[0]["service"] == "/audioformcompilation"
     assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]
+    assert log_calls[0]["source"] == "dino"
     # Slice B3: the returned id is now captured and handed off request-locally...
     assert handoff_calls == [4242]
     # ...but public response exposure is unchanged - /audioformcompilation
@@ -198,7 +211,7 @@ def test_prompt_handler_logs_usage_with_prompt_txt_service(monkeypatch):
     monkeypatch.setattr(
         reporting_route.database_pg,
         "get_user_by_username",
-        lambda username: {"id": 42, "username": username},
+        lambda username: {"id": 42, "username": username, "client": None},
     )
     monkeypatch.setattr(
         reporting_route,
@@ -229,6 +242,7 @@ def test_prompt_handler_logs_usage_with_prompt_txt_service(monkeypatch):
     assert len(log_calls) == 1
     assert log_calls[0]["service"] == "/prompt.txt"
     assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]
+    assert log_calls[0]["source"] is None
     # Slice B3: the returned id is now captured and handed off request-locally...
     assert handoff_calls == [4343]
     # ...but public response exposure is unchanged - /prompt.txt returns the
@@ -258,7 +272,7 @@ def test_completion_handler_logs_usage_with_completion_json_service(monkeypatch)
     monkeypatch.setattr(
         rag_route,
         "get_user_by_username",
-        lambda username: {"id": 42, "username": username},
+        lambda username: {"id": 42, "username": username, "client": "coopi"},
     )
     monkeypatch.setattr(rag_route, "choose_emb_model", lambda *a, **k: object())
     monkeypatch.setattr(rag_route, "MauiVectorStore", lambda *a, **k: object())
@@ -292,6 +306,7 @@ def test_completion_handler_logs_usage_with_completion_json_service(monkeypatch)
     assert len(log_calls) == 1
     assert log_calls[0]["service"] == "/completion.json"
     assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]
+    assert log_calls[0]["source"] == "coopi"
     # Slice B3: the returned id is now handed off request-locally...
     assert handoff_calls == [4444]
     # ...and public response exposure is unchanged - /completion.json already

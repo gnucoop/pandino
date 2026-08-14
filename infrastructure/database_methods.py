@@ -411,6 +411,7 @@ def build_insert_token_log_query(
     provider: str,
     service: str,
     request_id: str,
+    source: Optional[str],
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to insert a new usage log into the 'logs' table
@@ -419,8 +420,8 @@ def build_insert_token_log_query(
     :return: Tuple of SQL query and parameters.
     """
     query = sql.SQL(
-        "INSERT INTO {table} ({col_date}, {col_user}, {col_in}, {col_out}, {col_cost}, {col_model}, {col_provider}, {col_service}, {col_request_id}) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "INSERT INTO {table} ({col_date}, {col_user}, {col_in}, {col_out}, {col_cost}, {col_model}, {col_provider}, {col_service}, {col_request_id}, {col_source}) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
         "RETURNING id"
     ).format(
         table=sql.Identifier("logs"),
@@ -433,6 +434,7 @@ def build_insert_token_log_query(
         col_provider=sql.Identifier("provider"),
         col_service=sql.Identifier("service"),
         col_request_id=sql.Identifier("request_id"),
+        col_source=sql.Identifier("source"),
     )
     params = (
         date,
@@ -444,6 +446,7 @@ def build_insert_token_log_query(
         provider,
         service,
         request_id,
+        source,
     )
     return query, params
 

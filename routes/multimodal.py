@@ -206,6 +206,7 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
             provider=llm_type,
             service="/audioformcompilation",
             request_id=get_request_id(),
+            source=user.get("client"),
         )
         set_usage_log_id(log_id)
 

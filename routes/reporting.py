@@ -72,6 +72,7 @@ def prompt_handler():
             provider=llm_type,
             service="/prompt.txt",
             request_id=get_request_id(),
+            source=user.get("client"),
         )
         set_usage_log_id(log_id)
 

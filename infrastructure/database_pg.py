@@ -364,6 +364,7 @@ def get_user_by_username(user_name: str) -> Optional[dict[str, str | int]]:
             "api_key": decrypted_key,
             "date_valid_until": user[3],
             "tokens": user[4],
+            "client": user[5],
         }
         logger.info("event=user_lookup_success username=%s", user_name)
         return user_data
@@ -488,6 +489,7 @@ def log_token_usage(
     provider: str,
     service: str,
     request_id: str,
+    source: Optional[str],
 ) -> int:
     """
     Logs token usage for a user by calculating the cost based on input and output tokens,
@@ -500,6 +502,7 @@ def log_token_usage(
     :param provider: The provider of the model.
     :param service: The HTTP endpoint that produced this usage.
     :param request_id: The canonical HTTP request id of the request that produced this usage.
+    :param source: The persisted client ecosystem of the user that produced this usage, or None.
     :return: The ID of the inserted log record.
     """
     conn = connect()
@@ -529,6 +532,7 @@ def log_token_usage(
         provider,
         service,
         request_id,
+        source,
     )
     cursor.execute(insert_query, insert_params)
 

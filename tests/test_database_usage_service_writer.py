@@ -30,12 +30,13 @@ from infrastructure.database_methods import (
 
 def test_build_insert_token_log_query_includes_service_column_and_param():
     query, params = build_insert_token_log_query(
-        "2026-08-12 00:00:00", 1, 10, 5, 0.01, "gpt-4", "openai", "/datachat", "abc123"
+        "2026-08-12 00:00:00", 1, 10, 5, 0.01, "gpt-4", "openai", "/datachat", "abc123", "dino"
     )
 
     query_str = query.as_string(None)
     assert "service" in query_str
     assert "request_id" in query_str
+    assert "source" in query_str
     assert "RETURNING id" in query_str
     assert params == (
         "2026-08-12 00:00:00",
@@ -47,7 +48,16 @@ def test_build_insert_token_log_query_includes_service_column_and_param():
         "openai",
         "/datachat",
         "abc123",
+        "dino",
     )
+
+
+def test_build_insert_token_log_query_preserves_none_source_as_none():
+    _query, params = build_insert_token_log_query(
+        "2026-08-12 00:00:00", 1, 10, 5, 0.01, "gpt-4", "openai", "/datachat", "abc123", None
+    )
+
+    assert params[-1] is None
 
 
 def test_log_token_usage_requires_service_argument():
@@ -60,6 +70,12 @@ def test_log_token_usage_requires_request_id_argument():
     signature = inspect.signature(database_pg.log_token_usage)
     assert "request_id" in signature.parameters
     assert signature.parameters["request_id"].default is inspect.Parameter.empty
+
+
+def test_log_token_usage_requires_source_argument():
+    signature = inspect.signature(database_pg.log_token_usage)
+    assert "source" in signature.parameters
+    assert signature.parameters["source"].default is inspect.Parameter.empty
 
 
 class _FakeCursor:
@@ -106,14 +122,37 @@ def test_log_token_usage_persists_provided_service_as_insert_param(monkeypatch):
         provider="openai",
         service="/datachat",
         request_id="abc123",
+        source="dino",
     )
 
     assert log_id == 77
     insert_query, insert_params = cursor.executed[1]
     assert "service" in insert_query.as_string(None)
     assert "request_id" in insert_query.as_string(None)
-    assert insert_params[-2] == "/datachat"
-    assert insert_params[-1] == "abc123"
+    assert "source" in insert_query.as_string(None)
+    assert insert_params[-3] == "/datachat"
+    assert insert_params[-2] == "abc123"
+    assert insert_params[-1] == "dino"
+
+
+def test_log_token_usage_persists_none_source_as_none(monkeypatch):
+    cursor = _FakeCursor(cost_row=(0.001, 0.002), log_id_row=(78,))
+    monkeypatch.setattr(database_pg, "connect", lambda: _FakeConnection(cursor))
+
+    log_id = database_pg.log_token_usage(
+        user_id=1,
+        token_input=10,
+        token_output=5,
+        model="gpt-4",
+        provider="openai",
+        service="/datachat",
+        request_id="abc123",
+        source=None,
+    )
+
+    assert log_id == 78
+    _insert_query, insert_params = cursor.executed[1]
+    assert insert_params[-1] is None
 
 
 def test_build_get_logs_for_admin_query_selects_service():

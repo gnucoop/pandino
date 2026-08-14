@@ -36,7 +36,7 @@ def _patch_success_dependencies(monkeypatch):
     monkeypatch.setattr(
         documents_route.database_pg,
         "get_user_by_username",
-        lambda user_email: {"id": 123, "username": user_email},
+        lambda user_email: {"id": 123, "username": user_email, "client": "coopi"},
     )
     monkeypatch.setattr(documents_route, "edit_tokens", lambda *args, **kwargs: None)
     monkeypatch.setattr(
@@ -217,6 +217,7 @@ def test_compare_docs_uses_document_extraction_service_and_preserves_response(
             "provider": "Google",
             "service": "/compare_docs",
             "request_id": response.headers["X-Request-ID"],
+            "source": "coopi",
         }
     ]
     assert edit_calls == [("user@example.com", -1)]
@@ -303,6 +304,7 @@ def test_compare_docs_with_zero_ocr_usage_logs_comparison_usage_once(monkeypatch
             "provider": "Google",
             "service": "/compare_docs",
             "request_id": response.headers["X-Request-ID"],
+            "source": "coopi",
         }
     ]
     assert edit_calls == [("user@example.com", -1)]

@@ -215,6 +215,7 @@ def compare_docs():
                 provider=llm_type,
                 service="/compare_docs",
                 request_id=get_request_id(),
+                source=user.get("client"),
             )
             set_usage_log_id(log_id)
 
