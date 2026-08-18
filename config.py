@@ -85,6 +85,12 @@ class ModelConfig:
     # configured), not an operational fallback.
     asr_base_url: Optional[str] = None
 
+    # Governed Mistral ASR per-minute rate (USD), for Maui-side cost
+    # resolution. Optional[float] = None means unconfigured, not a price of
+    # zero: resolving a Mistral ASR cost without this set must fail
+    # explicitly rather than silently produce cost = 0.
+    asr_mistral_price_per_minute_usd: Optional[float] = None
+
 
 @dataclass(frozen=True)
 class ApiKeysConfig:
@@ -233,6 +239,11 @@ def load_config() -> AppConfig:
         compare_docs_model=os.environ.get("COMPARE_DOCS_MODEL", "google/gemma-3-4b-it"),
         compare_docs_provider=os.environ.get("COMPARE_DOCS_PROVIDER", "Google"),
         asr_base_url=os.environ.get("ASR_BASE_URL") or None,
+        asr_mistral_price_per_minute_usd=(
+            float(os.environ["ASR_MISTRAL_PRICE_PER_MINUTE_USD"])
+            if os.environ.get("ASR_MISTRAL_PRICE_PER_MINUTE_USD")
+            else None
+        ),
     )
 
     api_keys = ApiKeysConfig(

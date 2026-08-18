@@ -61,3 +61,19 @@ def test_load_config_defaults():
     assert cfg.datachat.engine == "smolagents"
     assert cfg.datachat.max_steps == 12
     assert cfg.auth_gateway_url == "http://localhost:3000/validate"
+    assert cfg.models.asr_mistral_price_per_minute_usd is None
+
+
+def test_load_config_asr_mistral_price_per_minute_parsed_as_float():
+    env = {**REQUIRED_ENV, "ASR_MISTRAL_PRICE_PER_MINUTE_USD": "0.003"}
+    with patch.dict("os.environ", env, clear=True):
+        cfg = load_config()
+
+    assert cfg.models.asr_mistral_price_per_minute_usd == pytest.approx(0.003)
+
+
+def test_load_config_asr_mistral_price_per_minute_invalid_raises():
+    env = {**REQUIRED_ENV, "ASR_MISTRAL_PRICE_PER_MINUTE_USD": "not-a-number"}
+    with patch.dict("os.environ", env, clear=True):
+        with pytest.raises(ValueError):
+            load_config()
