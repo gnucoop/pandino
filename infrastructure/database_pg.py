@@ -483,6 +483,49 @@ def print_stored_keys() -> None:
             print(f"  Error decrypting key: {str(e)}")
 
 
+def _insert_resolved_cost_usage_log(
+    cursor,
+    date_str: str,
+    user_id: int,
+    token_input: int,
+    token_output: int,
+    cost: float,
+    model: str,
+    provider: str,
+    service: str,
+    request_id: str,
+    source: Optional[str],
+) -> int:
+    """
+    Fixed-intent Usage persistence primitive: inserts a 'logs' row for a
+    monetary cost the caller has already resolved, and returns the new id.
+
+    Provider-blind, pricing-blind, Flask-blind: it does not look up costs,
+    calculate token pricing, or infer any accounting attribution field. The
+    caller (e.g. log_token_usage()) owns the connection/transaction and has
+    already resolved every value passed in.
+    """
+    insert_query, insert_params = build_insert_token_log_query(
+        date_str,
+        user_id,
+        token_input,
+        token_output,
+        cost,
+        model,
+        provider,
+        service,
+        request_id,
+        source,
+    )
+    cursor.execute(insert_query, insert_params)
+
+    log_id_row = cursor.fetchone()
+    if not log_id_row:
+        raise RuntimeError("Failed to retrieve log_id after insert")
+
+    return log_id_row[0]
+
+
 def log_token_usage(
     user_id: int,
     token_input: int,
@@ -508,46 +551,96 @@ def log_token_usage(
     :return: The ID of the inserted log record.
     """
     conn = connect()
-    cursor = conn.cursor()
-    now = datetime.now()
-    date_str = now.strftime("%Y-%m-%d %H:%M:%S")
-    current_date = now.strftime("%Y-%m-%d")
+    try:
+        cursor = conn.cursor()
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d %H:%M:%S")
+        current_date = now.strftime("%Y-%m-%d")
 
-    # SELECT cost
-    cost_query, cost_params = build_get_token_cost_query(provider, model, current_date)
-    cursor.execute(cost_query, cost_params)
-    cost_row = cursor.fetchone()
-    if not cost_row:
-        raise ValueError(f"Cost not found for provider: {provider} and model: {model}")
+        # SELECT cost
+        cost_query, cost_params = build_get_token_cost_query(provider, model, current_date)
+        cursor.execute(cost_query, cost_params)
+        cost_row = cursor.fetchone()
+        if not cost_row:
+            raise ValueError(f"Cost not found for provider: {provider} and model: {model}")
 
-    token_input_cost, token_output_cost = cost_row
-    cost = (token_input * token_input_cost) + (token_output * token_output_cost)
+        token_input_cost, token_output_cost = cost_row
+        cost = (token_input * token_input_cost) + (token_output * token_output_cost)
 
-    # INSERT log (RETURNING id)
-    insert_query, insert_params = build_insert_token_log_query(
-        date_str,
-        user_id,
-        token_input,
-        token_output,
-        cost,
-        model,
-        provider,
-        service,
-        request_id,
-        source,
-    )
-    cursor.execute(insert_query, insert_params)
+        log_id = _insert_resolved_cost_usage_log(
+            cursor,
+            date_str,
+            user_id,
+            token_input,
+            token_output,
+            cost,
+            model,
+            provider,
+            service,
+            request_id,
+            source,
+        )
 
-    log_id_row = cursor.fetchone()
-    if not log_id_row:
-        raise RuntimeError("Failed to retrieve log_id after insert")
+        conn.commit()
+        return log_id
+    finally:
+        conn.close()
 
-    log_id = log_id_row[0]
 
-    conn.commit()
-    conn.close()
+def log_usage_with_resolved_cost(
+    user_id: int,
+    cost: float,
+    model: str,
+    provider: str,
+    service: str,
+    request_id: str,
+    source: Optional[str],
+    token_input: int = 0,
+    token_output: int = 0,
+) -> int:
+    """
+    Persists a Usage log row for a monetary cost the caller has already
+    resolved, bypassing the token-pricing lookup used by log_token_usage().
 
-    return log_id
+    Foundation for future non-token-priced Usage (e.g. ASR): not yet called
+    by any production route. token_input/token_output default to 0, the
+    established compatibility convention for non-token Usage rows.
+
+    :param user_id: The ID of the user whose usage is being logged.
+    :param cost: The already-resolved monetary cost to persist.
+    :param model: The model used.
+    :param provider: The provider of the model.
+    :param service: The HTTP endpoint that produced this usage.
+    :param request_id: The canonical HTTP request id of the request that produced this usage.
+    :param source: The persisted client ecosystem of the user that produced this usage, or None.
+    :param token_input: Compatibility placeholder for non-token Usage; defaults to 0.
+    :param token_output: Compatibility placeholder for non-token Usage; defaults to 0.
+    :return: The ID of the inserted log record.
+    """
+    conn = connect()
+    try:
+        cursor = conn.cursor()
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
+        log_id = _insert_resolved_cost_usage_log(
+            cursor,
+            date_str,
+            user_id,
+            token_input,
+            token_output,
+            cost,
+            model,
+            provider,
+            service,
+            request_id,
+            source,
+        )
+
+        conn.commit()
+        return log_id
+    finally:
+        conn.close()
 
 
 def insert_rag_file(

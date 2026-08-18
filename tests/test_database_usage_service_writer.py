@@ -288,3 +288,154 @@ def test_get_logs_for_admin_maps_historical_null_source_to_n_a(monkeypatch):
     result = database_pg.get_logs_for_admin()
 
     assert result["logs"][0]["source"] == "N/A"
+
+
+# --- Shared resolved-cost persistence foundation (Usage Slice 1) ---
+
+
+class _TrackingCursor:
+    """Like _FakeCursor, but records executed queries by role and never
+    needs a costs-table row: fetchone() always answers the INSERT."""
+
+    def __init__(self, log_id_row):
+        self._log_id_row = log_id_row
+        self.executed = []
+
+    def execute(self, query, params=None):
+        self.executed.append((query, params))
+
+    def fetchone(self):
+        return self._log_id_row
+
+    def close(self):
+        pass
+
+
+class _TrackingConnection:
+    def __init__(self, cursor):
+        self._cursor = cursor
+        self.committed = False
+        self.closed = False
+
+    def cursor(self):
+        return self._cursor
+
+    def commit(self):
+        self.committed = True
+
+    def close(self):
+        self.closed = True
+
+
+def test_log_usage_with_resolved_cost_skips_cost_lookup_and_inserts_row(monkeypatch):
+    cursor = _TrackingCursor(log_id_row=(99,))
+    conn = _TrackingConnection(cursor)
+    monkeypatch.setattr(database_pg, "connect", lambda: conn)
+
+    log_id = database_pg.log_usage_with_resolved_cost(
+        user_id=1,
+        cost=0.42,
+        model="mistral-voxtral",
+        provider="mistral",
+        service="/transcribe",
+        request_id="abc123",
+        source="dino",
+    )
+
+    assert log_id == 99
+    # Exactly one query executed: the INSERT. No costs-table lookup happens.
+    assert len(cursor.executed) == 1
+    insert_query, insert_params = cursor.executed[0]
+    query_str = insert_query.as_string(None)
+    assert "costs" not in query_str
+    assert "RETURNING id" in query_str
+    # token_input/token_output default to 0 (U-2 compatibility convention);
+    # cost is the caller-resolved value, unmodified.
+    assert insert_params[2] == 0
+    assert insert_params[3] == 0
+    assert insert_params[4] == 0.42
+    assert conn.committed is True
+    assert conn.closed is True
+
+
+def test_log_usage_with_resolved_cost_accepts_explicit_token_counts(monkeypatch):
+    cursor = _TrackingCursor(log_id_row=(100,))
+    conn = _TrackingConnection(cursor)
+    monkeypatch.setattr(database_pg, "connect", lambda: conn)
+
+    database_pg.log_usage_with_resolved_cost(
+        user_id=1,
+        cost=0.42,
+        model="mistral-voxtral",
+        provider="mistral",
+        service="/transcribe",
+        request_id="abc123",
+        source=None,
+        token_input=7,
+        token_output=11,
+    )
+
+    _insert_query, insert_params = cursor.executed[0]
+    assert insert_params[2] == 7
+    assert insert_params[3] == 11
+
+
+def test_log_token_usage_closes_connection_when_cost_row_missing(monkeypatch):
+    """Preserves the ValueError-on-missing-cost-row behavior while proving
+    the connection is still closed on the raised path (adjacent leak fix)."""
+    cursor = _TrackingCursor(log_id_row=None)
+    cursor.fetchone = lambda: None  # costs-table lookup returns no row
+    conn = _TrackingConnection(cursor)
+    monkeypatch.setattr(database_pg, "connect", lambda: conn)
+
+    with pytest.raises(ValueError, match="Cost not found"):
+        database_pg.log_token_usage(
+            user_id=1,
+            token_input=10,
+            token_output=5,
+            model="gpt-4",
+            provider="openai",
+            service="/datachat",
+            request_id="abc123",
+            source="dino",
+        )
+
+    assert conn.closed is True
+    assert conn.committed is False
+
+
+def test_log_token_usage_closes_connection_when_insert_returns_no_id(monkeypatch):
+    """Preserves the RuntimeError-on-missing-log-id behavior while proving
+    the connection is still closed on the raised path (adjacent leak fix)."""
+    calls = {"n": 0}
+
+    class _Cursor:
+        executed = []
+
+        def execute(self, query, params=None):
+            _Cursor.executed.append((query, params))
+
+        def fetchone(self):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return (0.001, 0.002)  # cost row
+            return None  # INSERT ... RETURNING id yields nothing
+
+    cursor = _Cursor()
+    conn = _TrackingConnection(cursor)
+    monkeypatch.setattr(database_pg, "connect", lambda: conn)
+
+    with pytest.raises(RuntimeError, match="Failed to retrieve log_id"):
+        database_pg.log_token_usage(
+            user_id=1,
+            token_input=10,
+            token_output=5,
+            model="gpt-4",
+            provider="openai",
+            service="/datachat",
+            request_id="abc123",
+            source="dino",
+        )
+
+    assert conn.closed is True
+    assert conn.committed is False
