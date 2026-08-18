@@ -9,7 +9,8 @@ from config import PROVIDER_API_KEY_MAP
 from services.document_text_service import extract_and_normalize_document, DocumentInput
 import infrastructure.database_pg as database_pg
 from infrastructure.ai import describe_image, asr_response
-from infrastructure.database_pg import edit_tokens, log_token_usage
+from infrastructure.asr_accounting import resolve_asr_cost
+from infrastructure.database_pg import edit_tokens, log_token_usage, log_usage_with_resolved_cost
 from utils.logging_config import get_request_id
 from utils.usage_request_state import set_usage_log_id
 from services.audio_form_service import audioFormCompilation, audioFormPromptBuild
@@ -58,6 +59,12 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
         if asr_provider in PROVIDER_API_KEY_MAP and not asr_api_key:
             return jsonify({"error": "Missing ASR configuration"}), 500
 
+        if (
+            asr_provider == "Mistral"
+            and config.models.asr_mistral_price_per_minute_usd is None
+        ):
+            return jsonify({"error": "Missing ASR configuration"}), 500
+
         try:
             response = asr_response(
                 file,
@@ -81,6 +88,36 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
                     jsonify({"error": "ASR response missing 'text' field"}),
                     500,
                 )
+
+            if asr_provider in ("Deepinfra", "Mistral"):
+                try:
+                    cost = resolve_asr_cost(
+                        asr_provider,
+                        payload,
+                        mistral_price_per_minute=config.models.asr_mistral_price_per_minute_usd,
+                    )
+                    user = database_pg.get_user_by_username(user_email)
+                    if user is None:
+                        raise RuntimeError(f"ASR usage user lookup failed for {user_email}")
+
+                    log_id = log_usage_with_resolved_cost(
+                        user_id=user["id"],
+                        cost=cost,
+                        model=config.models.asr_model,
+                        provider=asr_provider,
+                        service="/transcribe",
+                        request_id=get_request_id(),
+                        source=user.get("client"),
+                    )
+                    set_usage_log_id(log_id)
+                except Exception:
+                    logger.error(
+                        "event=asr_usage_accounting_failed provider=%s model=%s",
+                        asr_provider,
+                        config.models.asr_model,
+                        exc_info=True,
+                    )
+
             return jsonify({"text": text}), 200
         else:
             logger.error(
