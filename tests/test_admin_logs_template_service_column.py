@@ -300,3 +300,12 @@ def test_sidebar_nav_label_is_usage():
     html = _render_logs_template(logs=[])
 
     assert "fa-list me-2\"></i> Usage" in html
+
+
+def test_stats_card_label_is_usage_records_not_total_requests():
+    """The stats card counts COUNT(*) of Usage rows, not HTTP requests -
+    the label must say so and must not say "Total Requests"."""
+    html = _render_logs_template(logs=[])
+
+    assert "Usage Records" in html
+    assert "Total Requests" not in html
