@@ -36,10 +36,10 @@ def _find_log_token_usage_calls():
     return calls
 
 
-def test_exactly_six_production_log_token_usage_call_sites_pass_request_id():
+def test_exactly_seven_production_log_token_usage_call_sites_pass_request_id():
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 6
+    assert len(calls) == 7
 
     for filename, call in calls:
         keywords = {kw.arg for kw in call.keywords}
@@ -48,10 +48,10 @@ def test_exactly_six_production_log_token_usage_call_sites_pass_request_id():
         )
 
 
-def test_exactly_six_production_log_token_usage_call_sites_pass_source():
+def test_exactly_seven_production_log_token_usage_call_sites_pass_source():
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 6
+    assert len(calls) == 7
 
     for filename, call in calls:
         keywords = {kw.arg for kw in call.keywords}
@@ -94,7 +94,7 @@ def test_all_six_call_sites_capture_log_id_locally():
     assignments = _find_log_token_usage_assignments()
     calls = _find_log_token_usage_calls()
 
-    assert len(assignments) == len(calls) == 6
+    assert len(assignments) == len(calls) == 7
 
 
 def test_all_six_call_sites_hand_off_log_id_to_usage_request_state():

@@ -8,7 +8,7 @@ from flask import Blueprint, Response, current_app, jsonify, request
 from config import PROVIDER_API_KEY_MAP
 from services.document_text_service import extract_and_normalize_document, DocumentInput
 import infrastructure.database_pg as database_pg
-from infrastructure.ai import describe_image, asr_response
+from infrastructure.ai import describe_image_with_usage, asr_response
 from infrastructure.asr_accounting import resolve_asr_cost
 from infrastructure.database_pg import edit_tokens, log_token_usage, log_usage_with_resolved_cost
 from utils.logging_config import get_request_id
@@ -148,23 +148,54 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
             return jsonify({"error": f"Error extracting text from file: {str(e)}"}), 422
 
     if file.mimetype.startswith("image"):
+        vision_provider = config.models.vision_provider or ""
+        vision_model = config.models.vision_model or ""
+
         try:
             b64 = base64.b64encode(file.read()).decode()
             dataurl = f"data:{file.mimetype};base64,{b64}"
-            text = describe_image(
+            result = describe_image_with_usage(
                 dataurl,
-                config.models.vision_provider or "",
-                config.models.vision_model or "",
+                vision_provider,
+                vision_model,
                 api_key=os.getenv(
-                    PROVIDER_API_KEY_MAP.get(config.models.vision_provider or "", "")
+                    PROVIDER_API_KEY_MAP.get(vision_provider, "")
                 ),
             )
-            return jsonify({"text": text}), 200
         except Exception as e:
             return (
                 jsonify({"error": f"Error extracting text from image: {str(e)}"}),
                 500,
             )
+
+        text = result["description"]
+
+        try:
+            token_usage = result["token_usage"]
+            user = database_pg.get_user_by_username(user_email)
+            if user is None:
+                raise RuntimeError(f"Vision usage user lookup failed for {user_email}")
+
+            log_id = log_token_usage(
+                user_id=user["id"],
+                token_input=token_usage["input_tokens"],
+                token_output=token_usage["output_tokens"],
+                model=vision_model,
+                provider=vision_provider,
+                service="/transcribe",
+                request_id=get_request_id(),
+                source=user.get("client"),
+            )
+            set_usage_log_id(log_id)
+        except Exception:
+            logger.error(
+                "event=vision_usage_accounting_failed provider=%s model=%s",
+                vision_provider,
+                vision_model,
+                exc_info=True,
+            )
+
+        return jsonify({"text": text}), 200
 
     return jsonify({"error": f"Unexpected file mimetype: {file.mimetype}"}), 400
 
