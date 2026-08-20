@@ -13,7 +13,9 @@ changing the public NormalizedDocument contract.
 """
 
 import io
+import logging
 import os
+import time
 from typing import TypedDict
 
 from infrastructure.ai import TokenUsage, extract_text_from_image_with_usage
@@ -28,8 +30,17 @@ from services.document_text_service import (
     NormalizedDocument,
     extract_and_normalize_document,
 )
+from utils.operational_event import build_operational_event
+
+logger = logging.getLogger(__name__)
 
 MIN_EXTRACTED_TEXT_CHARS = 50
+
+#: Closed `reason` domain for the OCR fallback Operational events (design E2/E6).
+OCR_FALLBACK_REASON_EMPTY_LOCAL_TEXT = "empty_local_text"
+OCR_FALLBACK_REASON_INSUFFICIENT_LOCAL_TEXT = "insufficient_local_text"
+OCR_FAILURE_REASON_BLANK_PAGE = "blank_page"
+OCR_FAILURE_REASON_EMPTY_PAGE_TEXT = "empty_page_text"
 
 
 class DocumentExtractionResult(TypedDict):
@@ -101,13 +112,35 @@ def _extract_pdf_text_with_ocr(
     ocr_provider: str,
     ocr_model: str,
     ocr_api_key: str | None,
+    reason: str,
 ) -> DocumentExtractionResult:
+    """
+    Run the OCR fallback for one PDF and report its outcome operationally.
+
+    ``reason`` is module-private plumbing: the fallback *decision* is taken by
+    extract_document_text_with_metadata, while the single natural emission
+    point for the fallback's outcome is here. It carries one of the two
+    OCR_FALLBACK_REASON_* literals and never reaches a public contract.
+    """
+    started = time.perf_counter()
     rendered_pages = render_pdf_pages_to_png(pdf_bytes)
     page_texts = []
     ocr_token_usage = _zero_token_usage()
 
     for page in rendered_pages:
         if is_rendered_page_blank(page.image_bytes):
+            message, extra = build_operational_event(
+                event="document_ocr_fallback_failed",
+                provider=ocr_provider,
+                model=ocr_model,
+                duration_ms=round((time.perf_counter() - started) * 1000),
+                details={
+                    "page_number": page.page_number,
+                    "page_count": len(rendered_pages),
+                    "reason": OCR_FAILURE_REASON_BLANK_PAGE,
+                },
+            )
+            logger.warning(message, extra=extra)
             raise ValueError(
                 f"OCR did not extract text from PDF page {page.page_number}"
             )
@@ -121,6 +154,18 @@ def _extract_pdf_text_with_ocr(
         page_text = page_result["text"].strip()
 
         if not page_text:
+            message, extra = build_operational_event(
+                event="document_ocr_fallback_failed",
+                provider=ocr_provider,
+                model=ocr_model,
+                duration_ms=round((time.perf_counter() - started) * 1000),
+                details={
+                    "page_number": page.page_number,
+                    "page_count": len(rendered_pages),
+                    "reason": OCR_FAILURE_REASON_EMPTY_PAGE_TEXT,
+                },
+            )
+            logger.warning(message, extra=extra)
             raise ValueError(
                 f"OCR did not extract text from PDF page {page.page_number}"
             )
@@ -132,6 +177,19 @@ def _extract_pdf_text_with_ocr(
 
     if not text:
         raise ValueError("OCR did not extract text from PDF")
+
+    message, extra = build_operational_event(
+        event="document_ocr_fallback_completed",
+        provider=ocr_provider,
+        model=ocr_model,
+        duration_ms=round((time.perf_counter() - started) * 1000),
+        details={
+            "page_count": len(rendered_pages),
+            "extracted_chars": len(text),
+            "reason": reason,
+        },
+    )
+    logger.info(message, extra=extra)
 
     return {
         "document": {"text": text, "filename": filename, "role": role},
@@ -199,6 +257,7 @@ def extract_document_text_with_metadata(
                     ocr_provider=provider,
                     ocr_model=model,
                     ocr_api_key=ocr_api_key,
+                    reason=OCR_FALLBACK_REASON_EMPTY_LOCAL_TEXT,
                 )
         raise
 
@@ -212,6 +271,7 @@ def extract_document_text_with_metadata(
                 ocr_provider=provider,
                 ocr_model=model,
                 ocr_api_key=ocr_api_key,
+                reason=OCR_FALLBACK_REASON_INSUFFICIENT_LOCAL_TEXT,
             )
 
     return {"document": normalized, "ocr_token_usage": _zero_token_usage()}

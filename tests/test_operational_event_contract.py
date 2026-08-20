@@ -289,12 +289,14 @@ def test_real_logging_compatibility(capsys):
 
 
 # ---------------------------------------------------------------------------
-# 10. Production adoption ratchet — PILOT SLICE P2
+# 10. Production adoption ratchet — PILOT SLICE P3
 #
 # The foundation-era gate asserted ZERO production call sites. That gate is
 # retired here, not weakened: production adoption began with the /compare_docs
 # pilot's route-level events (E1 compare_docs_started, E5
-# compare_docs_controlled_failure), so a zero-adoption assertion can no longer
+# compare_docs_controlled_failure) and continued in P3 with the service-level
+# events (E2/E6 in document_extraction_service, E3/E4 in
+# document_comparison_service), so a zero-adoption assertion can no longer
 # be true. It is replaced by a POSITIVE ALLOW-LIST of the same strictness: the
 # set of production modules referencing the builder must equal the sanctioned
 # set exactly. A new production call site appearing in any other module fails
@@ -303,9 +305,13 @@ def test_real_logging_compatibility(capsys):
 
 
 # Production modules sanctioned to construct persistent Operational events.
-# Extended one slice at a time, deliberately: P3 adds the two service modules.
+# Extended one slice at a time, deliberately, and always as EXACT module
+# paths: never a directory prefix, so an unsanctioned future call site in
+# services/ (or anywhere else) still fails this gate.
 SANCTIONED_PRODUCTION_CALL_SITES = {
     "routes/documents.py",
+    "services/document_extraction_service.py",
+    "services/document_comparison_service.py",
 }
 
 
@@ -360,11 +366,35 @@ def test_production_call_sites_match_the_sanctioned_allow_list_exactly():
     )
 
 
-def test_pilot_route_is_the_only_sanctioned_production_module_in_p2():
-    assert SANCTIONED_PRODUCTION_CALL_SITES == {"routes/documents.py"}, (
-        "PILOT SLICE P2 sanctions exactly one production module. Service-level "
-        "instrumentation (E2/E3/E4/E6) belongs to P3."
+def test_pilot_modules_are_the_only_sanctioned_production_modules_in_p3():
+    assert SANCTIONED_PRODUCTION_CALL_SITES == {
+        "routes/documents.py",
+        "services/document_extraction_service.py",
+        "services/document_comparison_service.py",
+    }, (
+        "PILOT SLICE P3 sanctions exactly three production modules: the "
+        "/compare_docs route (E1/E5) and the two pilot services (E2/E6 and "
+        "E3/E4). Each is pinned by exact path; widening this to a directory "
+        "prefix would silently sanction every future services/ call site."
     )
+
+
+@pytest.mark.parametrize(
+    "unsanctioned_relpath",
+    [
+        "services/document_ocr_service.py",
+        "services/document_text_service.py",
+        "infrastructure/ai.py",
+        "infrastructure/database_pg.py",
+    ],
+)
+def test_ratchet_still_rejects_a_neighbouring_production_module(
+    unsanctioned_relpath,
+):
+    """The allow-list is path-pinned, not directory-scoped: modules sitting
+    next to a sanctioned one — including two more in services/ — remain
+    outside it, so adopting them stays a deliberate, visible diff."""
+    assert unsanctioned_relpath not in SANCTIONED_PRODUCTION_CALL_SITES
 
 
 def test_no_test_module_outside_this_file_calls_the_builder_unsanctioned():
@@ -374,13 +404,14 @@ def test_no_test_module_outside_this_file_calls_the_builder_unsanctioned():
     found = _builder_reference_relpaths()
     test_references = sorted(rel for rel in found if rel.startswith("tests/"))
 
+    sanctioned_test_modules = {"tests/test_documents_route.py"}
     unsanctioned = [
-        rel for rel in test_references if rel != "tests/test_documents_route.py"
+        rel for rel in test_references if rel not in sanctioned_test_modules
     ]
 
     assert unsanctioned == [], (
         "Only tests/test_documents_route.py may reference "
-        f"build_operational_event in P2; found: {unsanctioned}"
+        f"build_operational_event in P3; found: {unsanctioned}"
     )
 
 

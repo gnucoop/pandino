@@ -10,7 +10,9 @@ from flask import Flask
 from werkzeug.datastructures import MultiDict
 
 from routes import documents as documents_route
-from utils.logging_config import register_request_context_hooks
+from services import document_comparison_service as comparison_service
+from services import document_extraction_service as extraction_service
+from utils.logging_config import ContextDefaultsFilter, register_request_context_hooks
 from utils.operational_persistence import OperationalPersistenceHandler
 
 
@@ -1053,3 +1055,221 @@ def test_operational_persistence_failure_does_not_affect_compare_docs_response(
         "summary": "ok",
         "reasoning": "because",
     }
+
+
+# ---------------------------------------------------------------------------
+# Combined pilot timeline — PILOT SLICE P3
+#
+# The only test in the pilot that exercises route AND service instrumentation
+# together. The route's own collaborators are NOT stubbed here: the real
+# extract_document_text_with_metadata and compare_documents run, and only the
+# leaf I/O boundaries below them (local parser, PDF renderer, Vision provider,
+# comparison provider, prompt loader) are faked. That is what makes the event
+# ORDER across layers meaningful rather than asserted against two mocks.
+# ---------------------------------------------------------------------------
+
+_TIMELINE_OCR_TEXT = "SENTINEL-OCR-TEXT-do-not-persist"
+_TIMELINE_PDF_FILENAME = "SENTINEL-SCAN.pdf"
+
+
+def _patch_real_service_leaves(monkeypatch, *, ocr_text=_TIMELINE_OCR_TEXT):
+    """Fake only the leaves under the two real pilot services."""
+    _patch_success_dependencies(monkeypatch)
+
+    def fake_local_extract(doc_input):
+        if doc_input["source_type"] == "text":
+            return {
+                "text": doc_input["content"],
+                "filename": doc_input["filename"],
+                "role": doc_input["role"],
+            }
+        # A scanned PDF: local parsing yields too little to compare.
+        return {
+            "text": "short",
+            "filename": doc_input["filename"],
+            "role": doc_input["role"],
+        }
+
+    monkeypatch.setattr(
+        extraction_service, "extract_and_normalize_document", fake_local_extract
+    )
+    monkeypatch.setattr(
+        extraction_service,
+        "render_pdf_pages_to_png",
+        lambda pdf_bytes: [
+            SimpleNamespace(page_number=1, image_bytes=b"page one"),
+            SimpleNamespace(page_number=2, image_bytes=b"page two"),
+        ],
+    )
+    monkeypatch.setattr(
+        extraction_service, "is_rendered_page_blank", lambda image_bytes: False
+    )
+    monkeypatch.setattr(
+        extraction_service,
+        "extract_text_from_image_with_usage",
+        lambda *args, **kwargs: {
+            "text": ocr_text,
+            "token_usage": {
+                "input_tokens": 7,
+                "output_tokens": 2,
+                "total_tokens": 9,
+            },
+        },
+    )
+
+    monkeypatch.setattr(
+        comparison_service,
+        "load_prompt",
+        lambda title, default_text="": default_text,
+    )
+
+
+def _timeline_request_data():
+    return MultiDict(
+        [
+            ("prompt", "Compare these documents"),
+            (
+                "text_documents",
+                json.dumps(
+                    [{"content": "a" * 80, "filename": "reference.txt"}]
+                ),
+            ),
+            ("file_roles", json.dumps(["candidate"])),
+            (
+                "files",
+                (io.BytesIO(b"%PDF fake bytes"), _TIMELINE_PDF_FILENAME),
+            ),
+        ]
+    )
+
+
+def test_successful_compare_docs_emits_the_full_three_layer_timeline(
+    monkeypatch, caplog
+):
+    app = _make_app()
+    _patch_real_service_leaves(monkeypatch)
+
+    class SucceedingLlm:
+        def invoke(self, messages):
+            return SimpleNamespace(
+                content=json.dumps(
+                    {"score": 88, "summary": "ok", "reasoning": "because"}
+                ),
+                usage_metadata={
+                    "input_tokens": 40,
+                    "output_tokens": 12,
+                    "total_tokens": 52,
+                },
+            )
+
+    monkeypatch.setattr(
+        comparison_service, "choose_llm", lambda *args, **kwargs: SucceedingLlm()
+    )
+
+    # The ContextDefaultsFilter is HANDLER-owned in production
+    # (utils/logging_config.py), so caplog's own handler sees records before
+    # any such mutation unless the same filter is attached to it. Attaching it
+    # here reproduces the real handler boundary instead of plumbing a
+    # request_id through the call sites, which O3 forbids outright.
+    caplog.handler.addFilter(ContextDefaultsFilter())
+
+    with caplog.at_level(logging.INFO):
+        response = _post(
+            app, _timeline_request_data(), content_type="multipart/form-data"
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["score"] == 88
+
+    timeline = [r.maui_event for r in _persistent_records(caplog)]
+    assert timeline == [
+        "compare_docs_started",
+        "document_ocr_fallback_completed",
+        "document_comparison_completed",
+    ]
+
+    records = _persistent_records(caplog)
+
+    # One request, one correlation id, across three modules.
+    request_ids = {r.request_id for r in records}
+    assert len(request_ids) == 1
+    assert request_ids != {"-"}
+
+    assert {r.name for r in records} == {
+        documents_route.__name__,
+        extraction_service.__name__,
+        comparison_service.__name__,
+    }
+
+    fallback = _persistent_records(caplog, "document_ocr_fallback_completed")[0]
+    assert fallback.maui_provider == "Deepinfra"
+    assert fallback.maui_model == "vision-ocr-model"
+    assert fallback.maui_details["page_count"] == 2
+    assert fallback.maui_details["reason"] == "insufficient_local_text"
+
+    completed = _persistent_records(caplog, "document_comparison_completed")[0]
+    assert completed.maui_provider == "Google"
+    assert completed.maui_details["document_count"] == 2
+    assert completed.maui_details["total_tokens"] == 52
+
+    # No failure event anywhere on a success, and no leakage across the whole
+    # persisted timeline.
+    assert _persistent_records(caplog, "compare_docs_controlled_failure") == []
+    assert _persistent_records(caplog, "document_ocr_fallback_failed") == []
+    for record in records:
+        rendered = " ".join(
+            [
+                record.getMessage(),
+                str(getattr(record, "maui_message", "")),
+                str(getattr(record, "maui_details", {})),
+            ]
+        )
+        assert "SENTINEL" not in rendered
+
+
+def test_ocr_failure_emits_service_cause_then_route_controlled_failure(
+    monkeypatch, caplog
+):
+    """E6 and E5 are layered, not duplicated: E6 names the specific OCR cause
+    inside the service, E5 records the controlled HTTP outcome at the route."""
+    app = _make_app()
+    _patch_real_service_leaves(monkeypatch)
+    monkeypatch.setattr(
+        extraction_service,
+        "is_rendered_page_blank",
+        lambda image_bytes: image_bytes == b"page two",
+    )
+    monkeypatch.setattr(
+        comparison_service,
+        "choose_llm",
+        lambda *args, **kwargs: pytest.fail("comparison must not be reached"),
+    )
+
+    with caplog.at_level(logging.INFO):
+        response = _post(
+            app, _timeline_request_data(), content_type="multipart/form-data"
+        )
+
+    assert response.status_code == 400
+
+    timeline = [r.maui_event for r in _persistent_records(caplog)]
+    assert timeline == [
+        "compare_docs_started",
+        "document_ocr_fallback_failed",
+        "compare_docs_controlled_failure",
+    ]
+
+    failed = _persistent_records(caplog, "document_ocr_fallback_failed")[0]
+    assert failed.levelno == logging.WARNING
+    assert failed.maui_details == {
+        "page_number": 2,
+        "page_count": 2,
+        "reason": "blank_page",
+    }
+
+    controlled = _persistent_records(caplog, "compare_docs_controlled_failure")[0]
+    assert controlled.maui_error_type == "ValueError"
+    assert controlled.maui_details["http_status"] == 400
+
+    assert _persistent_records(caplog, "document_ocr_fallback_completed") == []
+    assert _persistent_records(caplog, "document_comparison_completed") == []
