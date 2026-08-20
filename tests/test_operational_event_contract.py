@@ -289,11 +289,31 @@ def test_real_logging_compatibility(capsys):
 
 
 # ---------------------------------------------------------------------------
-# 10. No production adoption yet
+# 10. Production adoption ratchet — PILOT SLICE P2
+#
+# The foundation-era gate asserted ZERO production call sites. That gate is
+# retired here, not weakened: production adoption began with the /compare_docs
+# pilot's route-level events (E1 compare_docs_started, E5
+# compare_docs_controlled_failure), so a zero-adoption assertion can no longer
+# be true. It is replaced by a POSITIVE ALLOW-LIST of the same strictness: the
+# set of production modules referencing the builder must equal the sanctioned
+# set exactly. A new production call site appearing in any other module fails
+# this test, and so does the disappearance of a sanctioned one.
 # ---------------------------------------------------------------------------
 
 
-def test_no_production_call_sites_use_build_operational_event():
+# Production modules sanctioned to construct persistent Operational events.
+# Extended one slice at a time, deliberately: P3 adds the two service modules.
+SANCTIONED_PRODUCTION_CALL_SITES = {
+    "routes/documents.py",
+}
+
+
+def _builder_reference_relpaths():
+    """Every non-excluded .py file in the repo that references the builder,
+    as repo-relative posix paths, minus the files sanctioned for reasons other
+    than production adoption (the builder module itself, this test, and the
+    static-analysis test that must pattern-match the identifier as text)."""
     excluded_dirs = {"venv", ".venv", "__pycache__", ".git", "node_modules"}
     own_module = (REPO_ROOT / "utils" / "operational_event.py").resolve()
     own_test = Path(__file__).resolve()
@@ -302,12 +322,12 @@ def test_no_production_call_sites_use_build_operational_event():
     # "build_operational_event" as TEXT/AST pattern-matching material (to
     # detect the canonical builder-pairing form and to prove the persistence
     # subsystem never calls it) without itself becoming a call site. This is
-    # the same sanctioned shape as this file's own self-exclusion below.
+    # the same sanctioned shape as this file's own self-exclusion.
     sanctioned_static_analysis = (
         REPO_ROOT / "tests" / "test_logging_invariants.py"
     ).resolve()
 
-    offenders = []
+    found = set()
     for path in REPO_ROOT.rglob("*.py"):
         if any(part in excluded_dirs for part in path.parts):
             continue
@@ -316,11 +336,51 @@ def test_no_production_call_sites_use_build_operational_event():
             continue
         text = path.read_text(errors="ignore")
         if "build_operational_event" in text:
-            offenders.append(str(path.relative_to(REPO_ROOT)))
+            found.add(path.relative_to(REPO_ROOT).as_posix())
+    return found
 
-    assert offenders == [], (
-        "build_operational_event must have zero call sites outside its own "
-        f"module and this test in FOUNDATION INTERVENTION I1: {offenders}"
+
+def test_production_call_sites_match_the_sanctioned_allow_list_exactly():
+    found = _builder_reference_relpaths()
+    production = {rel for rel in found if not rel.startswith("tests/")}
+
+    unsanctioned = sorted(production - SANCTIONED_PRODUCTION_CALL_SITES)
+    missing = sorted(SANCTIONED_PRODUCTION_CALL_SITES - production)
+
+    assert unsanctioned == [], (
+        "build_operational_event may only be used by allow-listed production "
+        f"modules (PILOT SLICE P2). Unsanctioned call sites: {unsanctioned}. "
+        "Adding a production call site is a deliberate slice: extend "
+        "SANCTIONED_PRODUCTION_CALL_SITES in the same commit."
+    )
+    assert missing == [], (
+        "A sanctioned production call site no longer references "
+        f"build_operational_event: {missing}. Either the instrumentation was "
+        "removed or the allow-list is stale."
+    )
+
+
+def test_pilot_route_is_the_only_sanctioned_production_module_in_p2():
+    assert SANCTIONED_PRODUCTION_CALL_SITES == {"routes/documents.py"}, (
+        "PILOT SLICE P2 sanctions exactly one production module. Service-level "
+        "instrumentation (E2/E3/E4/E6) belongs to P3."
+    )
+
+
+def test_no_test_module_outside_this_file_calls_the_builder_unsanctioned():
+    """The foundation-era gate also kept the builder out of unrelated test
+    modules. That half of the guard is preserved: only the pilot's own route
+    tests may exercise a real production call site."""
+    found = _builder_reference_relpaths()
+    test_references = sorted(rel for rel in found if rel.startswith("tests/"))
+
+    unsanctioned = [
+        rel for rel in test_references if rel != "tests/test_documents_route.py"
+    ]
+
+    assert unsanctioned == [], (
+        "Only tests/test_documents_route.py may reference "
+        f"build_operational_event in P2; found: {unsanctioned}"
     )
 
 

@@ -2,6 +2,7 @@
 
 import io
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,7 @@ from werkzeug.datastructures import MultiDict
 
 from routes import documents as documents_route
 from utils.logging_config import register_request_context_hooks
+from utils.operational_persistence import OperationalPersistenceHandler
 
 
 def _make_app() -> Flask:
@@ -582,3 +584,472 @@ def test_compare_docs_usage_write_failure_registers_no_log_id(monkeypatch):
     # compare_docs's own try/except, response stays a valid 200.
     assert response.status_code == 200
     assert handoff_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Persistent Operational events — PILOT SLICE P2 (E1, E5)
+#
+# Assertions are on LogRecord metadata captured via caplog: the emission
+# boundary is logger.<level>(message, extra=extra), and the persistence
+# queue/DB are deliberately out of scope here (they have their own foundation
+# tests). E1 is INFO, so those tests raise the capture level explicitly; that
+# is a test mechanic only and changes no runtime configuration.
+# ---------------------------------------------------------------------------
+
+ROUTE_LOGGER_NAME = documents_route.__name__
+
+
+def _persistent_records(caplog, event=None):
+    records = [r for r in caplog.records if getattr(r, "maui_persist", False)]
+    if event is not None:
+        records = [r for r in records if getattr(r, "maui_event", None) == event]
+    return records
+
+
+def _patch_full_success_flow(monkeypatch):
+    """Success-path doubles for extraction and comparison, on top of the
+    shared dependency patches, so a request reaches the 200 response."""
+    _patch_success_dependencies(monkeypatch)
+
+    def fake_extract_document_text_with_metadata(doc_input, **kwargs):
+        return {
+            "document": {
+                "text": "normalized document",
+                "filename": doc_input["filename"],
+                "role": doc_input["role"],
+            },
+            "ocr_token_usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
+
+    monkeypatch.setattr(
+        documents_route,
+        "extract_document_text_with_metadata",
+        fake_extract_document_text_with_metadata,
+    )
+    monkeypatch.setattr(
+        documents_route,
+        "compare_documents",
+        lambda **kwargs: {
+            "comparison": {"score": 91, "summary": "ok", "reasoning": "because"},
+            "token_usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+            },
+        },
+    )
+
+
+def _two_text_documents():
+    return json.dumps(
+        [
+            {"content": "first document", "filename": "first.txt", "role": "reference"},
+            {
+                "content": "second document",
+                "filename": "second.txt",
+                "role": "candidate",
+            },
+        ]
+    )
+
+
+def _post(app, data, content_type=None):
+    kwargs = {}
+    if content_type is not None:
+        kwargs["content_type"] = content_type
+    return app.test_client().post(
+        "/compare_docs",
+        data=data,
+        headers={"X-API-KEY": "test-key", "X-USER-EMAIL": "user@example.com"},
+        **kwargs,
+    )
+
+
+def test_compare_docs_emits_one_started_event_with_exact_fields(monkeypatch, caplog):
+    app = _make_app()
+    _patch_full_success_flow(monkeypatch)
+
+    data = MultiDict(
+        [
+            ("prompt", "Compare these documents"),
+            ("additional_context", "SENTINEL-CONTEXT-do-not-persist"),
+            ("language", "SENTINEL-LANGUAGE-do-not-persist"),
+            (
+                "text_documents",
+                json.dumps(
+                    [{"content": "raw text document", "filename": "reference.txt"}]
+                ),
+            ),
+            ("file_roles", json.dumps(["candidate"])),
+            ("files", (io.BytesIO(b"%PDF fake bytes"), "SENTINEL-FILENAME.pdf")),
+        ]
+    )
+
+    with caplog.at_level(logging.INFO, logger=ROUTE_LOGGER_NAME):
+        response = _post(app, data, content_type="multipart/form-data")
+
+    assert response.status_code == 200
+
+    started = _persistent_records(caplog, "compare_docs_started")
+    assert len(started) == 1
+
+    record = started[0]
+    assert record.maui_persist is True
+    assert record.maui_event == "compare_docs_started"
+    assert record.maui_provider == "Google"
+    assert record.maui_model == "gemini-2.5-flash"
+    assert record.maui_details == {
+        "file_count": 1,
+        "text_document_count": 1,
+        "ocr_configured": True,
+        "language_present": True,
+        "additional_context_present": True,
+    }
+    assert record.levelno == logging.INFO
+    assert record.name == ROUTE_LOGGER_NAME
+
+    # E1 declares no duration_ms, no error_type and no message.
+    assert not hasattr(record, "maui_duration_ms")
+    assert not hasattr(record, "maui_error_type")
+    assert not hasattr(record, "maui_message")
+
+
+def test_started_event_records_presence_booleans_not_client_content(
+    monkeypatch, caplog
+):
+    app = _make_app()
+    _patch_full_success_flow(monkeypatch)
+
+    data = MultiDict(
+        [
+            ("prompt", "SENTINEL-PROMPT-do-not-persist"),
+            ("additional_context", "SENTINEL-CONTEXT-do-not-persist"),
+            ("language", "SENTINEL-LANGUAGE-do-not-persist"),
+            ("text_documents", _two_text_documents()),
+        ]
+    )
+
+    with caplog.at_level(logging.INFO, logger=ROUTE_LOGGER_NAME):
+        response = _post(app, data)
+
+    assert response.status_code == 200
+
+    record = _persistent_records(caplog, "compare_docs_started")[0]
+    assert record.maui_details["language_present"] is True
+    assert record.maui_details["additional_context_present"] is True
+
+    # The values themselves reach neither the structured metadata nor the
+    # rendered message. Sentinels are short and distinctive, so these checks
+    # are exact rather than ambiguous.
+    for sentinel in (
+        "SENTINEL-PROMPT-do-not-persist",
+        "SENTINEL-CONTEXT-do-not-persist",
+        "SENTINEL-LANGUAGE-do-not-persist",
+    ):
+        assert sentinel not in record.getMessage()
+        assert sentinel not in str(record.maui_details)
+
+
+def test_started_event_absent_optionals_are_false(monkeypatch, caplog):
+    app = _make_app()
+    _patch_full_success_flow(monkeypatch)
+
+    data = MultiDict(
+        [
+            ("prompt", "Compare these documents"),
+            ("text_documents", _two_text_documents()),
+        ]
+    )
+
+    with caplog.at_level(logging.INFO, logger=ROUTE_LOGGER_NAME):
+        response = _post(app, data)
+
+    assert response.status_code == 200
+
+    record = _persistent_records(caplog, "compare_docs_started")[0]
+    assert record.maui_details == {
+        "file_count": 0,
+        "text_document_count": 2,
+        "ocr_configured": True,
+        "language_present": False,
+        "additional_context_present": False,
+    }
+
+
+def test_started_event_reports_ocr_not_configured(monkeypatch, caplog):
+    app = _make_app()
+    app.config["MAUI_CONFIG"].models.vision_model = None
+    _patch_full_success_flow(monkeypatch)
+
+    data = MultiDict(
+        [
+            ("prompt", "Compare these documents"),
+            ("text_documents", _two_text_documents()),
+        ]
+    )
+
+    with caplog.at_level(logging.INFO, logger=ROUTE_LOGGER_NAME):
+        response = _post(app, data)
+
+    assert response.status_code == 200
+    record = _persistent_records(caplog, "compare_docs_started")[0]
+    assert record.maui_details["ocr_configured"] is False
+
+
+@pytest.mark.parametrize(
+    "data, expected_details",
+    [
+        pytest.param(
+            {"text_documents": "[]"},
+            "The prompt field is required.",
+            id="missing_prompt",
+        ),
+        pytest.param(
+            {
+                "prompt": "Compare these documents",
+                "text_documents": json.dumps([{"content": "only one"}]),
+            },
+            "At least two documents are required.",
+            id="insufficient_document_count",
+        ),
+    ],
+)
+def test_early_rejection_emits_no_started_event(
+    monkeypatch, caplog, data, expected_details
+):
+    app = _make_app()
+    _patch_full_success_flow(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger=ROUTE_LOGGER_NAME):
+        response = _post(app, data)
+
+    assert response.status_code == 400
+    assert response.get_json()["details"] == expected_details
+    assert _persistent_records(caplog, "compare_docs_started") == []
+    assert _persistent_records(caplog) == []
+
+
+def test_value_error_path_emits_one_controlled_failure_event(monkeypatch, caplog):
+    app = _make_app()
+    _patch_full_success_flow(monkeypatch)
+
+    def fake_extract_document_text_with_metadata(*args, **kwargs):
+        raise ValueError("SENTINEL-ERROR-TEXT for candidate.pdf")
+
+    monkeypatch.setattr(
+        documents_route,
+        "extract_document_text_with_metadata",
+        fake_extract_document_text_with_metadata,
+    )
+
+    data = MultiDict(
+        [
+            ("prompt", "Compare these documents"),
+            ("text_documents", _two_text_documents()),
+        ]
+    )
+
+    with caplog.at_level(logging.INFO, logger=ROUTE_LOGGER_NAME):
+        response = _post(app, data)
+
+    # Existing 400 contract, unchanged: the raw exception text still reaches
+    # the client exactly as before.
+    assert response.status_code == 400
+    assert response.get_json() == {
+        "error": "Invalid request",
+        "details": "SENTINEL-ERROR-TEXT for candidate.pdf",
+    }
+
+    failures = _persistent_records(caplog, "compare_docs_controlled_failure")
+    assert len(failures) == 1
+
+    record = failures[0]
+    assert record.maui_persist is True
+    assert record.maui_error_type == "ValueError"
+    assert record.maui_details == {"http_status": 400}
+    assert record.levelno == logging.WARNING
+    assert not hasattr(record, "maui_message")
+
+    # The sentinel is in the HTTP body (unchanged contract) and nowhere in the
+    # persistent metadata or the rendered operational message.
+    assert "SENTINEL-ERROR-TEXT" not in record.getMessage()
+    assert "SENTINEL-ERROR-TEXT" not in str(record.maui_details)
+    assert "SENTINEL-ERROR-TEXT" not in str(getattr(record, "maui_error_type", ""))
+    assert record.exc_info is None
+
+
+def test_not_implemented_error_path_emits_one_controlled_failure_event(
+    monkeypatch, caplog
+):
+    app = _make_app()
+    _patch_full_success_flow(monkeypatch)
+
+    def fake_extract_document_text_with_metadata(*args, **kwargs):
+        raise NotImplementedError("SENTINEL-UNSUPPORTED-FORMAT .xyz")
+
+    monkeypatch.setattr(
+        documents_route,
+        "extract_document_text_with_metadata",
+        fake_extract_document_text_with_metadata,
+    )
+
+    data = MultiDict(
+        [
+            ("prompt", "Compare these documents"),
+            ("text_documents", _two_text_documents()),
+        ]
+    )
+
+    with caplog.at_level(logging.INFO, logger=ROUTE_LOGGER_NAME):
+        response = _post(app, data)
+
+    assert response.status_code == 415
+    assert response.get_json() == {
+        "error": "Unsupported document format",
+        "details": "SENTINEL-UNSUPPORTED-FORMAT .xyz",
+    }
+
+    failures = _persistent_records(caplog, "compare_docs_controlled_failure")
+    assert len(failures) == 1
+
+    record = failures[0]
+    assert record.maui_error_type == "NotImplementedError"
+    assert record.maui_details == {"http_status": 415}
+    assert record.levelno == logging.WARNING
+    assert "SENTINEL-UNSUPPORTED-FORMAT" not in record.getMessage()
+    assert "SENTINEL-UNSUPPORTED-FORMAT" not in str(record.maui_details)
+
+
+def test_payload_too_large_path_emits_no_controlled_failure_event(monkeypatch, caplog):
+    """413 is its own terminal handler and is NOT an E5 site (E4 belongs to the
+    service layer, slice P3). It must stay silent for E5 in P2."""
+    app = _make_app()
+    _patch_full_success_flow(monkeypatch)
+
+    def fake_compare_documents(**kwargs):
+        raise documents_route.DocumentComparisonPayloadTooLargeError("too large")
+
+    monkeypatch.setattr(documents_route, "compare_documents", fake_compare_documents)
+
+    data = MultiDict(
+        [
+            ("prompt", "Compare these documents"),
+            ("text_documents", _two_text_documents()),
+        ]
+    )
+
+    with caplog.at_level(logging.INFO, logger=ROUTE_LOGGER_NAME):
+        response = _post(app, data)
+
+    assert response.status_code == 413
+    assert _persistent_records(caplog, "compare_docs_controlled_failure") == []
+    assert len(_persistent_records(caplog, "compare_docs_started")) == 1
+
+
+def test_success_path_emits_no_controlled_failure_event(monkeypatch, caplog):
+    app = _make_app()
+    _patch_full_success_flow(monkeypatch)
+
+    data = MultiDict(
+        [
+            ("prompt", "Compare these documents"),
+            ("text_documents", _two_text_documents()),
+        ]
+    )
+
+    with caplog.at_level(logging.INFO, logger=ROUTE_LOGGER_NAME):
+        response = _post(app, data)
+
+    assert response.status_code == 200
+    assert _persistent_records(caplog, "compare_docs_controlled_failure") == []
+    assert len(_persistent_records(caplog, "compare_docs_started")) == 1
+
+
+def test_route_call_sites_declare_no_context_ownership_keys(monkeypatch, caplog):
+    """request_id/app_id remain infrastructure-owned: the route cannot and does
+    not declare them, and no maui_* key beyond the declared contract appears."""
+    app = _make_app()
+    _patch_full_success_flow(monkeypatch)
+
+    data = MultiDict(
+        [
+            ("prompt", "Compare these documents"),
+            ("text_documents", _two_text_documents()),
+        ]
+    )
+
+    with caplog.at_level(logging.INFO, logger=ROUTE_LOGGER_NAME):
+        response = _post(app, data)
+
+    assert response.status_code == 200
+    record = _persistent_records(caplog, "compare_docs_started")[0]
+
+    declared_maui_keys = {
+        key for key in vars(record) if key.startswith("maui_")
+    }
+    assert declared_maui_keys == {
+        "maui_persist",
+        "maui_event",
+        "maui_provider",
+        "maui_model",
+        "maui_details",
+    }
+    assert record.args == ()
+
+
+def test_operational_persistence_failure_does_not_affect_compare_docs_response(
+    monkeypatch,
+):
+    """Route-level fail-open, at the boundary P2 actually introduces.
+
+    tests/test_operational_persistence_integration.py::test_e3_* already proves
+    fail-open through the real handler/delivery/writer stack, but on a synthetic
+    route emitting a synthetic event. P2 is the first time a REAL endpoint
+    emits, so the property is asserted here at that exact seam, kept light: the
+    REAL OperationalPersistenceHandler with a sink that raises. No queue, no
+    database, no PostgreSQL, and no change to persistence delivery.
+    """
+    app = _make_app()
+    _patch_full_success_flow(monkeypatch)
+
+    captured = []
+
+    def _raising_sink(snapshot):
+        captured.append(snapshot)
+        raise RuntimeError("simulated operational persistence failure")
+
+    handler = OperationalPersistenceHandler(sink=_raising_sink)
+
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    saved_level = root.level
+
+    data = MultiDict(
+        [
+            ("prompt", "Compare these documents"),
+            ("text_documents", _two_text_documents()),
+        ]
+    )
+
+    try:
+        root.handlers = [handler]
+        root.setLevel(logging.INFO)
+        response = _post(app, data)
+    finally:
+        root.handlers = saved_handlers
+        root.level = saved_level
+
+    # The event really did reach the persistence boundary and really did fail
+    # there, and the request completed with its normal response regardless.
+    assert len(captured) == 1
+    assert captured[0].event == "compare_docs_started"
+    assert response.status_code == 200
+    assert response.get_json() == {
+        "score": 91,
+        "summary": "ok",
+        "reasoning": "because",
+    }

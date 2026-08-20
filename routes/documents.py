@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, request, current_app
 from config import PROVIDER_API_KEY_MAP
 from infrastructure.database_pg import edit_tokens, log_token_usage
 from utils.logging_config import get_request_id
+from utils.operational_event import build_operational_event
 from utils.usage_request_state import set_usage_log_id
 import infrastructure.database_pg as database_pg
 from services.document_comparison_service import (
@@ -143,6 +144,20 @@ def compare_docs():
             if "content" not in item or not isinstance(item["content"], str):
                 raise ValueError("Each text document must have a string 'content'")
 
+        message, extra = build_operational_event(
+            event="compare_docs_started",
+            provider=llm_type,
+            model=model,
+            details={
+                "file_count": len(files),
+                "text_document_count": len(text_documents),
+                "ocr_configured": bool(ocr_provider and ocr_model),
+                "language_present": language is not None,
+                "additional_context_present": additional_context is not None,
+            },
+        )
+        logger.info(message, extra=extra)
+
         for text_document in text_documents:
             doc_input: DocumentInput = {
                 "content": text_document.get("content"),
@@ -227,6 +242,13 @@ def compare_docs():
         edit_tokens(user_email, -token_cost)
 
     except ValueError as error:
+        message, extra = build_operational_event(
+            event="compare_docs_controlled_failure",
+            error_type=type(error).__name__,
+            details={"http_status": 400},
+        )
+        logger.warning(message, extra=extra)
+
         return jsonify({"error": "Invalid request", "details": str(error)}), 400
 
     except DocumentComparisonPayloadTooLargeError:
@@ -241,6 +263,13 @@ def compare_docs():
         )
 
     except NotImplementedError as error:
+        message, extra = build_operational_event(
+            event="compare_docs_controlled_failure",
+            error_type=type(error).__name__,
+            details={"http_status": 415},
+        )
+        logger.warning(message, extra=extra)
+
         return (
             jsonify({"error": "Unsupported document format", "details": str(error)}),
             415,
