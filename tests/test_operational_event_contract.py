@@ -297,13 +297,22 @@ def test_no_production_call_sites_use_build_operational_event():
     excluded_dirs = {"venv", ".venv", "__pycache__", ".git", "node_modules"}
     own_module = (REPO_ROOT / "utils" / "operational_event.py").resolve()
     own_test = Path(__file__).resolve()
+    # FOUNDATION INTERVENTION I7: tests/test_logging_invariants.py implements
+    # the O2/O5 static invariants, which must reference the identifier
+    # "build_operational_event" as TEXT/AST pattern-matching material (to
+    # detect the canonical builder-pairing form and to prove the persistence
+    # subsystem never calls it) without itself becoming a call site. This is
+    # the same sanctioned shape as this file's own self-exclusion below.
+    sanctioned_static_analysis = (
+        REPO_ROOT / "tests" / "test_logging_invariants.py"
+    ).resolve()
 
     offenders = []
     for path in REPO_ROOT.rglob("*.py"):
         if any(part in excluded_dirs for part in path.parts):
             continue
         resolved = path.resolve()
-        if resolved in (own_module, own_test):
+        if resolved in (own_module, own_test, sanctioned_static_analysis):
             continue
         text = path.read_text(errors="ignore")
         if "build_operational_event" in text:
