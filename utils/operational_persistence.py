@@ -14,10 +14,14 @@ lifecycle.
 not read request-context ContextVars, and does not call
 ``record.getMessage()`` or inspect ``record.msg``/``record.exc_info``.
 
-This module is NOT yet attached to the root logger by any production code
-path (that is a later intervention). ``_DELIVERY`` is a process-local
-singleton by design: with N gunicorn workers there are N independent
-delivery queues/consumers, all writing to the same PostgreSQL store.
+``register_operational_persistence(app)`` is the single production
+attachment point: it starts the process-local delivery singleton and
+attaches one ``OperationalPersistenceHandler`` to root, alongside the
+existing stderr handler. ``_DELIVERY`` is a process-local singleton by
+design: with N gunicorn workers there are N independent delivery
+queues/consumers, all writing to the same PostgreSQL store. The foundation
+ships with an empty event vocabulary, so every production record still
+returns at the handler's marker check and no row is written.
 """
 
 import atexit
@@ -37,6 +41,7 @@ from utils.logging_config import ContextDefaultsFilter
 __all__ = [
     "OperationalEventSnapshot",
     "OperationalPersistenceHandler",
+    "register_operational_persistence",
     "snapshot_from_record",
 ]
 
@@ -409,3 +414,32 @@ def _reset_delivery_for_tests() -> None:
         _DELIVERY.stop()
     _DELIVERY = None
     _ATEXIT_REGISTERED = False
+
+
+def register_operational_persistence(app) -> None:
+    """Attach the Operational Persistence subsystem to the real root logger.
+
+    Idempotent: a no-op if a root handler already carries
+    ``_maui_operational_persistence`` - across any number of calls, on the
+    same or a freshly created Flask app. Starts the process-local delivery
+    singleton (itself idempotent at the queue/consumer level, per I5) and
+    attaches exactly one :class:`OperationalPersistenceHandler`, bound to
+    ``delivery.enqueue``, as a sibling of the existing stderr handler. Does
+    not touch the stderr handler, root's level, or any other handler.
+
+    ``app`` is accepted only for signature symmetry with the other
+    ``register_*_hooks(app)`` registrars in ``main.py``; the subsystem is
+    process-local and does not depend on the Flask app or request context.
+    """
+    root = logging.getLogger()
+    if any(
+        getattr(handler, "_maui_operational_persistence", False)
+        for handler in root.handlers
+    ):
+        return
+
+    delivery = _get_or_create_delivery()
+    delivery.start()
+
+    handler = OperationalPersistenceHandler(delivery.enqueue)
+    root.addHandler(handler)

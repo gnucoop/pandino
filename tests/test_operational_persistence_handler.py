@@ -416,11 +416,14 @@ def test_module_never_imports_flask_and_infrastructure_only_function_locally():
 
 
 def test_module_has_no_forbidden_later_intervention_constructs():
-    """I5 introduces the delivery boundary (queue/gevent/lifecycle); it must
-    not introduce I6's registrar or root wiring."""
+    """As of I6, register_operational_persistence is the sanctioned bootstrap
+    registrar (utils/operational_persistence.py, main.py) and its presence
+    here is expected. This guard now only forbids constructs still deferred
+    beyond I6: a feature flag/environment gate, which the task explicitly
+    forbids inventing."""
     source_text = __import__("pathlib").Path(op.__file__).read_text()
 
-    forbidden_substrings = ("register_operational_persistence",)
+    forbidden_substrings = ("MAUI_OPERATIONAL_ENABLED",)
     for needle in forbidden_substrings:
         assert needle not in source_text, f"unexpected construct: {needle}"
 
@@ -794,9 +797,9 @@ def test_constructing_handler_class_does_not_touch_root():
 # ---------------------------------------------------------------------------
 
 
-def test_handler_module_declares_no_registrar():
-    """I5 adds the private _OperationalDelivery lifecycle owner and gevent
-    import; I6's public registrar/root-wiring is still absent."""
+def test_handler_module_declares_registrar_as_of_i6():
+    """As of I6, register_operational_persistence is declared in this module
+    and is the single sanctioned bootstrap registrar."""
     source_text = __import__("pathlib").Path(op.__file__).read_text()
 
-    assert "register_operational_persistence" not in source_text
+    assert "def register_operational_persistence(app)" in source_text

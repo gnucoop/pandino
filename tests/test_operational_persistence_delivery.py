@@ -664,19 +664,25 @@ def test_no_root_operational_persistence_handler_after_start_stop():
 # ---------------------------------------------------------------------------
 
 
-def test_no_registrar_function_defined_in_module():
+def test_registrar_function_defined_in_module_as_of_i6():
+    """I5's boundary (no root wiring) is superseded by I6: the registrar is
+    now expected to be declared here. See
+    tests/test_operational_persistence_bootstrap.py for I6's own coverage."""
     source_text = __import__("pathlib").Path(op.__file__).read_text()
-    assert "def register_operational_persistence" not in source_text
+    assert "def register_operational_persistence" in source_text
 
 
-def test_main_py_unchanged_no_operational_persistence_reference():
+def test_main_py_calls_registrar_exactly_once_as_of_i6():
+    """I5's boundary (main.py unaware of the subsystem) is superseded by I6:
+    main.py now imports and calls register_operational_persistence exactly
+    once. See tests/test_operational_persistence_bootstrap.py for the
+    structural AST assertion."""
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     main_path = os.path.join(repo_root, "main.py")
     with open(main_path, "r", encoding="utf-8") as f:
         source = f.read()
 
-    assert "operational_persistence" not in source
-    assert "register_operational_persistence" not in source
+    assert source.count("register_operational_persistence") == 2
 
 
 # ---------------------------------------------------------------------------

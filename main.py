@@ -4,6 +4,7 @@ import os
 
 # Logging must be configured before any other runtime effect.
 from utils.logging_config import bootstrap_logging, register_request_context_hooks
+from utils.operational_persistence import register_operational_persistence
 from utils.request_duration import register_request_duration_hooks
 from utils.usage_duration_finalization import (
     register_usage_duration_finalization_hooks,
@@ -56,6 +57,9 @@ register_usage_duration_finalization_hooks(
     app
 )  # Persist Usage duration once B2 finalizes it (must register before B2's hooks: after_request runs LIFO)
 register_request_duration_hooks(app)  # Time every request, once per request
+register_operational_persistence(
+    app
+)  # Attach the Operational Persistence consumer to root logging
 app.register_blueprint(system_bp)
 app.register_blueprint(auth_bp)
 app.register_blueprint(users_bp)
