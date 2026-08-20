@@ -326,13 +326,17 @@ def _references_insert_operational_event(file_path):
 
 
 def test_insert_operational_event_has_zero_production_callers():
+    """Zero callers except database_pg's own definition and the I5 delivery
+    consumer's function-local write path (utils/operational_persistence.py),
+    which is the sole sanctioned call site per the TDD's §6.2/§13 design."""
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     database_pg_path = os.path.join(repo_root, "infrastructure", "database_pg.py")
+    operational_persistence_path = os.path.join(
+        repo_root, "utils", "operational_persistence.py"
+    )
 
     for file_path in _iter_production_python_files():
-        if file_path == database_pg_path:
-            # Its own definition site (_insert_operational_event and
-            # insert_operational_event) is expected here.
+        if file_path in (database_pg_path, operational_persistence_path):
             continue
         hits = _references_insert_operational_event(file_path)
         assert hits == [], f"unexpected production caller in {file_path}: lines {hits}"

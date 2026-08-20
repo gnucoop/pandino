@@ -385,30 +385,24 @@ def test_module_emits_no_log_records(caplog):
     assert caplog.records == []
 
 
-def test_module_imports_no_infrastructure_gevent_or_flask():
-    source = ast.parse(
-        __import__("pathlib").Path(op.__file__).read_text(), filename=op.__file__
-    )
-    forbidden_prefixes = ("infrastructure", "gevent", "flask", "database_pg")
-    for node in ast.walk(source):
-        if isinstance(node, ast.Import):
-            names = [alias.name for alias in node.names]
-        elif isinstance(node, ast.ImportFrom):
-            names = [node.module or ""]
-        else:
-            continue
-        for name in names:
-            assert not name.startswith(forbidden_prefixes), (
-                f"unexpected import: {name}"
-            )
-
-
-def test_module_has_no_forbidden_later_intervention_constructs():
-    """I4 introduces OperationalPersistenceHandler; it must not introduce
-    anything belonging to I5 (queue/gevent/lifecycle) or I6 (registrar/
-    root wiring)."""
+def test_module_never_imports_flask_and_infrastructure_only_function_locally():
+    """As of I5, gevent is a legitimate module-scope import (the delivery
+    boundary), and infrastructure.database_pg is imported function-locally
+    inside the consumer's write path (per TDD §6.2/§13). flask must never be
+    imported, and infrastructure must never be imported at MODULE scope."""
     source_text = __import__("pathlib").Path(op.__file__).read_text()
     tree = ast.parse(source_text, filename=op.__file__)
+
+    module_level_names = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            module_level_names.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            module_level_names.append(node.module or "")
+    for name in module_level_names:
+        assert not name.startswith("infrastructure"), (
+            f"unexpected module-level import: {name}"
+        )
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -418,19 +412,15 @@ def test_module_has_no_forbidden_later_intervention_constructs():
         else:
             continue
         for name in names:
-            assert not name.startswith(("gevent", "flask", "infrastructure")), (
-                f"unexpected import: {name}"
-            )
-            assert "database_pg" not in name
+            assert not name.startswith("flask"), f"unexpected flask import: {name}"
 
-    forbidden_substrings = (
-        "register_operational_persistence",
-        "gevent.queue",
-        "gevent.spawn",
-        "atexit",
-        "def start(",
-        "def stop(",
-    )
+
+def test_module_has_no_forbidden_later_intervention_constructs():
+    """I5 introduces the delivery boundary (queue/gevent/lifecycle); it must
+    not introduce I6's registrar or root wiring."""
+    source_text = __import__("pathlib").Path(op.__file__).read_text()
+
+    forbidden_substrings = ("register_operational_persistence",)
     for needle in forbidden_substrings:
         assert needle not in source_text, f"unexpected construct: {needle}"
 
@@ -804,9 +794,9 @@ def test_constructing_handler_class_does_not_touch_root():
 # ---------------------------------------------------------------------------
 
 
-def test_handler_module_declares_no_registrar_or_lifecycle():
+def test_handler_module_declares_no_registrar():
+    """I5 adds the private _OperationalDelivery lifecycle owner and gevent
+    import; I6's public registrar/root-wiring is still absent."""
     source_text = __import__("pathlib").Path(op.__file__).read_text()
 
     assert "register_operational_persistence" not in source_text
-    assert "class OperationalDelivery" not in source_text
-    assert "import gevent" not in source_text
