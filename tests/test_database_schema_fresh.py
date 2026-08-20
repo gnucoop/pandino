@@ -50,6 +50,13 @@ def _users_table_statement(statements):
     raise AssertionError("No 'users' table creation statement found")
 
 
+def _operational_events_table_statement(statements):
+    for statement in statements:
+        if "CREATE TABLE IF NOT EXISTS operational_events" in statement:
+            return statement
+    raise AssertionError("No 'operational_events' table creation statement found")
+
+
 def test_fresh_logs_schema_includes_nullable_service_column(monkeypatch):
     statements = _run_init_db_and_capture_statements(monkeypatch)
     logs_statement = _logs_table_statement(statements)
@@ -78,7 +85,9 @@ def test_fresh_logs_schema_request_id_column_is_scoped_to_logs_table(monkeypatch
     statements = _run_init_db_and_capture_statements(monkeypatch)
 
     for statement in statements:
-        if "CREATE TABLE IF NOT EXISTS logs" not in statement:
+        if "CREATE TABLE IF NOT EXISTS logs" not in statement and (
+            "CREATE TABLE IF NOT EXISTS operational_events" not in statement
+        ):
             assert "request_id" not in statement
 
 
@@ -94,7 +103,9 @@ def test_fresh_logs_schema_duration_ms_column_is_scoped_to_logs_table(monkeypatc
     statements = _run_init_db_and_capture_statements(monkeypatch)
 
     for statement in statements:
-        if "CREATE TABLE IF NOT EXISTS logs" not in statement:
+        if "CREATE TABLE IF NOT EXISTS logs" not in statement and (
+            "CREATE TABLE IF NOT EXISTS operational_events" not in statement
+        ):
             assert "duration_ms" not in statement
 
 
@@ -132,3 +143,73 @@ def test_fresh_logs_schema_source_column_is_scoped_to_logs_and_feedback_tables(m
             "CREATE TABLE IF NOT EXISTS feedback" not in statement
         ):
             assert "source" not in statement
+
+
+def test_fresh_schema_includes_operational_events_table(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+
+    # Will raise AssertionError if the table statement is absent.
+    _operational_events_table_statement(statements)
+
+
+def test_fresh_operational_events_schema_has_bigserial_primary_key(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+    statement = _operational_events_table_statement(statements)
+
+    assert "id BIGSERIAL PRIMARY KEY" in statement
+
+
+def test_fresh_operational_events_schema_has_not_null_core_fields(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+    statement = _operational_events_table_statement(statements)
+
+    assert "event_time TIMESTAMPTZ NOT NULL" in statement
+    assert "level TEXT NOT NULL" in statement
+    assert "logger TEXT NOT NULL" in statement
+    assert "event TEXT NOT NULL" in statement
+
+
+def test_fresh_operational_events_schema_event_time_has_no_default(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+    statement = _operational_events_table_statement(statements)
+
+    assert "event_time TIMESTAMPTZ NOT NULL," in statement
+    assert "DEFAULT NOW()" not in statement
+
+
+def test_fresh_operational_events_schema_has_nullable_context_fields(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+    statement = _operational_events_table_statement(statements)
+
+    for column in ("request_id", "app_id", "provider", "model", "error_type", "message"):
+        assert f"{column} TEXT" in statement
+        assert f"{column} TEXT NOT NULL" not in statement
+
+
+def test_fresh_operational_events_schema_has_nullable_duration_ms(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+    statement = _operational_events_table_statement(statements)
+
+    assert "duration_ms INTEGER" in statement
+    assert "duration_ms INTEGER NOT NULL" not in statement
+
+
+def test_fresh_operational_events_schema_has_jsonb_details(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+    statement = _operational_events_table_statement(statements)
+
+    assert "details JSONB" in statement
+
+
+def test_fresh_operational_events_schema_has_no_foreign_key(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+    statement = _operational_events_table_statement(statements)
+
+    assert "REFERENCES" not in statement
+
+
+def test_fresh_operational_events_schema_has_no_check_constraint(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+    statement = _operational_events_table_statement(statements)
+
+    assert "CHECK" not in statement

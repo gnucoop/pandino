@@ -62,6 +62,7 @@ from infrastructure.database_methods import (
     build_get_rag_file_for_delete_query,
     build_delete_rag_file_query,
     build_delete_pgvector_by_file_id_query,
+    build_insert_operational_event_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -174,6 +175,21 @@ def init_db():
             chunk_count INTEGER NOT NULL CHECK (chunk_count >= 0),
             language TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS operational_events (
+            id BIGSERIAL PRIMARY KEY,
+            event_time TIMESTAMPTZ NOT NULL,
+            level TEXT NOT NULL,
+            logger TEXT NOT NULL,
+            event TEXT NOT NULL,
+            request_id TEXT,
+            app_id TEXT,
+            provider TEXT,
+            model TEXT,
+            duration_ms INTEGER,
+            error_type TEXT,
+            details JSONB,
+            message TEXT
         );
     """
     # Execute the SQL script
@@ -2058,6 +2074,90 @@ def get_feedback_stats(
     except Exception as e:
         logger.exception("event=feedback_stats_lookup_failed error=%s", e)
         return stats
+    finally:
+        conn.close()
+
+
+def _insert_operational_event(
+    cursor,
+    event_time,
+    level,
+    logger_name,
+    event,
+    request_id,
+    app_id,
+    provider,
+    model,
+    duration_ms,
+    error_type,
+    details_json,
+    message,
+) -> None:
+    """
+    Fixed-intent Operational event persistence primitive: inserts one
+    'operational_events' row.
+
+    Flask-blind, application-type-blind, logging-free: it receives an
+    existing cursor, executes exactly one INSERT and raises on failure.
+    The caller owns the connection/transaction.
+    """
+    query, params = build_insert_operational_event_query(
+        event_time,
+        level,
+        logger_name,
+        event,
+        request_id,
+        app_id,
+        provider,
+        model,
+        duration_ms,
+        error_type,
+        details_json,
+        message,
+    )
+    cursor.execute(query, params)
+
+
+def insert_operational_event(
+    event_time,
+    level,
+    logger_name,
+    event,
+    request_id,
+    app_id,
+    provider,
+    model,
+    duration_ms,
+    error_type,
+    details_json,
+    message,
+) -> None:
+    """
+    Persists one Operational event row.
+
+    Opens its own connection, inserts via _insert_operational_event(),
+    commits once on success, and closes the connection in a finally block.
+    Logging-free; raises on failure without catching.
+    """
+    conn = connect()
+    try:
+        cursor = conn.cursor()
+        _insert_operational_event(
+            cursor,
+            event_time,
+            level,
+            logger_name,
+            event,
+            request_id,
+            app_id,
+            provider,
+            model,
+            duration_ms,
+            error_type,
+            details_json,
+            message,
+        )
+        conn.commit()
     finally:
         conn.close()
 

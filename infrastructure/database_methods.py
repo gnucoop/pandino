@@ -1360,3 +1360,64 @@ def build_get_feedback_model_stats_query(
     )
 
     return query, tuple(params)
+
+
+def build_insert_operational_event_query(
+    event_time: Any,
+    level: str,
+    logger_name: str,
+    event: str,
+    request_id: Optional[str],
+    app_id: Optional[str],
+    provider: Optional[str],
+    model: Optional[str],
+    duration_ms: Optional[int],
+    error_type: Optional[str],
+    details_json: Optional[str],
+    message: Optional[str],
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to insert one Operational event row into the
+    'operational_events' table.
+
+    details_json is passed as TEXT and cast with %s::jsonb; when None,
+    PostgreSQL receives NULL.
+
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "INSERT INTO {table} "
+        "({col_event_time}, {col_level}, {col_logger}, {col_event}, "
+        "{col_request_id}, {col_app_id}, {col_provider}, {col_model}, "
+        "{col_duration_ms}, {col_error_type}, {col_details}, {col_message}) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)"
+    ).format(
+        table=sql.Identifier("operational_events"),
+        col_event_time=sql.Identifier("event_time"),
+        col_level=sql.Identifier("level"),
+        col_logger=sql.Identifier("logger"),
+        col_event=sql.Identifier("event"),
+        col_request_id=sql.Identifier("request_id"),
+        col_app_id=sql.Identifier("app_id"),
+        col_provider=sql.Identifier("provider"),
+        col_model=sql.Identifier("model"),
+        col_duration_ms=sql.Identifier("duration_ms"),
+        col_error_type=sql.Identifier("error_type"),
+        col_details=sql.Identifier("details"),
+        col_message=sql.Identifier("message"),
+    )
+    params = (
+        event_time,
+        level,
+        logger_name,
+        event,
+        request_id,
+        app_id,
+        provider,
+        model,
+        duration_ms,
+        error_type,
+        details_json,
+        message,
+    )
+    return query, params
