@@ -1,12 +1,13 @@
 """
-Snapshot / normalization tests for utils/operational_persistence.py —
-FOUNDATION INTERVENTION I3.
+Snapshot and capture-handler tests for utils/operational_persistence.py —
+FOUNDATION INTERVENTIONS I3 (snapshot/normalization) and I4 (capture
+handler).
 
-Scope is deliberately narrow: only OperationalEventSnapshot and
-snapshot_from_record. No Handler, no marker gate, no queue, no DB — those
-belong to later interventions. Despite the filename (inherited from the
-TDD's naming for the eventual handler test file), this file covers ONLY
-snapshot behavior for I3.
+I3 scope: OperationalEventSnapshot and snapshot_from_record.
+I4 scope: OperationalPersistenceHandler — marker-first selection, its own
+ContextDefaultsFilter, and handing valid snapshots to an injected sink. No
+queue, no gevent consumer, no lifecycle, no DB and no root production
+attachment — those belong to later interventions.
 """
 
 import ast
@@ -18,7 +19,16 @@ from datetime import timezone
 import pytest
 
 import utils.operational_persistence as op
-from utils.operational_persistence import OperationalEventSnapshot, snapshot_from_record
+from utils.logging_config import (
+    ContextDefaultsFilter,
+    reset_request_context,
+    set_request_context,
+)
+from utils.operational_persistence import (
+    OperationalEventSnapshot,
+    OperationalPersistenceHandler,
+    snapshot_from_record,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -393,13 +403,410 @@ def test_module_imports_no_infrastructure_gevent_or_flask():
             )
 
 
-def test_module_has_no_handler_subclass():
-    source = op.__file__
-    tree = ast.parse(__import__("pathlib").Path(source).read_text(), filename=source)
+def test_module_has_no_forbidden_later_intervention_constructs():
+    """I4 introduces OperationalPersistenceHandler; it must not introduce
+    anything belonging to I5 (queue/gevent/lifecycle) or I6 (registrar/
+    root wiring)."""
+    source_text = __import__("pathlib").Path(op.__file__).read_text()
+    tree = ast.parse(source_text, filename=op.__file__)
+
     for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            for base in node.bases:
-                base_name = getattr(base, "attr", None) or getattr(base, "id", None)
-                assert base_name != "Handler", (
-                    "I3 must not implement a logging.Handler subclass"
-                )
+        if isinstance(node, ast.Import):
+            names = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            names = [node.module or ""]
+        else:
+            continue
+        for name in names:
+            assert not name.startswith(("gevent", "flask", "infrastructure")), (
+                f"unexpected import: {name}"
+            )
+            assert "database_pg" not in name
+
+    forbidden_substrings = (
+        "register_operational_persistence",
+        "gevent.queue",
+        "gevent.spawn",
+        "atexit",
+        "def start(",
+        "def stop(",
+    )
+    for needle in forbidden_substrings:
+        assert needle not in source_text, f"unexpected construct: {needle}"
+
+
+# ===========================================================================
+# FOUNDATION INTERVENTION I4 — OperationalPersistenceHandler
+# ===========================================================================
+
+
+class _ListSink:
+    def __init__(self):
+        self.received = []
+
+    def __call__(self, snapshot):
+        self.received.append(snapshot)
+
+
+class _RaisingSink:
+    def __init__(self, exc=None):
+        self.calls = 0
+        self._exc = exc or RuntimeError("sink boom")
+
+    def __call__(self, snapshot):
+        self.calls += 1
+        raise self._exc
+
+
+def _marked_record(**overrides):
+    extra = {"maui_persist": True, "maui_event": "flow_started"}
+    extra.update(overrides.pop("extra", {}))
+    return _make_record(extra=extra, **overrides)
+
+
+# ---------------------------------------------------------------------------
+# 1. Unmarked record ignored
+# ---------------------------------------------------------------------------
+
+
+def test_unmarked_record_ignored_no_sink_call():
+    sink = _ListSink()
+    handler = OperationalPersistenceHandler(sink)
+    record = _make_record()  # no maui_persist at all
+
+    assert not hasattr(record, "maui_persist")
+    handler.emit(record)
+
+    assert sink.received == []
+
+
+def test_unmarked_record_does_not_invoke_snapshot_from_record(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        op, "snapshot_from_record", lambda r: calls.append(r) or None
+    )
+    sink = _ListSink()
+    handler = OperationalPersistenceHandler(sink)
+    record = _make_record()
+
+    handler.emit(record)
+
+    assert calls == []
+    assert sink.received == []
+
+
+# ---------------------------------------------------------------------------
+# 2. Explicit maui_persist=False ignored
+# ---------------------------------------------------------------------------
+
+
+def test_explicit_maui_persist_false_ignored():
+    sink = _ListSink()
+    handler = OperationalPersistenceHandler(sink)
+    record = _make_record(extra={"maui_persist": False, "maui_event": "flow_started"})
+
+    handler.emit(record)
+
+    assert sink.received == []
+
+
+# ---------------------------------------------------------------------------
+# 3. Marked valid record captured
+# ---------------------------------------------------------------------------
+
+
+def test_marked_valid_record_captured_exactly_once():
+    sink = _ListSink()
+    handler = OperationalPersistenceHandler(sink)
+    record = _marked_record(
+        name="services.flow",
+        level=logging.WARNING,
+        extra={
+            "maui_provider": "DeepInfra",
+            "maui_duration_ms": 7,
+            "request_id": "req-1",
+            "app_id": "app-1",
+        },
+    )
+
+    handler.emit(record)
+
+    assert len(sink.received) == 1
+    snapshot = sink.received[0]
+    assert isinstance(snapshot, OperationalEventSnapshot)
+    assert snapshot.event == "flow_started"
+    assert snapshot.level == "WARNING"
+    assert snapshot.logger == "services.flow"
+    assert snapshot.provider == "DeepInfra"
+    assert snapshot.duration_ms == 7
+    assert snapshot.request_id == "req-1"
+    assert snapshot.app_id == "app-1"
+
+
+# ---------------------------------------------------------------------------
+# 4. Invalid snapshot skipped
+# ---------------------------------------------------------------------------
+
+
+def test_marked_record_with_missing_event_skips_sink():
+    sink = _ListSink()
+    handler = OperationalPersistenceHandler(sink)
+    record = _make_record(extra={"maui_persist": True})  # no maui_event
+
+    handler.emit(record)
+
+    assert sink.received == []
+
+
+def test_marked_record_with_invalid_event_skips_sink_without_raising():
+    sink = _ListSink()
+    handler = OperationalPersistenceHandler(sink)
+    record = _make_record(extra={"maui_persist": True, "maui_event": ""})
+
+    handler.emit(record)
+
+    assert sink.received == []
+
+
+# ---------------------------------------------------------------------------
+# 5. Sink failure contained
+# ---------------------------------------------------------------------------
+
+
+def test_sink_failure_does_not_propagate():
+    sink = _RaisingSink()
+    handler = OperationalPersistenceHandler(sink)
+    record = _marked_record()
+
+    handler.emit(record)  # must not raise
+
+    assert sink.calls == 1
+
+
+def test_sink_failure_is_not_retried():
+    sink = _RaisingSink()
+    handler = OperationalPersistenceHandler(sink)
+    record = _marked_record()
+
+    handler.emit(record)
+
+    assert sink.calls == 1  # exactly once, no internal retry
+
+
+# ---------------------------------------------------------------------------
+# 6. Snapshot failure contained
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_from_record_failure_is_contained(monkeypatch):
+    def _boom(record):
+        raise RuntimeError("normalization boom")
+
+    monkeypatch.setattr(op, "snapshot_from_record", _boom)
+    sink = _ListSink()
+    handler = OperationalPersistenceHandler(sink)
+    record = _marked_record()
+
+    handler.emit(record)  # must not raise
+
+    assert sink.received == []
+
+
+# ---------------------------------------------------------------------------
+# 7. Own ContextDefaultsFilter
+# ---------------------------------------------------------------------------
+
+
+def test_handler_has_exactly_one_context_defaults_filter():
+    handler = OperationalPersistenceHandler(_ListSink())
+
+    assert len(handler.filters) == 1
+    assert isinstance(handler.filters[0], ContextDefaultsFilter)
+
+
+# ---------------------------------------------------------------------------
+# 8. Context enrichment works
+# ---------------------------------------------------------------------------
+
+
+def test_context_enrichment_populates_request_and_app_id():
+    sink = _ListSink()
+    handler = OperationalPersistenceHandler(sink)
+    test_logger = logging.getLogger("test_operational_persistence.context")
+    test_logger.propagate = False
+    test_logger.handlers = [handler]
+    test_logger.setLevel(logging.INFO)
+
+    tokens = set_request_context(request_id="ctx-request", app_id="ctx-app")
+    try:
+        test_logger.info(
+            "event=flow_started",
+            extra={"maui_persist": True, "maui_event": "flow_started"},
+        )
+    finally:
+        reset_request_context(tokens)
+        test_logger.handlers = []
+
+    assert len(sink.received) == 1
+    snapshot = sink.received[0]
+    assert snapshot.request_id == "ctx-request"
+    assert snapshot.app_id == "ctx-app"
+
+
+# ---------------------------------------------------------------------------
+# 9. Handler order independence
+# ---------------------------------------------------------------------------
+
+
+def test_handler_order_does_not_affect_captured_context():
+    def _capture_with_order(persistence_first):
+        sink = _ListSink()
+        persistence_handler = OperationalPersistenceHandler(sink)
+        stderr_handler = logging.StreamHandler()
+        stderr_handler.addFilter(ContextDefaultsFilter())
+
+        test_logger = logging.getLogger(
+            f"test_operational_persistence.order.{persistence_first}"
+        )
+        test_logger.propagate = False
+        test_logger.setLevel(logging.INFO)
+        if persistence_first:
+            test_logger.handlers = [persistence_handler, stderr_handler]
+        else:
+            test_logger.handlers = [stderr_handler, persistence_handler]
+
+        tokens = set_request_context(request_id="order-request", app_id="order-app")
+        try:
+            test_logger.info(
+                "event=flow_started",
+                extra={"maui_persist": True, "maui_event": "flow_started"},
+            )
+        finally:
+            reset_request_context(tokens)
+            test_logger.handlers = []
+
+        return sink.received[0]
+
+    snapshot_first = _capture_with_order(persistence_first=True)
+    snapshot_last = _capture_with_order(persistence_first=False)
+
+    assert snapshot_first.request_id == snapshot_last.request_id == "order-request"
+    assert snapshot_first.app_id == snapshot_last.app_id == "order-app"
+
+
+# ---------------------------------------------------------------------------
+# 10. Handler level
+# ---------------------------------------------------------------------------
+
+
+def test_handler_level_is_notset():
+    handler = OperationalPersistenceHandler(_ListSink())
+
+    assert handler.level == logging.NOTSET
+
+
+# ---------------------------------------------------------------------------
+# 11. Marker attribute
+# ---------------------------------------------------------------------------
+
+
+def test_handler_carries_operational_persistence_marker():
+    handler = OperationalPersistenceHandler(_ListSink())
+
+    assert handler._maui_operational_persistence is True
+
+
+# ---------------------------------------------------------------------------
+# 12. No message parsing
+# ---------------------------------------------------------------------------
+
+
+def test_selection_depends_only_on_marker_and_maui_event_not_msg():
+    sink = _ListSink()
+    handler = OperationalPersistenceHandler(sink)
+    record = _marked_record(msg="totally unrelated text with no event= prefix")
+
+    handler.emit(record)
+
+    assert len(sink.received) == 1
+    assert sink.received[0].event == "flow_started"
+
+
+# ---------------------------------------------------------------------------
+# 13. database_pg / third-party unmarked barrier
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "logger_name", ["infrastructure.database_pg", "psycopg", "psycopg.connection"]
+)
+def test_unmarked_records_from_db_and_third_party_loggers_never_reach_sink(
+    logger_name,
+):
+    sink = _ListSink()
+    handler = OperationalPersistenceHandler(sink)
+    record = _make_record(name=logger_name, msg="some warning during connect")
+
+    handler.emit(record)
+
+    assert sink.received == []
+
+
+# ---------------------------------------------------------------------------
+# 14. record with exc_info
+# ---------------------------------------------------------------------------
+
+
+def test_marked_record_with_exc_info_captured_without_traceback_data():
+    try:
+        raise ValueError("boom-secret-traceback-text")
+    except ValueError:
+        import sys
+
+        exc_info = sys.exc_info()
+
+    sink = _ListSink()
+    handler = OperationalPersistenceHandler(sink)
+    record = _marked_record(
+        exc_info=exc_info, extra={"maui_message": "safe message"}
+    )
+
+    handler.emit(record)
+
+    assert len(sink.received) == 1
+    snapshot = sink.received[0]
+    assert snapshot.message == "safe message"
+    assert not hasattr(snapshot, "exc_info")
+
+
+# ---------------------------------------------------------------------------
+# 15. No root production mutation
+# ---------------------------------------------------------------------------
+
+
+def test_importing_module_adds_no_root_handler():
+    root = logging.getLogger()
+    assert not any(
+        isinstance(h, OperationalPersistenceHandler) for h in root.handlers
+    )
+
+
+def test_constructing_handler_class_does_not_touch_root():
+    root_handlers_before = list(logging.getLogger().handlers)
+
+    OperationalPersistenceHandler(_ListSink())
+
+    assert logging.getLogger().handlers == root_handlers_before
+
+
+# ---------------------------------------------------------------------------
+# 16. No forbidden imports / later components (handler-focused)
+# ---------------------------------------------------------------------------
+
+
+def test_handler_module_declares_no_registrar_or_lifecycle():
+    source_text = __import__("pathlib").Path(op.__file__).read_text()
+
+    assert "register_operational_persistence" not in source_text
+    assert "class OperationalDelivery" not in source_text
+    assert "import gevent" not in source_text
