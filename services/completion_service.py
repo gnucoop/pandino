@@ -7,6 +7,7 @@ from infrastructure.vector_store import VectorStore
 
 from infrastructure.ai import choose_llm
 from infrastructure.prompt_utils import load_prompt, render_prompt
+from utils.operational_event import build_operational_event
 
 logger = logging.getLogger(__name__)
 
@@ -110,9 +111,31 @@ def complete_chat(
         vectors = store.find_similar_vectors(
             text=question, top_k=top_k, min_similarity=min_sim
         )
-        logger.info("event=completion_retrieval_result count=%s", len(vectors))
     except Exception as e:
+        # Fact B. Only the exception class name is persisted: str(e) may embed
+        # the query or vector-store connection detail.
+        message, extra = build_operational_event(
+            event="completion_retrieval_failed",
+            error_type=type(e).__name__,
+        )
+        logger.warning(message, extra=extra)
         raise RuntimeError(f"Vector retrieval failed: {str(e)}")
+
+    # Fact A. Emitted for every successful retrieval, including vector_count=0,
+    # and therefore before the no-context early return below: degraded-success
+    # reconstruction depends on this record existing. This is the authoritative
+    # structured emission at this seam and replaces the former runtime
+    # completion_retrieval_result log, so one real fact yields one LogRecord.
+    message, extra = build_operational_event(
+        event="completion_retrieval_completed",
+        details={
+            "vector_count": len(vectors),
+            "top_k": top_k,
+            "min_sim": min_sim,
+            "info_present": bool(req.info),
+        },
+    )
+    logger.info(message, extra=extra)
 
     if not req.info and not vectors:
         return {
