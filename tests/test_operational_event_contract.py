@@ -313,6 +313,7 @@ SANCTIONED_PRODUCTION_CALL_SITES = {
     "services/document_extraction_service.py",
     "services/document_comparison_service.py",
     "services/completion_service.py",
+    "routes/rag.py",
 }
 
 
@@ -373,24 +374,24 @@ def test_pilot_modules_are_the_only_sanctioned_production_modules_in_p3():
         "services/document_extraction_service.py",
         "services/document_comparison_service.py",
         "services/completion_service.py",
+        "routes/rag.py",
     }, (
-        "After SECOND ADOPTER SLICE C1 the sanctioned set is the three pilot "
+        "After SECOND ADOPTER SLICE C3 the sanctioned set is the three pilot "
         "modules — the /compare_docs route (E1/E5) and the two pilot services "
         "(E2/E6 and E3/E4) — plus services/completion_service.py, which owns "
-        "the /completion.json retrieval facts. routes/rag.py is deliberately "
-        "still OUTSIDE the set: the route-level fact belongs to a later "
-        "slice. Each entry is pinned by exact path; widening this to a "
+        "the /completion.json retrieval and provider facts, plus routes/rag.py, "
+        "which owns the terminal completion_uncontrolled_failure fact (Fact E). "
+        "Each entry is pinned by exact path; widening this to a "
         "directory prefix would silently sanction every future services/ "
         "call site."
     )
 
 
-def test_rag_route_is_not_yet_sanctioned_after_c1():
-    """C1 instruments the completion SERVICE only. The route-level Operational
-    fact for /completion.json is a later slice, so routes/rag.py must remain
-    outside the allow-list and any call site appearing there must still fail
-    the ratchet."""
-    assert "routes/rag.py" not in SANCTIONED_PRODUCTION_CALL_SITES
+def test_rag_route_is_sanctioned_after_c3():
+    """C3 adds the route-level terminal Operational fact
+    (completion_uncontrolled_failure) to routes/rag.py, so that module is now
+    an intentional, visible member of the allow-list."""
+    assert "routes/rag.py" in SANCTIONED_PRODUCTION_CALL_SITES
 
 
 @pytest.mark.parametrize(
@@ -398,7 +399,7 @@ def test_rag_route_is_not_yet_sanctioned_after_c1():
     [
         "services/document_ocr_service.py",
         "services/document_text_service.py",
-        "routes/rag.py",
+        "routes/multimodal.py",
         "infrastructure/ai.py",
         "infrastructure/database_pg.py",
     ],

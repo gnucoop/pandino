@@ -8,6 +8,7 @@ from flask import Blueprint, Response, current_app, jsonify, request
 import infrastructure.database_pg as database_pg
 from infrastructure.database_pg import edit_tokens, get_user_by_username, log_token_usage
 from utils.logging_config import get_request_id
+from utils.operational_event import build_operational_event
 from utils.usage_request_state import set_usage_log_id
 from infrastructure.ai import choose_emb_model
 from infrastructure.vector_store import MauiVectorStore
@@ -129,8 +130,17 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
 
         return jsonify({"error": "No response from chat completion"}), 500
 
-    except Exception as e:
-        logger.error("event=completion_request_failed error=%s", str(e))
+    except Exception as exc:
+        # SECOND ADOPTER SLICE C3 — Fact E, the terminal uncontrolled failure.
+        # One real failure boundary produces one LogRecord: this replaces the
+        # legacy runtime event=completion_request_failed line, whose str(e)
+        # interpolation is deliberately dropped. Only the exception class name
+        # is persisted; the timeline identifies the phase.
+        message, extra = build_operational_event(
+            event="completion_uncontrolled_failure",
+            error_type=type(exc).__name__,
+        )
+        logger.error(message, extra=extra)
         return jsonify({"error": "An unexpected error occurred"}), 500
 
 
