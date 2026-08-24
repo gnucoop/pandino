@@ -1,5 +1,6 @@
 import logging
 import textwrap
+import time
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
@@ -234,7 +235,35 @@ def complete_chat(
 
     try:
         llm = choose_llm(llm_type, model, api_key=api_key)
-        resp = llm.invoke(messages)
+
+        # Fact C/D duration boundary: the timer brackets llm.invoke() and
+        # nothing else. choose_llm(), response parsing and the is_no_info
+        # classifier stay outside it, so duration_ms keeps meaning "how long
+        # did the provider take" rather than drifting with payload shape.
+        provider_call_started = time.perf_counter()
+        try:
+            resp = llm.invoke(messages)
+            provider_duration_ms = round(
+                (time.perf_counter() - provider_call_started) * 1000
+            )
+        except Exception as e:
+            # Fact D. Emitted only once the provider attempt has actually
+            # started: a choose_llm() failure never reaches here. One record
+            # serves both consumers — stderr keeps the traceback, the
+            # Operational snapshot keeps only the bounded fields. This
+            # replaces the former runtime completion_failed line.
+            message, extra = build_operational_event(
+                event="completion_provider_failed",
+                provider=llm_type,
+                model=model,
+                duration_ms=round(
+                    (time.perf_counter() - provider_call_started) * 1000
+                ),
+                error_type=type(e).__name__,
+            )
+            logger.exception(message, extra=extra)
+            raise
+
         answer = resp.content
 
         token_usage = getattr(resp, "response_metadata", {}).get("token_usage", {})
@@ -253,6 +282,18 @@ def complete_chat(
             phrase.lower() in answer_text.lower() for phrase in no_info_phrases
         )
 
+        # Fact C. Carries the final classifier verdict, which is why it is
+        # emitted after parsing rather than at the timer stop. No token counts
+        # (Usage owns those) and no answer content.
+        message, extra = build_operational_event(
+            event="completion_provider_completed",
+            provider=llm_type,
+            model=model,
+            duration_ms=provider_duration_ms,
+            details={"is_no_info": is_no_info},
+        )
+        logger.info(message, extra=extra)
+
         return {
             "answer": answer_text,
             "vectors": vectors,
@@ -261,5 +302,4 @@ def complete_chat(
         }
 
     except Exception as e:
-        logger.exception("event=completion_failed")
         raise RuntimeError(f"Chat completion failed: {str(e)}")
