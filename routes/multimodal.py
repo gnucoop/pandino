@@ -12,6 +12,7 @@ from infrastructure.ai import describe_image_with_usage, asr_response
 from infrastructure.asr_accounting import resolve_asr_cost
 from infrastructure.database_pg import edit_tokens, log_token_usage, log_usage_with_resolved_cost
 from utils.logging_config import get_request_id
+from utils.operational_event import build_operational_event
 from utils.usage_request_state import set_usage_log_id
 from services.audio_form_service import audioFormCompilation, audioFormPromptBuild
 from routes.utils import assert_valid_api_key
@@ -29,10 +30,25 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
     user_name_header = request.headers.get("X-USER-NAME")
 
     if not api_key:
+        message, extra = build_operational_event(
+            event="transcribe_request_rejected",
+            details={"reason": "missing_required_header"},
+        )
+        logger.warning(message, extra=extra)
         return jsonify({"error": "Missing X-API-KEY header"}), 400
     if not user_email:
+        message, extra = build_operational_event(
+            event="transcribe_request_rejected",
+            details={"reason": "missing_required_header"},
+        )
+        logger.warning(message, extra=extra)
         return jsonify({"error": "Missing X-USER-EMAIL header"}), 400
     if not user_name_header:
+        message, extra = build_operational_event(
+            event="transcribe_request_rejected",
+            details={"reason": "missing_required_header"},
+        )
+        logger.warning(message, extra=extra)
         return jsonify({"error": "Missing X-USER-NAME header"}), 400
 
     user_name = user_name_header.replace(" ", "_").strip()
@@ -40,6 +56,11 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
 
     file = request.files.get("file")
     if not file:
+        message, extra = build_operational_event(
+            event="transcribe_request_rejected",
+            details={"reason": "missing_file"},
+        )
+        logger.warning(message, extra=extra)
         return jsonify({"error": "Missing file"}), 400
 
     lang = request.form.get("lang") or "ENG"
@@ -47,6 +68,12 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
     config = current_app.config["MAUI_CONFIG"]
 
     if file.mimetype.startswith("audio"):
+        message, extra = build_operational_event(
+            event="transcribe_branch_selected",
+            details={"branch": "audio"},
+        )
+        logger.info(message, extra=extra)
+
         asr_provider = config.models.asr_provider
         asr_base_url = config.models.asr_base_url
         asr_api_key = os.getenv(
@@ -131,6 +158,12 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
     ext = os.path.splitext(filename.lower())[1]
 
     if ext in (".pdf", ".docx", ".rtf"):
+        message, extra = build_operational_event(
+            event="transcribe_branch_selected",
+            details={"branch": "document"},
+        )
+        logger.info(message, extra=extra)
+
         try:
             doc_input: DocumentInput = {
                 "source_type": "file",
@@ -148,6 +181,12 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
             return jsonify({"error": f"Error extracting text from file: {str(e)}"}), 422
 
     if file.mimetype.startswith("image"):
+        message, extra = build_operational_event(
+            event="transcribe_branch_selected",
+            details={"branch": "image"},
+        )
+        logger.info(message, extra=extra)
+
         vision_provider = config.models.vision_provider or ""
         vision_model = config.models.vision_model or ""
 
@@ -196,6 +235,12 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
             )
 
         return jsonify({"text": text}), 200
+
+    message, extra = build_operational_event(
+        event="transcribe_branch_selected",
+        details={"branch": "reject"},
+    )
+    logger.warning(message, extra=extra)
 
     return jsonify({"error": f"Unexpected file mimetype: {file.mimetype}"}), 400
 
