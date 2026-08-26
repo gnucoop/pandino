@@ -264,6 +264,14 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
                 ),
             )
         except Exception as e:
+            message, extra = build_operational_event(
+                event="transcribe_operation_failed",
+                provider=vision_provider,
+                model=vision_model,
+                error_type=type(e).__name__,
+                details={"branch": "image", "reason": "execution_error"},
+            )
+            logger.error(message, extra=extra)
             return (
                 jsonify({"error": f"Error extracting text from image: {str(e)}"}),
                 500,
@@ -295,6 +303,14 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
                 vision_model,
                 exc_info=True,
             )
+
+        message, extra = build_operational_event(
+            event="transcribe_operation_completed",
+            provider=vision_provider,
+            model=vision_model,
+            details={"branch": "image"},
+        )
+        logger.info(message, extra=extra)
 
         return jsonify({"text": text}), 200
 

@@ -426,7 +426,12 @@ def test_every_document_extension_reports_the_same_document_outcome(
 
 
 def test_document_outcomes_do_not_leak_into_the_image_branch(monkeypatch, caplog):
-    """T4 owns the image outcomes; T3 must not emit anything for them."""
+    """No document-branch fact may appear on an image request.
+
+    T4 now legitimately emits the image primary outcome, so this test no
+    longer asserts total silence; it asserts that every outcome fact on an
+    image request carries branch=image and never branch=document.
+    """
     app = _make_app()
     _patch_shared_seams(monkeypatch)
     monkeypatch.setattr(multimodal_route, "log_token_usage", lambda **kwargs: 778)
@@ -456,5 +461,8 @@ def test_document_outcomes_do_not_leak_into_the_image_branch(monkeypatch, caplog
     assert response.status_code == 200
     assert response.get_json() == {"text": "a picture"}
     for event in _OUTCOME_EVENTS:
-        assert _operational_records(caplog, event) == []
+        for record in _operational_records(caplog, event):
+            assert record.maui_details.get("branch") == "image", (
+                f"{event} on an image request must never claim branch=document"
+            )
     _assert_no_accounting_event(caplog)

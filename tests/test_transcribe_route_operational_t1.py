@@ -318,7 +318,12 @@ def test_image_dispatch_selects_image_branch_at_info(monkeypatch, caplog):
 
     assert response.status_code == 200
     assert response.get_json() == {"text": "a picture"}
-    _assert_single_branch_fact(caplog, "image", logging.INFO)
+    _assert_single_branch_fact(
+        caplog,
+        "image",
+        logging.INFO,
+        allowed_later_events=("transcribe_operation_completed",),
+    )
 
 
 def test_fall_through_selects_reject_branch_at_warning(monkeypatch, caplog):

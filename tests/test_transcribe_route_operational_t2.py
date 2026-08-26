@@ -19,7 +19,6 @@ import io
 import logging
 from types import SimpleNamespace
 
-import pytest
 from flask import Flask
 
 from routes import multimodal as multimodal_route
@@ -533,52 +532,4 @@ def test_payload_without_usable_text_persists_missing_result(monkeypatch, caplog
     assert not hasattr(record, "maui_error_type")
     _assert_free_of_forbidden(record)
     _assert_t1_branch_fact_intact(caplog)
-    _assert_no_accounting_event(caplog)
-
-
-# ---------------------------------------------------------------------------
-# E. T2 negative scope — no other branch's outcome is implemented here
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "filename, mimetype, patch_target, patch_value, expected",
-    [
-        (
-            "picture.png",
-            "image/png",
-            "describe_image_with_usage",
-            lambda *a, **k: {
-                "description": "a picture",
-                "token_usage": {"input_tokens": 1, "output_tokens": 2},
-            },
-            {"text": "a picture"},
-        ),
-    ],
-)
-def test_image_outcomes_remain_unimplemented(
-    monkeypatch, caplog, filename, mimetype, patch_target, patch_value, expected
-):
-    """T4 owns the image outcomes; the audio slice must not emit them.
-
-    The document branch is no longer covered here: T3 implements the document
-    outcomes and tests/test_transcribe_route_operational_t3.py owns them.
-    """
-    app = _make_app()
-    _patch_shared_seams(monkeypatch)
-    monkeypatch.setattr(multimodal_route, "log_token_usage", lambda **kwargs: 778)
-    monkeypatch.setattr(multimodal_route, patch_target, patch_value)
-
-    with caplog.at_level(logging.INFO):
-        response = app.test_client().post(
-            "/transcribe",
-            data={"file": (io.BytesIO(b"fake-bytes"), filename, mimetype)},
-            content_type="multipart/form-data",
-            headers=_HEADERS,
-        )
-
-    assert response.status_code == 200
-    assert response.get_json() == expected
-    for event in _OUTCOME_EVENTS:
-        assert _operational_records(caplog, event) == []
     _assert_no_accounting_event(caplog)
