@@ -81,15 +81,32 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
         ) or ""
 
         if not config.models.asr_model:
+            message, extra = build_operational_event(
+                event="transcribe_operation_blocked",
+                details={"branch": "audio", "reason": "missing_model"},
+            )
+            logger.warning(message, extra=extra)
             return jsonify({"error": "Missing ASR configuration"}), 500
 
         if asr_provider in PROVIDER_API_KEY_MAP and not asr_api_key:
+            message, extra = build_operational_event(
+                event="transcribe_operation_blocked",
+                provider=asr_provider,
+                details={"branch": "audio", "reason": "missing_api_key"},
+            )
+            logger.warning(message, extra=extra)
             return jsonify({"error": "Missing ASR configuration"}), 500
 
         if (
             asr_provider == "Mistral"
             and config.models.asr_mistral_price_per_minute_usd is None
         ):
+            message, extra = build_operational_event(
+                event="transcribe_operation_blocked",
+                provider=asr_provider,
+                details={"branch": "audio", "reason": "missing_price"},
+            )
+            logger.warning(message, extra=extra)
             return jsonify({"error": "Missing ASR configuration"}), 500
 
         try:
@@ -107,14 +124,37 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
             try:
                 payload = response.json()
             except Exception as e:
+                message, extra = build_operational_event(
+                    event="transcribe_operation_failed",
+                    provider=asr_provider,
+                    model=config.models.asr_model,
+                    error_type=type(e).__name__,
+                    details={"branch": "audio", "reason": "invalid_response"},
+                )
+                logger.error(message, extra=extra)
                 return jsonify({"error": f"Invalid JSON from ASR: {str(e)}"}), 500
 
             text = payload.get("text")
             if text is None:
+                message, extra = build_operational_event(
+                    event="transcribe_operation_failed",
+                    provider=asr_provider,
+                    model=config.models.asr_model,
+                    details={"branch": "audio", "reason": "missing_result"},
+                )
+                logger.error(message, extra=extra)
                 return (
                     jsonify({"error": "ASR response missing 'text' field"}),
                     500,
                 )
+
+            message, extra = build_operational_event(
+                event="transcribe_operation_completed",
+                provider=asr_provider,
+                model=config.models.asr_model,
+                details={"branch": "audio"},
+            )
+            logger.info(message, extra=extra)
 
             if asr_provider in ("Deepinfra", "Mistral"):
                 try:
@@ -147,11 +187,13 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
 
             return jsonify({"text": text}), 200
         else:
-            logger.error(
-                "event=asr_request_failed status=%s body=%s",
-                response.status_code,
-                response.text,
+            message, extra = build_operational_event(
+                event="transcribe_operation_failed",
+                provider=asr_provider,
+                model=config.models.asr_model,
+                details={"branch": "audio", "reason": "http_error"},
             )
+            logger.error(message, extra=extra)
             return jsonify({"error": "ASR transcription failed"}), 500
 
     filename = file.filename or ""

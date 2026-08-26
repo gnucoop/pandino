@@ -134,8 +134,16 @@ def _the_operational_record(caplog, event):
     return records[0]
 
 
-def _assert_no_later_slice_events(caplog):
+def _assert_no_later_slice_events(caplog, allowed=()):
+    """Later-slice facts must not appear.
+
+    `allowed` names events that a NOW-IMPLEMENTED later slice legitimately
+    emits on the path under test, so that T1's own assertions stay scoped to
+    T1 tokens instead of asserting the absence of implemented behaviour.
+    """
     for event in _LATER_SLICE_EVENTS:
+        if event in allowed:
+            continue
         assert _operational_records(caplog, event) == [], (
             f"{event} belongs to a later slice and must not be emitted by T1"
         )
@@ -233,13 +241,13 @@ def test_missing_file_persists_missing_file_reason(monkeypatch, caplog):
 # ---------------------------------------------------------------------------
 
 
-def _assert_single_branch_fact(caplog, branch, level):
+def _assert_single_branch_fact(caplog, branch, level, allowed_later_events=()):
     record = _the_operational_record(caplog, "transcribe_branch_selected")
     assert record.levelno == level
     assert record.maui_details == {"branch": branch}
     _assert_free_of_forbidden(record)
     assert _operational_records(caplog, "transcribe_request_rejected") == []
-    _assert_no_later_slice_events(caplog)
+    _assert_no_later_slice_events(caplog, allowed=allowed_later_events)
     return record
 
 
@@ -259,7 +267,14 @@ def test_audio_dispatch_selects_audio_branch_at_info(monkeypatch, caplog):
         response = _post(app, filename="audio.wav", mimetype="audio/wav")
 
     assert response.status_code == 200
-    _assert_single_branch_fact(caplog, "audio", logging.INFO)
+    # T2 owns the audio primary-operation outcome; it is legitimately present
+    # on this successful audio path and is asserted by the T2 test module.
+    _assert_single_branch_fact(
+        caplog,
+        "audio",
+        logging.INFO,
+        allowed_later_events=("transcribe_operation_completed",),
+    )
 
 
 def test_document_dispatch_selects_document_branch_at_info(monkeypatch, caplog):
