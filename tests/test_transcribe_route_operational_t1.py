@@ -291,7 +291,14 @@ def test_document_dispatch_selects_document_branch_at_info(monkeypatch, caplog):
 
     assert response.status_code == 200
     assert response.get_json() == {"text": "extracted"}
-    _assert_single_branch_fact(caplog, "document", logging.INFO)
+    # T3 is implemented, so the document completion legitimately accompanies
+    # this branch fact.
+    _assert_single_branch_fact(
+        caplog,
+        "document",
+        logging.INFO,
+        allowed_later_events=("transcribe_operation_completed",),
+    )
 
 
 def test_image_dispatch_selects_image_branch_at_info(monkeypatch, caplog):
@@ -349,4 +356,11 @@ def test_document_extension_wins_over_image_mimetype(monkeypatch, caplog):
         response = _post(app, filename="report.pdf", mimetype="image/png")
 
     assert response.status_code == 200
-    _assert_single_branch_fact(caplog, "document", logging.INFO)
+    # T3 is implemented, so the document completion legitimately accompanies
+    # this branch fact.
+    _assert_single_branch_fact(
+        caplog,
+        "document",
+        logging.INFO,
+        allowed_later_events=("transcribe_operation_completed",),
+    )

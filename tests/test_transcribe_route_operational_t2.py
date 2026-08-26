@@ -545,13 +545,6 @@ def test_payload_without_usable_text_persists_missing_result(monkeypatch, caplog
     "filename, mimetype, patch_target, patch_value, expected",
     [
         (
-            "report.pdf",
-            "application/pdf",
-            "extract_and_normalize_document",
-            lambda doc_input: {"text": "extracted"},
-            {"text": "extracted"},
-        ),
-        (
             "picture.png",
             "image/png",
             "describe_image_with_usage",
@@ -563,10 +556,14 @@ def test_payload_without_usable_text_persists_missing_result(monkeypatch, caplog
         ),
     ],
 )
-def test_document_and_image_outcomes_remain_unimplemented(
+def test_image_outcomes_remain_unimplemented(
     monkeypatch, caplog, filename, mimetype, patch_target, patch_value, expected
 ):
-    """T3/T4 own the document and image outcomes; T2 must not emit them."""
+    """T4 owns the image outcomes; the audio slice must not emit them.
+
+    The document branch is no longer covered here: T3 implements the document
+    outcomes and tests/test_transcribe_route_operational_t3.py owns them.
+    """
     app = _make_app()
     _patch_shared_seams(monkeypatch)
     monkeypatch.setattr(multimodal_route, "log_token_usage", lambda **kwargs: 778)

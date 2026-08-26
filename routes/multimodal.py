@@ -214,12 +214,32 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
                 "role": None,
             }
             result = extract_and_normalize_document(doc_input)
+            message, extra = build_operational_event(
+                event="transcribe_operation_completed",
+                details={
+                    "branch": "document",
+                    "extracted_chars": len(result["text"]),
+                },
+            )
+            logger.info(message, extra=extra)
             return jsonify({"text": result["text"]}), 200
         except NotImplementedError:
             return jsonify({"error": f"Unsupported file format: {filename}"}), 415
         except ValueError as e:
+            message, extra = build_operational_event(
+                event="transcribe_operation_failed",
+                error_type=type(e).__name__,
+                details={"branch": "document", "reason": "extraction_invalid"},
+            )
+            logger.error(message, extra=extra)
             return jsonify({"error": str(e)}), 422
         except Exception as e:
+            message, extra = build_operational_event(
+                event="transcribe_operation_failed",
+                error_type=type(e).__name__,
+                details={"branch": "document", "reason": "extraction_error"},
+            )
+            logger.error(message, extra=extra)
             return jsonify({"error": f"Error extracting text from file: {str(e)}"}), 422
 
     if file.mimetype.startswith("image"):
