@@ -436,8 +436,15 @@ def test_audio_completion_precedes_the_accounting_block(monkeypatch, caplog):
     )
     record = _assert_exactly_one_outcome(caplog, "transcribe_operation_completed")
     assert record.maui_details == {"branch": "audio"}
-    # T5, not T2, owns the accounting fact — even with a real failure injected.
-    _assert_no_accounting_event(caplog)
+    # T5 now owns the accounting fact this ordering pin exists to protect. The
+    # completion must still come FIRST; T5 must not replace or duplicate it.
+    accounting = _operational_records(caplog, "transcribe_usage_accounting_failed")
+    assert len(accounting) == 1
+    assert accounting[0].maui_details == {
+        "branch": "audio",
+        "reason": "accounting_error",
+    }
+    assert caplog.records.index(record) < caplog.records.index(accounting[0])
 
 
 # ---------------------------------------------------------------------------

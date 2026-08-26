@@ -222,9 +222,13 @@ def test_image_success_persists_one_completion_with_provider_and_model(
 ):
     """The image branch produced a usable description result.
 
-    The emission sits immediately before the existing successful image return,
-    OUTSIDE any try block, so a malformed builder call would surface as a 500
-    rather than be silently reclassified.
+    The emission sits at the PRIMARY-SUCCESS boundary: immediately after a
+    usable description has been obtained and BEFORE the Usage-accounting
+    block, because the fact represents completion of the primary image
+    operation, not of the whole HTTP route (T4.1).
+
+    It remains OUTSIDE any try block, so a malformed builder call would still
+    surface as a 500 rather than be silently reclassified.
     """
     app = _make_app()
     _patch_shared_seams(monkeypatch)
@@ -258,8 +262,9 @@ def test_image_success_completion_survives_a_failing_accounting_attempt(
 ):
     """Degraded success: the caller still gets the description and a 200.
 
-    The accounting failure itself is T5's fact and must NOT appear here, but
-    it must also not suppress or duplicate the primary completion.
+    The accounting failure itself is T5's fact; T4 pins that it neither
+    suppresses nor duplicates the primary completion, and that the completion
+    is emitted BEFORE the accounting attempt runs (T4.1).
     """
     app = _make_app()
     _patch_shared_seams(monkeypatch)
@@ -284,7 +289,14 @@ def test_image_success_completion_survives_a_failing_accounting_attempt(
     _assert_authoritative_identity(record)
     _assert_free_of_forbidden(record)
     _assert_t1_branch_fact_intact(caplog)
-    _assert_no_accounting_event(caplog)
+    # T5 legitimately emits exactly one accounting fact here. T4 asserts that
+    # it accompanies, rather than replaces, the primary completion, and that
+    # the primary completion comes FIRST (T4.1).
+    accounting = _operational_records(caplog, "transcribe_usage_accounting_failed")
+    assert len(accounting) == 1
+    assert caplog.records.index(record) < caplog.records.index(accounting[0]), (
+        "the image completion must be emitted BEFORE the accounting attempt"
+    )
 
 
 # ---------------------------------------------------------------------------

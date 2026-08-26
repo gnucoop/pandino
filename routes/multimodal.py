@@ -177,13 +177,18 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
                         source=user.get("client"),
                     )
                     set_usage_log_id(log_id)
-                except Exception:
-                    logger.error(
-                        "event=asr_usage_accounting_failed provider=%s model=%s",
-                        asr_provider,
-                        config.models.asr_model,
-                        exc_info=True,
+                except Exception as e:
+                    message, extra = build_operational_event(
+                        event="transcribe_usage_accounting_failed",
+                        provider=asr_provider,
+                        model=config.models.asr_model,
+                        error_type=type(e).__name__,
+                        details={
+                            "branch": "audio",
+                            "reason": "accounting_error",
+                        },
                     )
+                    logger.exception(message, extra=extra)
 
             return jsonify({"text": text}), 200
         else:
@@ -279,6 +284,14 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
 
         text = result["description"]
 
+        message, extra = build_operational_event(
+            event="transcribe_operation_completed",
+            provider=vision_provider,
+            model=vision_model,
+            details={"branch": "image"},
+        )
+        logger.info(message, extra=extra)
+
         try:
             token_usage = result["token_usage"]
             user = database_pg.get_user_by_username(user_email)
@@ -296,21 +309,15 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
                 source=user.get("client"),
             )
             set_usage_log_id(log_id)
-        except Exception:
-            logger.error(
-                "event=vision_usage_accounting_failed provider=%s model=%s",
-                vision_provider,
-                vision_model,
-                exc_info=True,
+        except Exception as e:
+            message, extra = build_operational_event(
+                event="transcribe_usage_accounting_failed",
+                provider=vision_provider,
+                model=vision_model,
+                error_type=type(e).__name__,
+                details={"branch": "image", "reason": "accounting_error"},
             )
-
-        message, extra = build_operational_event(
-            event="transcribe_operation_completed",
-            provider=vision_provider,
-            model=vision_model,
-            details={"branch": "image"},
-        )
-        logger.info(message, extra=extra)
+            logger.exception(message, extra=extra)
 
         return jsonify({"text": text}), 200
 

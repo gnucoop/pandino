@@ -438,7 +438,7 @@ def test_image_usage_persistence_failure_is_logged_at_error(monkeypatch, caplog)
 
     assert response.status_code == 200
     assert any(
-        "event=vision_usage_accounting_failed" in record.getMessage()
+        "event=transcribe_usage_accounting_failed" in record.getMessage()
         for record in caplog.records
     )
 
