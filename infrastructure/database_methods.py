@@ -1421,3 +1421,47 @@ def build_insert_operational_event_query(
         message,
     )
     return query, params
+
+
+def build_get_operational_events_by_request_id_query(
+    request_id: str,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query selecting the Operational events correlated to one
+    request_id, ordered as a timeline.
+
+    Ordering is (event_time ASC, id ASC): event_time is application-supplied
+    from the emitting LogRecord, and id is the deterministic tie-breaker for
+    events sharing an event_time, not a semantic timeline field. Neither id
+    nor request_id is projected: id only participates in ORDER BY, and
+    request_id is already known to the caller.
+
+    Deliberately unpaginated: the caller reads one request's timeline whole.
+
+    :param request_id: Correlation key to select on.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "SELECT {col_event_time}, {col_level}, {col_logger}, {col_event}, "
+        "{col_app_id}, {col_provider}, {col_model}, {col_duration_ms}, "
+        "{col_error_type}, {col_details}, {col_message} "
+        "FROM {table} "
+        "WHERE {col_request_id} = %s "
+        "ORDER BY {col_event_time} ASC, {col_id} ASC"
+    ).format(
+        table=sql.Identifier("operational_events"),
+        col_id=sql.Identifier("id"),
+        col_event_time=sql.Identifier("event_time"),
+        col_level=sql.Identifier("level"),
+        col_logger=sql.Identifier("logger"),
+        col_event=sql.Identifier("event"),
+        col_request_id=sql.Identifier("request_id"),
+        col_app_id=sql.Identifier("app_id"),
+        col_provider=sql.Identifier("provider"),
+        col_model=sql.Identifier("model"),
+        col_duration_ms=sql.Identifier("duration_ms"),
+        col_error_type=sql.Identifier("error_type"),
+        col_details=sql.Identifier("details"),
+        col_message=sql.Identifier("message"),
+    )
+    return query, (request_id,)

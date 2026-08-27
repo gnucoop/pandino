@@ -139,7 +139,7 @@
                         <td class="small">{{ log.date }}</td>
                         <td><span class="badge bg-secondary">{{ log.service }}</span></td>
                         <td><span class="badge bg-secondary">{{ log.source }}</span></td>
-                        <td><code>{{ log.request_id }}</code></td>
+                        <td>{% if log.request_id != "N/A" %}<a href="{{ url_for('admin.admin_operational_timeline', request_id=log.request_id) }}"><code>{{ log.request_id }}</code></a>{% else %}<code>N/A</code>{% endif %}</td>
                         <td class="text-end">
                             {% if log.duration_ms == "N/A" %}
                             N/A

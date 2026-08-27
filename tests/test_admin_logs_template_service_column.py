@@ -309,3 +309,31 @@ def test_stats_card_label_is_usage_records_not_total_requests():
 
     assert "Usage Records" in html
     assert "Total Requests" not in html
+
+
+# --- Usage → Operational drill-down entry point ---
+
+
+def test_valid_request_id_links_to_the_operational_timeline():
+    html = _render_logs_template(logs=[_SAMPLE_LOG])
+
+    assert "<a href=" in html
+    assert f"<code>{_SAMPLE_LOG['request_id']}</code></a>" in html
+
+
+def test_na_request_id_provides_no_drill_down_link():
+    logs = [{**_SAMPLE_LOG, "request_id": "N/A"}]
+
+    html = _render_logs_template(logs=logs)
+
+    assert "<code>N/A</code></a>" not in html
+
+
+def test_na_request_id_cell_markup_is_unchanged():
+    """Byte-for-byte regression guard: adding the drill-down link must not
+    alter the rendered cell for rows with no correlation key."""
+    logs = [{**_SAMPLE_LOG, "request_id": "N/A"}]
+
+    html = _render_logs_template(logs=logs)
+
+    assert "<td><code>N/A</code></td>" in html

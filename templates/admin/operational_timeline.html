@@ -1,0 +1,92 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Operational Timeline - Admin Panel{% endblock %}
+
+{% block content %}
+<div class="mb-3">
+    <a href="{{ url_for('admin.admin_logs') }}" class="btn btn-outline-secondary">
+        <i class="fas fa-arrow-left me-2"></i>Back to Usage
+    </a>
+</div>
+
+<h1 class="mb-2">Operational Timeline</h1>
+<p class="mb-4">Request ID: <code>{{ request_id }}</code></p>
+
+<div class="card">
+    <div class="card-header bg-white">
+        <h5 class="mb-0"><i class="fas fa-stream me-2"></i>Operational Events</h5>
+    </div>
+    <div class="card-body">
+        {% if read_failed %}
+        <div class="alert alert-danger mb-0" role="alert">
+            <i class="fas fa-exclamation-triangle me-2"></i>Unable to load the operational timeline for this request.
+        </div>
+        {% elif events %}
+        <div class="table-responsive">
+            <table class="table table-hover table-sm">
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Level</th>
+                        <th>Event</th>
+                        <th>Context</th>
+                        <th>Duration</th>
+                        <th>Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in events %}
+                    <tr>
+                        <td class="small">{{ row.event_time }}</td>
+                        <td>
+                            {% if row.level in ["ERROR", "CRITICAL"] %}
+                            <span class="badge bg-danger">{{ row.level }}</span>
+                            {% elif row.level == "WARNING" %}
+                            <span class="badge bg-warning">{{ row.level }}</span>
+                            {% elif row.level == "INFO" %}
+                            <span class="badge bg-info">{{ row.level }}</span>
+                            {% else %}
+                            <span class="badge bg-secondary">{{ row.level }}</span>
+                            {% endif %}
+                        </td>
+                        <td><code>{{ row.event }}</code></td>
+                        <td class="small">
+                            {% if row.provider %}<div><span class="badge bg-primary">{{ row.provider }}</span></div>{% endif %}
+                            {% if row.model %}<div><span class="badge bg-info">{{ row.model }}</span></div>{% endif %}
+                            {% if row.error_type %}<div><span class="badge bg-danger">{{ row.error_type }}</span></div>{% endif %}
+                            {% if row.logger %}<div>logger={{ row.logger }}</div>{% endif %}
+                            {% if row.app_id %}<div>app_id={{ row.app_id }}</div>{% endif %}
+                        </td>
+                        <td class="text-end">
+                            {% if row.duration_ms is none %}
+                            N/A
+                            {% elif row.duration_ms < 1000 %}
+                            {{ row.duration_ms }} ms
+                            {% else %}
+                            {{ "%.1f"|format(row.duration_ms / 1000) }} s
+                            {% endif %}
+                        </td>
+                        <td class="small">
+                            {% if row.message %}<div>{{ row.message }}</div>{% endif %}
+                            {% if row.details %}
+                            {% for key, value in row.details.items()|sort %}
+                            <div><code>{{ key }}</code>={{ value }}</div>
+                            {% endfor %}
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="text-center py-5">
+            <i class="fas fa-stream fa-4x text-muted mb-3"></i>
+            <h4 class="text-muted">No operational events</h4>
+            <p class="text-muted">No operational events are recorded for this request ID. Operational coverage is
+                intentionally selective.</p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

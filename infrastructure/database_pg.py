@@ -63,6 +63,7 @@ from infrastructure.database_methods import (
     build_delete_rag_file_query,
     build_delete_pgvector_by_file_id_query,
     build_insert_operational_event_query,
+    build_get_operational_events_by_request_id_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -2160,6 +2161,87 @@ def insert_operational_event(
         conn.commit()
     finally:
         conn.close()
+
+
+def _format_operational_event_time(event_time) -> str:
+    """Format one Operational event_time for display, to the millisecond.
+
+    Millisecond precision (not the second precision used elsewhere in the
+    admin panel) is deliberate: a single flow routinely emits several
+    Operational events inside the same wall-clock second, which is why id
+    exists as the ordering tie-breaker. Showing milliseconds keeps the
+    (event_time, id) timeline order intelligible without displaying id.
+    """
+    if event_time and hasattr(event_time, "strftime"):
+        return event_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    return str(event_time) if event_time else "N/A"
+
+
+def get_operational_events_by_request_id(request_id: str) -> list:
+    """
+    Retrieves the Operational events correlated to one request_id, ordered
+    as a timeline (event_time ASC, id ASC).
+
+    The caller is responsible for supplying a valid, non-empty request_id.
+    A valid request_id with no correlated events returns []; that is a
+    legitimate outcome, not an error, because Usage coverage and Operational
+    coverage are intentionally non-symmetric.
+
+    Query/connection failures propagate to the caller and are never
+    converted into an empty result. SQL NULLs are preserved as None: this
+    reader introduces no display sentinels, performs no Usage lookup, and
+    infers nothing about whether Operational events were expected.
+
+    details is passed through unchanged as the native value psycopg returns
+    for JSONB (dict, or None for SQL NULL). Serialization and payload
+    bounding remain owned by the Operational emission contract.
+
+    :param request_id: Correlation key to select on.
+    :return: List of dictionaries, one per Operational event.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_get_operational_events_by_request_id_query(
+            request_id
+        )
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    events = []
+    for (
+        event_time,
+        level,
+        logger_name,
+        event,
+        app_id,
+        provider,
+        model,
+        duration_ms,
+        error_type,
+        details,
+        message,
+    ) in rows:
+        events.append(
+            {
+                "event_time": _format_operational_event_time(event_time),
+                "level": level,
+                "logger": logger_name,
+                "event": event,
+                "app_id": app_id,
+                "provider": provider,
+                "model": model,
+                "duration_ms": duration_ms,
+                "error_type": error_type,
+                "details": details,
+                "message": message,
+            }
+        )
+
+    return events
 
 
 def print_help():
