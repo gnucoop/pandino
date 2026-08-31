@@ -8,6 +8,7 @@ from infrastructure.vector_store import VectorStore
 
 from infrastructure.ai import choose_llm
 from infrastructure.prompt_utils import load_prompt, render_prompt
+from utils.embedding_operation_context import OPERATION_QUERY, embedding_operation
 from utils.operational_event import build_operational_event
 
 logger = logging.getLogger(__name__)
@@ -109,9 +110,14 @@ def complete_chat(
     vectors: list[dict[str, Any]] = []
 
     try:
-        vectors = store.find_similar_vectors(
-            text=question, top_k=top_k, min_similarity=min_sim
-        )
+        # The scope covers the retrieval call and nothing else: it names the
+        # embedding this question produces, and must not still be in effect
+        # when the LLM below runs. Restoration is the context manager's, on
+        # both the success and the exception path.
+        with embedding_operation(OPERATION_QUERY):
+            vectors = store.find_similar_vectors(
+                text=question, top_k=top_k, min_similarity=min_sim
+            )
     except Exception as e:
         # Fact B. Only the exception class name is persisted: str(e) may embed
         # the query or vector-store connection detail.

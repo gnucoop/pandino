@@ -10,6 +10,7 @@ from infrastructure.database_pg import table_exists, pgvector_maui_id_exists
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_postgres import PGEngine, PGVectorStore
+from utils.embedding_operation_context import OPERATION_PROBE, embedding_operation
 
 PGUSER: Optional[str] = None
 PGPWD: Optional[str] = None
@@ -66,7 +67,12 @@ def ensure_pgvector_namespace_ready(
     table_already_exists = table_exists(schema, normalized_table_name)
 
     if not table_already_exists:
-        vector_size = len(embeddings.embed_query("test"))
+        # The probe scope covers the one provider call that actually happens
+        # here. The existence check above and the table creation below are
+        # not embedding work, and an already-existing namespace makes no
+        # provider call at all -- so no probe scope is entered for it.
+        with embedding_operation(OPERATION_PROBE):
+            vector_size = len(embeddings.embed_query("test"))
 
         engine.init_vectorstore_table(
             table_name=normalized_table_name,

@@ -17,6 +17,7 @@ from typing import List, Dict, Any
 
 from infrastructure.vector_store import MauiVectorStore
 from infrastructure.ai import choose_emb_model
+from utils.embedding_operation_context import OPERATION_QUERY, embedding_operation
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +72,13 @@ def retrieve_from_collection(
         store = MauiVectorStore(embeddings=emb, table_name=namespace)
 
         # === Perform similarity search ===
-        vectors = store.find_similar_vectors(
-            text=question, top_k=top_k, min_similarity=min_sim
-        )
+        # Scoped per call, not per agent run: one /agentchat request drives
+        # 0..N RetrieverTool.forward calls through here, and each must open
+        # and close its own query scope so no retrieval inherits another's.
+        with embedding_operation(OPERATION_QUERY):
+            vectors = store.find_similar_vectors(
+                text=question, top_k=top_k, min_similarity=min_sim
+            )
 
         logger.info(
             "event=retrieval_query_completed count=%s namespace=%s",

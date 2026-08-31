@@ -28,6 +28,9 @@ import matplotlib  # noqa: E402
 import infrastructure.database_pg as database_pg  # noqa: E402
 import infrastructure.vector_store as vector_store  # noqa: E402
 from config import load_config, AppConfig  # noqa: E402
+from utils.embedding_accounting_lifecycle import (  # noqa: E402
+    register_embedding_accounting_hooks,
+)
 from routes.system import system_bp  # noqa: E402
 from routes.auth import auth_bp  # noqa: E402
 from routes.users import users_bp  # noqa: E402
@@ -57,6 +60,9 @@ register_usage_duration_finalization_hooks(
     app
 )  # Persist Usage duration once B2 finalizes it (must register before B2's hooks: after_request runs LIFO)
 register_request_duration_hooks(app)  # Time every request, once per request
+register_embedding_accounting_hooks(
+    app
+)  # Bind the embedding-accounting sink over a per-request accumulator
 register_operational_persistence(
     app
 )  # Attach the Operational Persistence consumer to root logging
