@@ -20,7 +20,7 @@ from langchain_anthropic import ChatAnthropic
 from langchain_mistralai import MistralAIEmbeddings
 from langchain_openai import OpenAIEmbeddings
 from langchain_ollama import OllamaEmbeddings
-from langchain_community.embeddings import DeepInfraEmbeddings
+from infrastructure.embedding_capture import DeepInfraAccountingEmbeddings
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -178,7 +178,12 @@ def choose_emb_model(
         if not key:
             logger.error("event=embedding_deepinfra_api_key_missing")
             raise ValueError("DEEPINFRA_API_KEY environment variable is not set")
-        return DeepInfraEmbeddings(model_id=emb_model, deepinfra_api_token=key)
+        # Capture-enabled subclass: same endpoint, request body, prefixes,
+        # batching, vectors and error semantics as DeepInfraEmbeddings, plus
+        # provider-authoritative accounting observation (DC1, DC2).
+        return DeepInfraAccountingEmbeddings(
+            model_id=emb_model, deepinfra_api_token=key
+        )
 
     else:
         logger.error("event=embedding_type_unsupported emb_llm_type=%s", emb_llm_type)
