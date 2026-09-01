@@ -231,3 +231,87 @@ def test_add_usage_source_column_rejects_unexpected_argument(monkeypatch):
     database_pg.run_cli(["database_pg.py", "add_usage_source_column", "foo"])
 
     assert events == ["print_help"]
+
+
+def test_add_usage_embedding_operation_kind_column_initializes_before_execution(monkeypatch):
+    events = []
+
+    fake_config = object()
+    monkeypatch.setattr(database_pg, "load_dotenv", lambda: events.append("load_dotenv"))
+    monkeypatch.setattr(database_pg, "load_config", lambda: (events.append("load_config"), fake_config)[1])
+    monkeypatch.setattr(database_pg, "init", lambda config: events.append(("init", config)))
+    monkeypatch.setattr(database_pg, "add_usage_embedding_operation_kind_column", lambda: events.append("add_usage_embedding_operation_kind_column"))
+
+    database_pg.run_cli(["database_pg.py", "add_usage_embedding_operation_kind_column"])
+
+    assert events == ["load_dotenv", "load_config", ("init", fake_config), "add_usage_embedding_operation_kind_column"]
+
+
+def test_add_usage_embedding_operation_kind_column_rejects_unexpected_argument(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(database_pg, "load_dotenv", lambda: events.append("load_dotenv"))
+    monkeypatch.setattr(database_pg, "load_config", lambda: events.append("load_config"))
+    monkeypatch.setattr(database_pg, "init", lambda config: events.append("init"))
+    monkeypatch.setattr(database_pg, "print_help", lambda: events.append("print_help"))
+    monkeypatch.setattr(database_pg, "add_usage_embedding_operation_kind_column", lambda: events.append("add_usage_embedding_operation_kind_column"))
+
+    database_pg.run_cli(["database_pg.py", "add_usage_embedding_operation_kind_column", "foo"])
+
+    assert events == ["print_help"]
+
+
+def test_add_usage_quantity_origin_column_initializes_before_execution(monkeypatch):
+    events = []
+
+    fake_config = object()
+    monkeypatch.setattr(database_pg, "load_dotenv", lambda: events.append("load_dotenv"))
+    monkeypatch.setattr(database_pg, "load_config", lambda: (events.append("load_config"), fake_config)[1])
+    monkeypatch.setattr(database_pg, "init", lambda config: events.append(("init", config)))
+    monkeypatch.setattr(database_pg, "add_usage_quantity_origin_column", lambda: events.append("add_usage_quantity_origin_column"))
+
+    database_pg.run_cli(["database_pg.py", "add_usage_quantity_origin_column"])
+
+    assert events == ["load_dotenv", "load_config", ("init", fake_config), "add_usage_quantity_origin_column"]
+
+
+def test_add_usage_quantity_origin_column_rejects_unexpected_argument(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(database_pg, "load_dotenv", lambda: events.append("load_dotenv"))
+    monkeypatch.setattr(database_pg, "load_config", lambda: events.append("load_config"))
+    monkeypatch.setattr(database_pg, "init", lambda config: events.append("init"))
+    monkeypatch.setattr(database_pg, "print_help", lambda: events.append("print_help"))
+    monkeypatch.setattr(database_pg, "add_usage_quantity_origin_column", lambda: events.append("add_usage_quantity_origin_column"))
+
+    database_pg.run_cli(["database_pg.py", "add_usage_quantity_origin_column", "foo"])
+
+    assert events == ["print_help"]
+
+
+def test_add_usage_cost_origin_column_initializes_before_execution(monkeypatch):
+    events = []
+
+    fake_config = object()
+    monkeypatch.setattr(database_pg, "load_dotenv", lambda: events.append("load_dotenv"))
+    monkeypatch.setattr(database_pg, "load_config", lambda: (events.append("load_config"), fake_config)[1])
+    monkeypatch.setattr(database_pg, "init", lambda config: events.append(("init", config)))
+    monkeypatch.setattr(database_pg, "add_usage_cost_origin_column", lambda: events.append("add_usage_cost_origin_column"))
+
+    database_pg.run_cli(["database_pg.py", "add_usage_cost_origin_column"])
+
+    assert events == ["load_dotenv", "load_config", ("init", fake_config), "add_usage_cost_origin_column"]
+
+
+def test_add_usage_cost_origin_column_rejects_unexpected_argument(monkeypatch):
+    events = []
+
+    monkeypatch.setattr(database_pg, "load_dotenv", lambda: events.append("load_dotenv"))
+    monkeypatch.setattr(database_pg, "load_config", lambda: events.append("load_config"))
+    monkeypatch.setattr(database_pg, "init", lambda config: events.append("init"))
+    monkeypatch.setattr(database_pg, "print_help", lambda: events.append("print_help"))
+    monkeypatch.setattr(database_pg, "add_usage_cost_origin_column", lambda: events.append("add_usage_cost_origin_column"))
+
+    database_pg.run_cli(["database_pg.py", "add_usage_cost_origin_column", "foo"])
+
+    assert events == ["print_help"]

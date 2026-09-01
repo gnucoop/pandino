@@ -213,3 +213,47 @@ def test_fresh_operational_events_schema_has_no_check_constraint(monkeypatch):
     statement = _operational_events_table_statement(statements)
 
     assert "CHECK" not in statement
+
+
+def test_fresh_logs_schema_includes_nullable_embedding_operation_kind_column(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+    logs_statement = _logs_table_statement(statements)
+
+    assert "embedding_operation_kind TEXT" in logs_statement
+    assert "embedding_operation_kind TEXT NOT NULL" not in logs_statement
+    assert "embedding_operation_kind TEXT DEFAULT" not in logs_statement
+
+
+def test_fresh_logs_schema_includes_nullable_quantity_origin_column(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+    logs_statement = _logs_table_statement(statements)
+
+    assert "quantity_origin TEXT" in logs_statement
+    assert "quantity_origin TEXT NOT NULL" not in logs_statement
+    assert "quantity_origin TEXT DEFAULT" not in logs_statement
+
+
+def test_fresh_logs_schema_includes_nullable_cost_origin_column(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+    logs_statement = _logs_table_statement(statements)
+
+    assert "cost_origin TEXT" in logs_statement
+    assert "cost_origin TEXT NOT NULL" not in logs_statement
+    assert "cost_origin TEXT DEFAULT" not in logs_statement
+
+
+def test_fresh_embedding_provenance_columns_are_scoped_to_logs_table(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+
+    for statement in statements:
+        if "CREATE TABLE IF NOT EXISTS logs" not in statement:
+            for column in ("embedding_operation_kind", "quantity_origin", "cost_origin"):
+                assert column not in statement
+
+
+def test_fresh_logs_schema_embedding_provenance_columns_have_no_constraints(monkeypatch):
+    statements = _run_init_db_and_capture_statements(monkeypatch)
+    logs_statement = _logs_table_statement(statements)
+
+    assert "CHECK" not in logs_statement
+    assert "REFERENCES" not in logs_statement

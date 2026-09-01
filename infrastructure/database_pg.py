@@ -142,7 +142,10 @@ def init_db():
             service TEXT,
             request_id TEXT,
             duration_ms INTEGER,
-            source TEXT
+            source TEXT,
+            embedding_operation_kind TEXT,
+            quantity_origin TEXT,
+            cost_origin TEXT
         );
         CREATE TABLE IF NOT EXISTS costs (
             id SERIAL PRIMARY KEY,
@@ -1070,6 +1073,85 @@ def add_usage_source_column() -> None:
         print("logs.source already present, no change needed.")
     else:
         raise RuntimeError("Failed to add logs.source column.")
+
+
+def add_usage_embedding_operation_kind_column() -> None:
+    """
+    Governed, application-owned schema operation for the Embedding Usage
+    persistence provenance foundation: adds the nullable
+    'embedding_operation_kind' column to the existing 'logs' table if it is
+    not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / logs / embedding_operation_kind / TEXT. This is the
+    only sanctioned way to reach add_column_if_missing() for this change; it
+    does not accept schema/table/column/type parameters, so it cannot be used
+    to mutate an arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "logs", "embedding_operation_kind", "TEXT")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("logs.embedding_operation_kind added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("logs.embedding_operation_kind already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add logs.embedding_operation_kind column.")
+
+
+def add_usage_quantity_origin_column() -> None:
+    """
+    Governed, application-owned schema operation for the Embedding Usage
+    persistence provenance foundation: adds the nullable 'quantity_origin'
+    column to the existing 'logs' table if it is not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / logs / quantity_origin / TEXT. This is the only
+    sanctioned way to reach add_column_if_missing() for this change; it does
+    not accept schema/table/column/type parameters, so it cannot be used to
+    mutate an arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "logs", "quantity_origin", "TEXT")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("logs.quantity_origin added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("logs.quantity_origin already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add logs.quantity_origin column.")
+
+
+def add_usage_cost_origin_column() -> None:
+    """
+    Governed, application-owned schema operation for the Embedding Usage
+    persistence provenance foundation: adds the nullable 'cost_origin'
+    column to the existing 'logs' table if it is not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / logs / cost_origin / TEXT. This is the only
+    sanctioned way to reach add_column_if_missing() for this change; it does
+    not accept schema/table/column/type parameters, so it cannot be used to
+    mutate an arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "logs", "cost_origin", "TEXT")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("logs.cost_origin added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("logs.cost_origin already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add logs.cost_origin column.")
 
 
 def pgvector_maui_id_exists(table_name: str, maui_id: str) -> bool:
@@ -2261,6 +2343,11 @@ def print_help():
     print("  add_usage_duration_ms_column Add the nullable logs.duration_ms column if missing")
     print("  add_user_client_column      Add the nullable users.client column if missing")
     print("  add_usage_source_column     Add the nullable logs.source column if missing")
+    print(
+        "  add_usage_embedding_operation_kind_column Add the nullable logs.embedding_operation_kind column if missing"
+    )
+    print("  add_usage_quantity_origin_column Add the nullable logs.quantity_origin column if missing")
+    print("  add_usage_cost_origin_column Add the nullable logs.cost_origin column if missing")
 
 
 def _resolve_cli_command(argv: list[str]):
@@ -2305,6 +2392,12 @@ def _resolve_cli_command(argv: list[str]):
         return add_user_client_column
     if command == "add_usage_source_column" and len(argv) == 2:
         return add_usage_source_column
+    if command == "add_usage_embedding_operation_kind_column" and len(argv) == 2:
+        return add_usage_embedding_operation_kind_column
+    if command == "add_usage_quantity_origin_column" and len(argv) == 2:
+        return add_usage_quantity_origin_column
+    if command == "add_usage_cost_origin_column" and len(argv) == 2:
+        return add_usage_cost_origin_column
 
     return None
 
