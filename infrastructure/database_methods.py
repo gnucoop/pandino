@@ -413,16 +413,24 @@ def build_insert_token_log_query(
     service: str,
     request_id: str,
     source: Optional[str],
+    embedding_operation_kind: Optional[str] = None,
+    quantity_origin: Optional[str] = None,
+    cost_origin: Optional[str] = None,
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to insert a new usage log into the 'logs' table
     and returns the generated log ID.
 
+    The three provenance values are optional and additive: a caller that
+    omits them writes SQL NULL, which is what an LLM or ASR row means. This
+    builder does not validate them; the vocabulary is owned above the
+    database boundary.
+
     :return: Tuple of SQL query and parameters.
     """
     query = sql.SQL(
-        "INSERT INTO {table} ({col_date}, {col_user}, {col_in}, {col_out}, {col_cost}, {col_model}, {col_provider}, {col_service}, {col_request_id}, {col_source}) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "INSERT INTO {table} ({col_date}, {col_user}, {col_in}, {col_out}, {col_cost}, {col_model}, {col_provider}, {col_service}, {col_request_id}, {col_source}, {col_op_kind}, {col_quantity_origin}, {col_cost_origin}) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
         "RETURNING id"
     ).format(
         table=sql.Identifier("logs"),
@@ -436,6 +444,9 @@ def build_insert_token_log_query(
         col_service=sql.Identifier("service"),
         col_request_id=sql.Identifier("request_id"),
         col_source=sql.Identifier("source"),
+        col_op_kind=sql.Identifier("embedding_operation_kind"),
+        col_quantity_origin=sql.Identifier("quantity_origin"),
+        col_cost_origin=sql.Identifier("cost_origin"),
     )
     params = (
         date,
@@ -448,6 +459,9 @@ def build_insert_token_log_query(
         service,
         request_id,
         source,
+        embedding_operation_kind,
+        quantity_origin,
+        cost_origin,
     )
     return query, params
 

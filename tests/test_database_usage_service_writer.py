@@ -49,6 +49,9 @@ def test_build_insert_token_log_query_includes_service_column_and_param():
         "/datachat",
         "abc123",
         "dino",
+        None,
+        None,
+        None,
     )
 
 
@@ -57,7 +60,7 @@ def test_build_insert_token_log_query_preserves_none_source_as_none():
         "2026-08-12 00:00:00", 1, 10, 5, 0.01, "gpt-4", "openai", "/datachat", "abc123", None
     )
 
-    assert params[-1] is None
+    assert params[9] is None
 
 
 def test_log_token_usage_requires_service_argument():
@@ -130,9 +133,9 @@ def test_log_token_usage_persists_provided_service_as_insert_param(monkeypatch):
     assert "service" in insert_query.as_string(None)
     assert "request_id" in insert_query.as_string(None)
     assert "source" in insert_query.as_string(None)
-    assert insert_params[-3] == "/datachat"
-    assert insert_params[-2] == "abc123"
-    assert insert_params[-1] == "dino"
+    assert insert_params[7] == "/datachat"
+    assert insert_params[8] == "abc123"
+    assert insert_params[9] == "dino"
 
 
 def test_log_token_usage_persists_none_source_as_none(monkeypatch):
@@ -152,7 +155,7 @@ def test_log_token_usage_persists_none_source_as_none(monkeypatch):
 
     assert log_id == 78
     _insert_query, insert_params = cursor.executed[1]
-    assert insert_params[-1] is None
+    assert insert_params[9] is None
 
 
 def test_build_get_logs_for_admin_query_selects_service():
@@ -439,3 +442,262 @@ def test_log_token_usage_closes_connection_when_insert_returns_no_id(monkeypatch
 
     assert conn.closed is True
     assert conn.committed is False
+
+
+# --- Embedding Usage Persistence P3: provenance fields + batch writer ---
+
+
+def test_build_insert_token_log_query_includes_provenance_columns_as_null_by_default():
+    query, params = build_insert_token_log_query(
+        "2026-09-01 00:00:00", 1, 10, 5, 0.01, "gpt-4", "openai", "/datachat", "abc123", "dino"
+    )
+
+    query_str = query.as_string(None)
+    assert "embedding_operation_kind" in query_str
+    assert "quantity_origin" in query_str
+    assert "cost_origin" in query_str
+    assert params[10] is None
+    assert params[11] is None
+    assert params[12] is None
+
+
+def test_build_insert_token_log_query_places_provenance_values_after_source():
+    _query, params = build_insert_token_log_query(
+        "2026-09-01 00:00:00",
+        1,
+        10,
+        0,
+        0.01,
+        "bge-m3",
+        "Deepinfra",
+        "/completion.json",
+        "abc123",
+        "dino",
+        embedding_operation_kind="query",
+        quantity_origin="provider_reported",
+        cost_origin="provider_authoritative",
+    )
+
+    # Existing columns keep their positions; the new values are additive.
+    assert params[:10] == (
+        "2026-09-01 00:00:00",
+        1,
+        10,
+        0,
+        0.01,
+        "bge-m3",
+        "Deepinfra",
+        "/completion.json",
+        "abc123",
+        "dino",
+    )
+    assert params[10] == "query"
+    assert params[11] == "provider_reported"
+    assert params[12] == "provider_authoritative"
+
+
+def test_log_usage_with_resolved_cost_writes_null_provenance_when_omitted(monkeypatch):
+    cursor = _TrackingCursor(log_id_row=(101,))
+    conn = _TrackingConnection(cursor)
+    monkeypatch.setattr(database_pg, "connect", lambda: conn)
+
+    database_pg.log_usage_with_resolved_cost(
+        user_id=1,
+        cost=0.42,
+        model="mistral-voxtral",
+        provider="mistral",
+        service="/transcribe",
+        request_id="abc123",
+        source="dino",
+    )
+
+    _insert_query, insert_params = cursor.executed[0]
+    assert insert_params[10] is None
+    assert insert_params[11] is None
+    assert insert_params[12] is None
+
+
+def test_log_usage_with_resolved_cost_forwards_provenance_values(monkeypatch):
+    cursor = _TrackingCursor(log_id_row=(102,))
+    conn = _TrackingConnection(cursor)
+    monkeypatch.setattr(database_pg, "connect", lambda: conn)
+
+    log_id = database_pg.log_usage_with_resolved_cost(
+        user_id=1,
+        cost=0.42,
+        model="bge-m3",
+        provider="Deepinfra",
+        service="/completion.json",
+        request_id="abc123",
+        source="dino",
+        embedding_operation_kind="query",
+        quantity_origin="provider_reported",
+        cost_origin="provider_authoritative",
+    )
+
+    assert log_id == 102
+    _insert_query, insert_params = cursor.executed[0]
+    assert insert_params[10] == "query"
+    assert insert_params[11] == "provider_reported"
+    assert insert_params[12] == "provider_authoritative"
+
+
+class _BatchCursor:
+    """Returns a distinct log id per INSERT, and can be told to fail on the
+    Nth execute so rollback behaviour is observable."""
+
+    def __init__(self, log_ids, fail_on_execute=None):
+        self._log_ids = list(log_ids)
+        self._fail_on_execute = fail_on_execute
+        self.executed = []
+        self.closed = False
+
+    def execute(self, query, params=None):
+        self.executed.append((query, params))
+        if self._fail_on_execute is not None and len(self.executed) == self._fail_on_execute:
+            raise RuntimeError("insert exploded")
+
+    def fetchone(self):
+        return (self._log_ids.pop(0),)
+
+    def close(self):
+        self.closed = True
+
+
+class _BatchConnection:
+    def __init__(self, cursor):
+        self._cursor = cursor
+        self.commit_count = 0
+        self.rollback_count = 0
+        self.closed = False
+
+    def cursor(self):
+        return self._cursor
+
+    def commit(self):
+        self.commit_count += 1
+
+    def rollback(self):
+        self.rollback_count += 1
+
+    def close(self):
+        self.closed = True
+
+
+def _entry(**overrides):
+    values = dict(
+        user_id=1,
+        cost=0.5,
+        model="bge-m3",
+        provider="Deepinfra",
+        service="/completion.json",
+        request_id="abc123",
+        source="dino",
+        token_input=100,
+        token_output=0,
+    )
+    values.update(overrides)
+    return database_pg.ResolvedCostUsageEntry(**values)
+
+
+def test_log_resolved_cost_usage_batch_empty_returns_empty_without_connecting(monkeypatch):
+    opened = {"n": 0}
+
+    def _connect():
+        opened["n"] += 1
+        raise AssertionError("no connection may be opened for an empty batch")
+
+    monkeypatch.setattr(database_pg, "connect", _connect)
+
+    assert database_pg.log_resolved_cost_usage_batch([]) == []
+    assert opened["n"] == 0
+
+
+def test_log_resolved_cost_usage_batch_single_entry_commits_once(monkeypatch):
+    cursor = _BatchCursor(log_ids=[201])
+    conn = _BatchConnection(cursor)
+    monkeypatch.setattr(database_pg, "connect", lambda: conn)
+
+    log_ids = database_pg.log_resolved_cost_usage_batch([_entry()])
+
+    assert log_ids == [201]
+    assert len(cursor.executed) == 1
+    assert conn.commit_count == 1
+    assert conn.rollback_count == 0
+    assert conn.closed is True
+
+
+def test_log_resolved_cost_usage_batch_inserts_in_input_order_in_one_transaction(monkeypatch):
+    cursor = _BatchCursor(log_ids=[301, 302, 303])
+    conn = _BatchConnection(cursor)
+    connections = []
+
+    def _connect():
+        connections.append(conn)
+        return conn
+
+    monkeypatch.setattr(database_pg, "connect", _connect)
+
+    log_ids = database_pg.log_resolved_cost_usage_batch(
+        [
+            _entry(model="model-a"),
+            _entry(model="model-b"),
+            _entry(model="model-c"),
+        ]
+    )
+
+    assert log_ids == [301, 302, 303]
+    assert len(connections) == 1
+    assert conn.commit_count == 1
+    assert [params[5] for _q, params in cursor.executed] == ["model-a", "model-b", "model-c"]
+    assert conn.closed is True
+
+
+def test_log_resolved_cost_usage_batch_rolls_back_whole_batch_on_failure(monkeypatch):
+    cursor = _BatchCursor(log_ids=[401, 402], fail_on_execute=2)
+    conn = _BatchConnection(cursor)
+    monkeypatch.setattr(database_pg, "connect", lambda: conn)
+
+    with pytest.raises(RuntimeError, match="insert exploded"):
+        database_pg.log_resolved_cost_usage_batch([_entry(), _entry()])
+
+    assert conn.rollback_count == 1
+    assert conn.commit_count == 0
+    assert conn.closed is True
+
+
+def test_log_resolved_cost_usage_batch_carries_per_entry_provenance(monkeypatch):
+    cursor = _BatchCursor(log_ids=[501, 502])
+    conn = _BatchConnection(cursor)
+    monkeypatch.setattr(database_pg, "connect", lambda: conn)
+
+    database_pg.log_resolved_cost_usage_batch(
+        [
+            _entry(
+                embedding_operation_kind="query",
+                quantity_origin="provider_reported",
+                cost_origin="provider_authoritative",
+            ),
+            _entry(
+                embedding_operation_kind="document",
+                quantity_origin="maui_derived",
+                cost_origin="maui_resolved",
+            ),
+        ]
+    )
+
+    first = cursor.executed[0][1]
+    second = cursor.executed[1][1]
+    assert first[10:13] == ("query", "provider_reported", "provider_authoritative")
+    assert second[10:13] == ("document", "maui_derived", "maui_resolved")
+
+
+def test_log_resolved_cost_usage_batch_defaults_provenance_to_null(monkeypatch):
+    cursor = _BatchCursor(log_ids=[601])
+    conn = _BatchConnection(cursor)
+    monkeypatch.setattr(database_pg, "connect", lambda: conn)
+
+    database_pg.log_resolved_cost_usage_batch([_entry()])
+
+    _query, params = cursor.executed[0]
+    assert params[10:13] == (None, None, None)

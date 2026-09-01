@@ -4,9 +4,10 @@ import sys
 from cryptography.fernet import Fernet, InvalidToken
 import os
 import base64
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 import logging
 import pandas as pd
 from dotenv import load_dotenv
@@ -515,6 +516,9 @@ def _insert_resolved_cost_usage_log(
     service: str,
     request_id: str,
     source: Optional[str],
+    embedding_operation_kind: Optional[str] = None,
+    quantity_origin: Optional[str] = None,
+    cost_origin: Optional[str] = None,
 ) -> int:
     """
     Fixed-intent Usage persistence primitive: inserts a 'logs' row for a
@@ -523,7 +527,8 @@ def _insert_resolved_cost_usage_log(
     Provider-blind, pricing-blind, Flask-blind: it does not look up costs,
     calculate token pricing, or infer any accounting attribution field. The
     caller (e.g. log_token_usage()) owns the connection/transaction and has
-    already resolved every value passed in.
+    already resolved every value passed in, including the optional
+    provenance values, which default to NULL.
     """
     insert_query, insert_params = build_insert_token_log_query(
         date_str,
@@ -536,6 +541,9 @@ def _insert_resolved_cost_usage_log(
         service,
         request_id,
         source,
+        embedding_operation_kind=embedding_operation_kind,
+        quantity_origin=quantity_origin,
+        cost_origin=cost_origin,
     )
     cursor.execute(insert_query, insert_params)
 
@@ -617,14 +625,19 @@ def log_usage_with_resolved_cost(
     source: Optional[str],
     token_input: int = 0,
     token_output: int = 0,
+    embedding_operation_kind: Optional[str] = None,
+    quantity_origin: Optional[str] = None,
+    cost_origin: Optional[str] = None,
 ) -> int:
     """
     Persists a Usage log row for a monetary cost the caller has already
     resolved, bypassing the token-pricing lookup used by log_token_usage().
 
-    Foundation for future non-token-priced Usage (e.g. ASR): not yet called
-    by any production route. token_input/token_output default to 0, the
-    established compatibility convention for non-token Usage rows.
+    Used in production by the /transcribe ASR route. token_input and
+    token_output default to 0, the established compatibility convention for
+    non-token Usage rows. The three provenance values are optional and
+    default to NULL, so a caller that has none writes rows identical to
+    before.
 
     :param user_id: The ID of the user whose usage is being logged.
     :param cost: The already-resolved monetary cost to persist.
@@ -635,6 +648,9 @@ def log_usage_with_resolved_cost(
     :param source: The persisted client ecosystem of the user that produced this usage, or None.
     :param token_input: Compatibility placeholder for non-token Usage; defaults to 0.
     :param token_output: Compatibility placeholder for non-token Usage; defaults to 0.
+    :param embedding_operation_kind: Embedding operation this row records, or None.
+    :param quantity_origin: Where the persisted quantity came from, or None.
+    :param cost_origin: Where the persisted cost came from, or None.
     :return: The ID of the inserted log record.
     """
     conn = connect()
@@ -655,10 +671,89 @@ def log_usage_with_resolved_cost(
             service,
             request_id,
             source,
+            embedding_operation_kind=embedding_operation_kind,
+            quantity_origin=quantity_origin,
+            cost_origin=cost_origin,
         )
 
         conn.commit()
         return log_id
+    finally:
+        conn.close()
+
+
+@dataclass(frozen=True)
+class ResolvedCostUsageEntry:
+    """One already-resolved Usage row for log_resolved_cost_usage_batch().
+
+    Deliberately generic Usage infrastructure: nothing here is
+    embedding-shaped, and every value is expected to have been resolved and
+    validated above the database boundary.
+    """
+
+    user_id: int
+    cost: float
+    model: str
+    provider: str
+    service: str
+    request_id: str
+    source: Optional[str]
+    token_input: int = 0
+    token_output: int = 0
+    embedding_operation_kind: Optional[str] = None
+    quantity_origin: Optional[str] = None
+    cost_origin: Optional[str] = None
+
+
+def log_resolved_cost_usage_batch(entries) -> List[int]:
+    """
+    Persists 0..N already-resolved Usage rows in a single transaction and
+    returns their new ids in input order.
+
+    All rows commit together or none do: on any failure the transaction is
+    rolled back and the exception is re-raised, so a caller never leaves a
+    knowably partial accounting record behind. An empty batch is a no-op
+    that opens no connection.
+
+    :param entries: Sequence of ResolvedCostUsageEntry records to insert.
+    :return: The IDs of the inserted log records, in input order.
+    """
+    entries = list(entries)
+    if not entries:
+        return []
+
+    conn = connect()
+    try:
+        cursor = conn.cursor()
+        date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        log_ids: List[int] = []
+        try:
+            for entry in entries:
+                log_ids.append(
+                    _insert_resolved_cost_usage_log(
+                        cursor,
+                        date_str,
+                        entry.user_id,
+                        entry.token_input,
+                        entry.token_output,
+                        entry.cost,
+                        entry.model,
+                        entry.provider,
+                        entry.service,
+                        entry.request_id,
+                        entry.source,
+                        embedding_operation_kind=entry.embedding_operation_kind,
+                        quantity_origin=entry.quantity_origin,
+                        cost_origin=entry.cost_origin,
+                    )
+                )
+        except Exception:
+            conn.rollback()
+            raise
+
+        conn.commit()
+        return log_ids
     finally:
         conn.close()
 
