@@ -31,6 +31,9 @@ from config import load_config, AppConfig  # noqa: E402
 from utils.embedding_accounting_lifecycle import (  # noqa: E402
     register_embedding_accounting_hooks,
 )
+from utils.embedding_usage_persistence import (  # noqa: E402
+    register_embedding_usage_persistence_hooks,
+)
 from routes.system import system_bp  # noqa: E402
 from routes.auth import auth_bp  # noqa: E402
 from routes.users import users_bp  # noqa: E402
@@ -59,6 +62,10 @@ register_request_context_hooks(app)  # Bind a request_id for every request
 register_usage_duration_finalization_hooks(
     app
 )  # Persist Usage duration once B2 finalizes it (must register before B2's hooks: after_request runs LIFO)
+register_embedding_usage_persistence_hooks(
+    app
+)  # Persist embedding consumption as Usage rows (must register after the duration
+#    finalizer and before the request timer: after_request runs LIFO)
 register_request_duration_hooks(app)  # Time every request, once per request
 register_embedding_accounting_hooks(
     app
