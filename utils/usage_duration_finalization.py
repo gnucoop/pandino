@@ -3,9 +3,13 @@
 
 Owns exactly one responsibility: at the ``after_request`` boundary, combine
 the authoritative request duration (``utils.request_duration``) with the
-request-local Usage row identity (``utils.usage_request_state``) to
+request-local Usage row identities (``utils.usage_request_state``) to
 finalize ``logs.duration_ms`` via ``update_usage_duration()``
-(``infrastructure/database_pg.py``).
+(``infrastructure/database_pg.py``), once per registered Usage row.
+
+A request may have created several Usage rows; each of them receives the
+same full-request duration, and each is updated independently so that one
+failing row neither hides nor blocks the others.
 
 This module does not measure duration, does not know how a Usage row's
 ``log_id`` was captured, and does not implement any DB primitive - it only
@@ -19,7 +23,7 @@ import logging
 
 from infrastructure.database_pg import update_usage_duration
 from utils.request_duration import get_request_duration_ms
-from utils.usage_request_state import get_usage_log_id
+from utils.usage_request_state import get_usage_log_ids
 
 logger = logging.getLogger(__name__)
 
@@ -62,28 +66,31 @@ def register_usage_duration_finalization_hooks(app) -> None:
         if duration_ms is None:
             return response
 
-        log_id = get_usage_log_id()
-        if log_id is None:
+        log_ids = get_usage_log_ids()
+        if not log_ids:
             return response
 
-        try:
-            updated = update_usage_duration(log_id, duration_ms)
-        except Exception as exc:
-            logger.exception(
-                "event=usage_duration_update_failed "
-                "log_id=%s duration_ms=%s error_type=%s error=%s",
-                log_id,
-                duration_ms,
-                type(exc).__name__,
-                exc,
-            )
-            return response
+        for log_id in log_ids:
+            try:
+                updated = update_usage_duration(log_id, duration_ms)
+            except Exception as exc:
+                # Best-effort per row: the failing id is attributable in
+                # the log line and the remaining ids are still attempted.
+                logger.exception(
+                    "event=usage_duration_update_failed "
+                    "log_id=%s duration_ms=%s error_type=%s error=%s",
+                    log_id,
+                    duration_ms,
+                    type(exc).__name__,
+                    exc,
+                )
+                continue
 
-        if not updated:
-            logger.warning(
-                "event=usage_duration_update_not_found log_id=%s duration_ms=%s",
-                log_id,
-                duration_ms,
-            )
+            if not updated:
+                logger.warning(
+                    "event=usage_duration_update_not_found log_id=%s duration_ms=%s",
+                    log_id,
+                    duration_ms,
+                )
 
         return response
