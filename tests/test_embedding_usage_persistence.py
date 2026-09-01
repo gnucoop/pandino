@@ -592,15 +592,52 @@ def test_main_registers_the_hooks_in_the_required_order():
     assert called == expected
 
 
-def test_no_production_route_binds_usage_attribution():
-    """P6 lands inert: nothing outside tests binds attribution yet."""
+def test_production_attribution_binding_is_confined_to_the_approved_routes():
+    """Only /completion.json and /agentchat may bind attribution.
+
+    The two ingestion flows already capture embedding contributions, so the
+    only thing keeping them out of Usage is that they bind no attribution.
+    This guard is therefore exact, not existential: it names every
+    production file allowed to reference the binder.
+    """
     import subprocess
 
     result = subprocess.run(
-        ["grep", "-rn", "bind_usage_attribution", "routes", "services", "main.py"],
+        ["grep", "-rnI", "--include=*.py", "bind_usage_attribution",
+         "routes", "services", "main.py"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
     )
 
-    assert result.stdout == ""
+    files = {line.split(":", 1)[0] for line in result.stdout.splitlines() if line}
+    assert files == {"routes/rag.py"}
+
+    with open(os.path.join(REPO_ROOT, "routes", "rag.py")) as handle:
+        tree = ast.parse(handle.read())
+
+    binding_helpers = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and any(
+            isinstance(call.func, ast.Name)
+            and call.func.id == "bind_usage_attribution"
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+        )
+    }
+    assert binding_helpers == {"_bind_embedding_usage_attribution"}
+
+    callers = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and any(
+            isinstance(call.func, ast.Name)
+            and call.func.id in binding_helpers
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+        )
+    }
+    assert callers == {"completion_handler", "agentchat"}

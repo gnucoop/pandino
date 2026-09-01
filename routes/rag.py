@@ -9,6 +9,7 @@ import infrastructure.database_pg as database_pg
 from infrastructure.database_pg import edit_tokens, get_user_by_username, log_token_usage
 from utils.logging_config import get_request_id
 from utils.operational_event import build_operational_event
+from utils.usage_attribution_state import bind_usage_attribution
 from utils.usage_request_state import set_usage_log_id
 from infrastructure.ai import choose_emb_model
 from infrastructure.vector_store import MauiVectorStore
@@ -20,6 +21,47 @@ from routes.utils import assert_valid_api_key
 rag_bp = Blueprint("rag", __name__)
 
 logger = logging.getLogger(__name__)
+
+
+def _bind_embedding_usage_attribution(username: str, service: str) -> None:
+    """Best-effort bind of this request's Usage attribution metadata.
+
+    Called once per request, after the request identity has already been
+    authenticated and before any embedding work can occur, so that
+    embedding consumption accumulated later in the request can be
+    attributed to a real Maui user at request end.
+
+    Purely observational: it resolves a user id and binds it, or it binds
+    nothing and emits one safe diagnostic. It never raises, never changes
+    control flow and is not a prerequisite for anything the endpoint does.
+    In particular it is not a replacement for the caller's own later Usage
+    lookup and write, which stays authoritative and unchanged.
+    """
+    reason = None
+    error_type = None
+    try:
+        user = get_user_by_username(username)
+        if not user:
+            reason = "not_found"
+        else:
+            user_id = user.get("id")
+            if isinstance(user_id, int):
+                bind_usage_attribution(user_id, service, user.get("client"))
+            else:
+                reason = "invalid_user_id"
+    except Exception as exc:
+        reason = "lookup_failed"
+        error_type = type(exc).__name__
+
+    if reason is not None:
+        logger.warning(
+            "event=embedding_usage_attribution_unavailable reason=%s "
+            "service=%s request_id=%s error_type=%s",
+            reason,
+            service,
+            get_request_id(),
+            error_type,
+        )
 
 
 @rag_bp.route("/completion.json", methods=["POST"])
@@ -42,6 +84,8 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
             return jsonify({"error": "Missing X-API-KEY header"}), 400
 
         assert_valid_api_key(api_key, r["username"])
+
+        _bind_embedding_usage_attribution(r["username"], "/completion.json")
 
         config = current_app.config["MAUI_CONFIG"]
 
@@ -174,6 +218,8 @@ def agentchat() -> Response | tuple[Response, int]:
         # === Validate the provided API key for the given user email ===
 
         assert_valid_api_key(api_key, r["username"])
+
+        _bind_embedding_usage_attribution(r["username"], "/agentchat")
 
         config = current_app.config["MAUI_CONFIG"]
 
