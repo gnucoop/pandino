@@ -66,8 +66,9 @@ class EmbeddingAccountingAccumulator:
         observation-only subsystem whose contract is that
         consumption is independent of HTTP outcome. Dropping the
         contribution instead would lose real consumption, which is the one
-        thing this module exists to keep. The violation is counted so a
-        later phase can see the anomaly rather than infer it.
+        thing this module exists to keep. The violation is counted and exposed
+        through ``invariant_violations``, so the anomaly is inspectable as
+        state rather than only inferable from the warning above.
 
         The warning names provider and model only: both are configuration
         identities, never user content.
