@@ -2,9 +2,9 @@
 """Request-local Usage row identity.
 
 Owns exactly one responsibility: hold the ``log_id`` of every Usage row
-created (if any) by the current HTTP request, so a later lifecycle
-orchestration step can read them. The state is kept as request-local
-state on ``flask.g`` and exposed through two readers:
+created (if any) by the current HTTP request, so the lifecycle
+orchestration that finalizes those rows can read them. The state is kept
+as request-local state on ``flask.g`` and exposed through two readers:
 
 * :func:`get_usage_log_id` - the most recently *set* single id, the
   original accessor, retained for its existing readers;
@@ -19,10 +19,10 @@ leaving the single slot alone.
 
 This module does not persist anything, does not measure time, does not
 register Flask hooks, and does not call ``update_usage_duration()``
-(``infrastructure/database_pg.py``). Those are the concern of the
-lifecycle orchestration that combines this identity state with
-``utils.request_duration``'s duration measurement; wiring them here would
-pull that orchestration into a module deliberately kept to identity
+(``infrastructure/database_pg.py``). That orchestration lives in
+``utils.usage_duration_finalization``, which combines this identity state
+with ``utils.request_duration``'s duration measurement; wiring it here
+would pull that orchestration into a module deliberately kept to identity
 storage only.
 """
 

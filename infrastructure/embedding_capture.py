@@ -245,9 +245,9 @@ class DeepInfraAccountingEmbeddings(DeepInfraEmbeddings):
           contract and DC4 says it comes from ambient context, so there is
           nothing legitimate to record: inventing a kind would fabricate an
           attribution. Debug level, not warning — running outside a bound
-          operation is the expected state for direct construction, reusable
-          non-HTTP infrastructure and every production flow until operation
-          contexts are wired.
+          operation is a legitimate state, not a defect: direct construction
+          and reusable non-HTTP infrastructure can embed with no ambient
+          operation to report.
         * **Malformed accounting.** The vectors are valid and were billed;
           only the observation is unusable. Warning level, naming provider,
           model and the failure reason only — never the payload, the input

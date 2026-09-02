@@ -19,9 +19,10 @@ attachment point: it starts the process-local delivery singleton and
 attaches one ``OperationalPersistenceHandler`` to root, alongside the
 existing stderr handler. ``_DELIVERY`` is a process-local singleton by
 design: with N gunicorn workers there are N independent delivery
-queues/consumers, all writing to the same PostgreSQL store. The foundation
-ships with an empty event vocabulary, so every production record still
-returns at the handler's marker check and no row is written.
+queues/consumers, all writing to the same PostgreSQL store. Only records
+carrying the persistence marker travel this path; every other record -
+third-party, database-layer, and any unmarked application record - returns
+at the handler's marker check and is never persisted.
 """
 
 import atexit
@@ -142,9 +143,10 @@ class OperationalPersistenceHandler(logging.Handler):
     enrichment never depends on another handler (e.g. the stderr handler)
     having run first.
 
-    The sink is a constructor-injected callable ``snapshot -> None`` - the
-    seam a later intervention replaces with the real delivery boundary. This
-    handler knows nothing about queues, gevent or the database.
+    The sink is a constructor-injected callable ``snapshot -> None``: this
+    handler hands the detached snapshot to it and nothing more. It knows
+    nothing about queues, gevent or the database, so it stays independent of
+    the concrete delivery mechanism behind that sink.
     """
 
     def __init__(self, sink):
