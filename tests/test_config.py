@@ -77,3 +77,26 @@ def test_load_config_asr_mistral_price_per_minute_invalid_raises():
     with patch.dict("os.environ", env, clear=True):
         with pytest.raises(ValueError):
             load_config()
+
+
+def test_load_config_dino_legacy_usage_username_absent_is_none():
+    with patch.dict("os.environ", REQUIRED_ENV, clear=True):
+        cfg = load_config()
+
+    assert cfg.dino_legacy_usage_username is None
+
+
+def test_load_config_dino_legacy_usage_username_empty_is_none():
+    env = {**REQUIRED_ENV, "DINO_LEGACY_USAGE_USERNAME": ""}
+    with patch.dict("os.environ", env, clear=True):
+        cfg = load_config()
+
+    assert cfg.dino_legacy_usage_username is None
+
+
+def test_load_config_dino_legacy_usage_username_preserved_exactly():
+    env = {**REQUIRED_ENV, "DINO_LEGACY_USAGE_USERNAME": "__dino_legacy_ingestion__"}
+    with patch.dict("os.environ", env, clear=True):
+        cfg = load_config()
+
+    assert cfg.dino_legacy_usage_username == "__dino_legacy_ingestion__"

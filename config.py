@@ -158,6 +158,13 @@ class AppConfig:
     audio_form_token_cost: int
     compare_docs_token_cost: int
 
+    # Technical accounting identity used only by the legacy Dino fallback of
+    # /storeragfile. Optional[str] = None means "no technical identity
+    # configured" — the off-switch: absent configuration leaves existing
+    # ingestion behaviour unchanged. The production username is a deployment
+    # choice, never an implicit application fallback.
+    dino_legacy_usage_username: Optional[str] = None
+
 
 # ---------------------------------------------------------------------------
 # Loader
@@ -294,4 +301,6 @@ def load_config() -> AppConfig:
         prompt_token_cost=int(os.environ.get("PROMPT_TOKEN_COST", "1")),
         audio_form_token_cost=int(os.environ.get("AUDIO_FORM_TOKEN_COST", "1")),
         compare_docs_token_cost=int(os.environ.get("COMPARE_DOCS_TOKEN_COST", "1")),
+        dino_legacy_usage_username=os.environ.get("DINO_LEGACY_USAGE_USERNAME")
+        or None,
     )
