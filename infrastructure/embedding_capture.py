@@ -7,9 +7,10 @@ successful provider accounting response, delivered through the sink
 ContextVar the foundation already publishes.
 
 Currently DeepInfra only: it is the configured default provider and the only
-one with provider-authoritative cost. Other providers
-have their own verified seams (§13) and are deliberately not implemented
-here.
+one with provider-authoritative cost. ``choose_emb_model`` returns every
+other configured provider unwrapped, and their cost semantics are carried by
+their own cost states in :mod:`utils.embedding_accounting`; capturing them is
+outside this module's scope.
 
 Narrow on purpose, in the shape ``infrastructure/asr_accounting.py``
 established: this module does not write Usage, touch the database, read

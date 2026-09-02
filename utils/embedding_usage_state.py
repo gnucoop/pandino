@@ -57,8 +57,7 @@ class EmbeddingAccountingAccumulator:
 
         The invariant "one provider/model per request" is real but
         **configuration-derived and unenforced**: it holds because the call
-        sites read the same two config keys, not because any code asserts
-        it. §25.5 left the *reaction* open — raise, or record and warn.
+        sites read the same two config keys, not because any code asserts it.
 
         This foundation records and warns, and still keeps the
         contribution. Raising here would run inside the capture path, on the
@@ -103,8 +102,8 @@ def get_embedding_accumulator(create: bool = False):
     """Return this request's accumulator.
 
     :param create: when ``True``, lazily create and park one if absent.
-        Lazy creation keeps the foundation free of a production Flask hook
-        it does not yet need.
+        Readers pass ``False``, so observing the accumulator can never
+        manufacture request state; only the request-lifecycle owner creates.
     :return: ``None`` when absent and ``create`` is ``False``.
     """
     from flask import g  # noqa: PLC0415
@@ -133,9 +132,11 @@ def bind_embedding_accounting():
     the background loop thread appends to a plain object it already holds,
     and ``flask.g`` is touched only here, in the request greenlet.
 
-    Requires an active Flask context, like any other ``flask.g`` access. No
-    application hook registers this yet: doing so would change request
-    lifecycle before any producer exists to feed it.
+    Requires an active Flask context, like any other ``flask.g`` access.
+    The production request path does not go through this context manager: the
+    hooks registered by :mod:`utils.embedding_accounting_lifecycle` drive the
+    same two primitives across ``before_request``/``teardown_request``. This
+    is the scoped form, for callers that own their own block.
     """
     accumulator = get_embedding_accumulator(create=True)
     with embedding_accounting_sink(accumulator.add):
