@@ -26,7 +26,7 @@ _EVENT_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 
 _SCALAR_DETAIL_TYPES = (str, int, float, bool, type(None))
 
-# --- Q4 bounding policy (design §G) ----------------------------------------
+# --- Bounding policy -------------------------------------------------------
 # Two runtime normalization limits: oversized-but-valid content is truncated
 # deterministically and NEVER raises, so logging cannot break the request it
 # describes.

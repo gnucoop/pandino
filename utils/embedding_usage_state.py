@@ -55,7 +55,7 @@ class EmbeddingAccountingAccumulator:
     def add(self, contribution) -> None:
         """Append one contribution, validating the provider/model invariant.
 
-        `[V]` The invariant "one provider/model per request" is real but
+        The invariant "one provider/model per request" is real but
         **configuration-derived and unenforced**: it holds because the call
         sites read the same two config keys, not because any code asserts
         it. §25.5 left the *reaction* open — raise, or record and warn.

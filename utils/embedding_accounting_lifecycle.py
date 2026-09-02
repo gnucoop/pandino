@@ -8,7 +8,7 @@ touches no schema and knows no endpoint: it only closes the last gap
 between the capture layer (which knows *what* it observed) and the
 request-scoped accumulator (which knows *where* it belongs).
 
-Without this hook the whole DC8 path terminates in ``no_op_sink``:
+Without this hook the sink stays at its ``no_op_sink`` default:
 provider capture would normalize a contribution correctly and then discard
 it, because nothing in production ever entered
 :func:`utils.embedding_usage_state.bind_embedding_accounting`. That

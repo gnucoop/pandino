@@ -1,4 +1,4 @@
-"""Provider-adjacent embedding accounting capture (§13, DC1).
+"""Provider-adjacent embedding accounting capture.
 
 Extracts authoritative accounting metadata from a *native* provider
 embedding response and normalizes it into exactly one
@@ -7,7 +7,7 @@ successful provider accounting response, delivered through the sink
 ContextVar the foundation already publishes.
 
 Currently DeepInfra only: it is the configured default provider and the only
-one with `[V-RUNTIME]` provider-authoritative cost (§5.1). Other providers
+one with provider-authoritative cost. Other providers
 have their own verified seams (§13) and are deliberately not implemented
 here.
 
@@ -239,7 +239,7 @@ class DeepInfraAccountingEmbeddings(DeepInfraEmbeddings):
     def _emit_accounting_contribution(self, payload: Any) -> None:
         """Normalize ``payload`` and hand one contribution to the sink.
 
-        Skips silently-but-diagnosably in the two cases §11 and §12 name:
+        Skips silently-but-diagnosably in two cases:
 
         * **No operation context.** ``operation_kind`` is required by the
           contract and comes from ambient context, so there is

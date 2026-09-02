@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 MIN_EXTRACTED_TEXT_CHARS = 50
 
-#: Closed `reason` domain for the OCR fallback Operational events (design E2/E6).
+#: Closed `reason` domain for the OCR fallback Operational events.
 OCR_FALLBACK_REASON_EMPTY_LOCAL_TEXT = "empty_local_text"
 OCR_FALLBACK_REASON_INSUFFICIENT_LOCAL_TEXT = "insufficient_local_text"
 OCR_FAILURE_REASON_BLANK_PAGE = "blank_page"
