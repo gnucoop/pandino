@@ -39,6 +39,7 @@ from infrastructure.database_pg import (
     get_prompt_by_id,
     get_recent_activity,
     get_user_by_id,
+    get_user_by_username,
     get_users_for_admin,
     get_users_stats,
     update_cost,
@@ -46,10 +47,79 @@ from infrastructure.database_pg import (
     update_user_tokens,
 )
 from services.rag_ingestion_service import process_rag_file
+from utils.logging_config import get_request_id
+from utils.usage_attribution_state import bind_usage_attribution
 
 admin_bp = Blueprint("admin", __name__)
 
 logger = logging.getLogger(__name__)
+
+#: Service literal for the one admin route that may attribute embedding
+#: Usage, matching the route path exactly as ``/completion.json``,
+#: ``/agentchat`` and ``/storeragfile`` do in their own modules.
+_RAG_UPLOAD_SERVICE = "/admin/rag-files/upload"
+
+
+def _report_attribution_unavailable(reason: str, error_type: str | None = None) -> None:
+    """Emit the one established, identity-safe attribution diagnostic.
+
+    Carries only ``reason``, ``service``, ``request_id`` and ``error_type``:
+    never the admin session username, the configured technical accounting
+    username, the admin password hash, any API key or anything from the
+    uploaded file or the request form.
+    """
+    logger.warning(
+        "event=embedding_usage_attribution_unavailable reason=%s "
+        "service=%s request_id=%s error_type=%s",
+        reason,
+        _RAG_UPLOAD_SERVICE,
+        get_request_id(),
+        error_type,
+    )
+
+
+def _bind_embedding_usage_attribution() -> None:
+    """Best-effort bind of this request's Usage attribution metadata.
+
+    Called once by :func:`admin_upload_rag_file`, after its own request
+    validation has succeeded and before any embedding work can occur, so
+    that embedding consumption accumulated later in the request can be
+    attributed at request end.
+
+    The identity is the dedicated technical accounting row named by
+    ``admin_rag_usage_username``, and only that: the admin session
+    username and ``config.admin.username`` are login credentials, never
+    resolved against ``users``. Absent configuration is the off-switch.
+    ``source`` is ``None`` by ratified policy - admin operations have no
+    client concept to report.
+
+    Purely observational: it resolves a user id and binds it, or it binds
+    nothing and emits one safe diagnostic. It never raises and never
+    changes the endpoint's control flow, status code or body.
+    """
+    technical_username = current_app.config["MAUI_CONFIG"].admin_rag_usage_username
+    if not technical_username:
+        _report_attribution_unavailable("not_configured")
+        return
+
+    reason = None
+    error_type = None
+    try:
+        user = get_user_by_username(technical_username)
+        if not user:
+            reason = "not_found"
+        else:
+            user_id = user.get("id")
+            if isinstance(user_id, int):
+                bind_usage_attribution(user_id, _RAG_UPLOAD_SERVICE, None)
+            else:
+                reason = "invalid_user_id"
+    except Exception as exc:
+        reason = "lookup_failed"
+        error_type = type(exc).__name__
+
+    if reason is not None:
+        _report_attribution_unavailable(reason, error_type)
 
 
 def admin_required(f):
@@ -704,6 +774,11 @@ def admin_upload_rag_file():
     if not file or not namespace:
         flash("File and namespace are required", "danger")
         return redirect(url_for("admin.admin_rag_files"))
+
+    # Bound after validation - a request that cannot embed anything performs
+    # no lookup - and before every line of the ingestion attempt, so it
+    # precedes any provider work that could emit embedding contributions.
+    _bind_embedding_usage_attribution()
 
     url = file.filename or ""
 

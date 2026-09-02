@@ -593,16 +593,18 @@ def test_main_registers_the_hooks_in_the_required_order():
 
 
 def test_production_attribution_binding_is_confined_to_the_approved_routes():
-    """Only /completion.json, /agentchat and /storeragfile may attribute.
+    """Only /completion.json, /agentchat, /storeragfile and the admin upload.
 
-    /admin/rag-files/upload already captures embedding contributions, so
-    the only thing keeping it out of Usage is that it binds no
-    attribution. This guard is therefore exact, not existential: it names
-    every production file allowed to reference the binder.
+    This guard is exact, not existential: it names every production file
+    allowed to reference the binder, so an accidental new binder anywhere
+    in routes/, services/ or main.py fails here rather than silently
+    widening the policy boundary.
 
     routes/ingestion.py joined the list when the ratified legacy Dino
-    exception brought /storeragfile inside the policy boundary; the
-    admin flow stays out and must not be added.
+    exception brought /storeragfile inside the boundary. routes/admin.py
+    joined it when DC-ADMIN1 ratified a dedicated technical accounting
+    identity for /admin/rag-files/upload; that route is the ONLY approved
+    admin binder, which the per-file caller assertion below pins.
     """
     import subprocess
 
@@ -615,7 +617,7 @@ def test_production_attribution_binding_is_confined_to_the_approved_routes():
     )
 
     files = {line.split(":", 1)[0] for line in result.stdout.splitlines() if line}
-    assert files == {"routes/rag.py", "routes/ingestion.py"}
+    assert files == {"routes/rag.py", "routes/ingestion.py", "routes/admin.py"}
 
     with open(os.path.join(REPO_ROOT, "routes", "rag.py")) as handle:
         tree = ast.parse(handle.read())
@@ -661,3 +663,32 @@ def test_production_attribution_binding_is_confined_to_the_approved_routes():
         )
     }
     assert ingestion_binders == {"_bind_embedding_usage_attribution"}
+
+    with open(os.path.join(REPO_ROOT, "routes", "admin.py")) as handle:
+        admin_tree = ast.parse(handle.read())
+
+    admin_binders = {
+        node.name
+        for node in ast.walk(admin_tree)
+        if isinstance(node, ast.FunctionDef)
+        and any(
+            isinstance(call.func, ast.Name)
+            and call.func.id == "bind_usage_attribution"
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+        )
+    }
+    assert admin_binders == {"_bind_embedding_usage_attribution"}
+
+    admin_callers = {
+        node.name
+        for node in ast.walk(admin_tree)
+        if isinstance(node, ast.FunctionDef)
+        and any(
+            isinstance(call.func, ast.Name)
+            and call.func.id in admin_binders
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+        )
+    }
+    assert admin_callers == {"admin_upload_rag_file"}

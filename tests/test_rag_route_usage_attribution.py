@@ -585,33 +585,82 @@ def test_unattributed_contribution_writes_no_row(monkeypatch, caplog):
 # --------------------------------------------------------------------------
 
 
-def test_admin_upload_flow_binds_no_attribution():
-    """/admin/rag-files/upload stays capture-only and may not attribute.
+def test_admin_upload_is_the_only_attributing_admin_route():
+    """/admin/rag-files/upload is the ONE approved admin binder.
 
-    Asserted statically, on the module owning /admin/rag-files/upload, so
-    the guard cannot be satisfied by an incidental early return in a route
+    Asserted statically, on the module owning the admin routes, so the
+    guard cannot be satisfied by an incidental early return in a route
     test.
 
-    This is the retained half of the former
-    ``test_ingestion_and_admin_upload_flows_bind_no_attribution``. The
-    /storeragfile half was deliberately removed when the ratified legacy
-    Dino exception moved routes/ingestion.py inside the policy boundary;
-    that route's attribution is now covered by
-    tests/test_ingestion_route_usage_attribution.py. The admin half is
-    unchanged and must not be weakened: /admin/rag-files/upload remains
-    out of scope.
+    This replaces the former ``test_admin_upload_flow_binds_no_attribution``
+    - and before that the admin half of
+    ``test_ingestion_and_admin_upload_flows_bind_no_attribution`` - which
+    asserted that routes/admin.py bound nothing at all. DC-ADMIN1 ratified a
+    dedicated technical accounting identity for /admin/rag-files/upload, so
+    that route moved inside the policy boundary exactly as /storeragfile did
+    before it. The guard is narrowed rather than dropped: the admin surface
+    is large, and every OTHER admin route must stay out. Its runtime
+    behaviour lives in tests/test_admin_route_usage_attribution.py.
     """
     with open(os.path.join(REPO_ROOT, "routes/admin.py")) as handle:
         source = handle.read()
-    assert "bind_usage_attribution" not in source
-    assert "usage_attribution_state" not in source
+    tree = ast.parse(source)
 
-    names = {
-        node.func.id
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    functions = [
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    ]
+
+    def _calls(node, names):
+        return {
+            call.func.id
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id in names
+        }
+
+    # A private module-local binder exists, and it is the only function in
+    # routes/admin.py that touches the binding primitive.
+    binders = {
+        node.name for node in functions if _calls(node, {"bind_usage_attribution"})
     }
-    assert "_bind_embedding_usage_attribution" not in names
+    assert binders == {"_bind_embedding_usage_attribution"}
+    assert all(name.startswith("_") for name in binders)
+
+    # Its only production caller is the upload route itself.
+    callers = {node.name for node in functions if _calls(node, binders)}
+    assert callers == {"admin_upload_rag_file"}
+
+    # Stated the other way round, over every Flask-routed admin view: no
+    # unrelated admin route reaches attribution, directly or via the helper.
+    routed = [
+        node
+        for node in functions
+        if any(
+            isinstance(dec, ast.Call)
+            and isinstance(dec.func, ast.Attribute)
+            and dec.func.attr == "route"
+            for dec in node.decorator_list
+        )
+    ]
+    assert "admin_upload_rag_file" in {node.name for node in routed}
+    attributing_routes = {
+        node.name
+        for node in routed
+        if _calls(node, binders | {"bind_usage_attribution"})
+    }
+    assert attributing_routes == {"admin_upload_rag_file"}
+
+    # The identity is selected only by configuration: no admin credential
+    # and no session value is ever resolved against the users table.
+    assert "admin_rag_usage_username" in source
+    assert 'get_user_by_username(session[' not in source
+    assert "get_user_by_username(config.admin.username)" not in source
+
+    # And the route remains a non-writer.
+    assert "log_resolved_cost_usage_batch" not in source
+    assert "register_usage_log_id" not in source
+    assert "log_token_usage" not in source
 
 
 def test_routes_never_call_the_writer_or_register_log_ids_directly():
