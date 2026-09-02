@@ -210,19 +210,21 @@ def _parse_positive_float(env_name: str, default: float) -> "tuple[float, bool]"
 
 
 class _OperationalDelivery:
-    """Process-local delivery boundary and lifecycle behind the I4 handler sink.
+    """Process-local delivery boundary and lifecycle behind the
+    :class:`OperationalPersistenceHandler` sink.
 
     Owns a bounded ``gevent.queue.Queue``, exactly one consumer greenlet, a
     ``gevent.event.Event`` stop signal, and a plain-integer drop-diagnostic
     counter. Not a general framework and not a reusable task system: this is
     the smallest lifecycle owner for exactly this queue/consumer pair.
 
-    Enqueue (the producer side, used as I4's sink) NEVER blocks and NEVER
-    raises: ``put_nowait`` either succeeds or the snapshot is discarded on
-    ``Full``, with a damped runtime-only diagnostic. The consumer drains the
-    queue via one gevent-cooperative loop, calling the I2 DB writer with
-    scalar fields unpacked from the snapshot; a write failure is contained
-    and the loop continues. Shutdown is a single bounded ``join()`` on the
+    Enqueue (the producer side, used as that handler's sink) NEVER blocks and
+    NEVER raises: ``put_nowait`` either succeeds or the snapshot is discarded
+    on ``Full``, with a damped runtime-only diagnostic. The consumer drains the
+    queue via one gevent-cooperative loop, calling the
+    ``insert_operational_event`` database writer with scalar fields
+    unpacked from the snapshot; a write failure is contained and the loop
+    continues. Shutdown is a single bounded ``join()`` on the
     consumer greenlet; remaining queued events may be lost after the bound.
     """
 
@@ -428,7 +430,7 @@ def register_operational_persistence(app) -> None:
     Idempotent: a no-op if a root handler already carries
     ``_maui_operational_persistence`` - across any number of calls, on the
     same or a freshly created Flask app. Starts the process-local delivery
-    singleton (itself idempotent at the queue/consumer level, per I5) and
+    singleton (itself idempotent at the queue/consumer level) and
     attaches exactly one :class:`OperationalPersistenceHandler`, bound to
     ``delivery.enqueue``, as a sibling of the existing stderr handler. Does
     not touch the stderr handler, root's level, or any other handler.
