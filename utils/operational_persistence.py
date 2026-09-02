@@ -136,8 +136,12 @@ class OperationalPersistenceHandler(logging.Handler):
     Marker-first barrier: ``emit()`` checks ``maui_persist`` before doing
     anything else, so every unmarked record - including every third-party
     and database-layer record - returns immediately with zero allocation
-    and zero I/O. This is the recursion barrier described in the design; it
-    must never be reordered behind normalization or sink work.
+    and zero I/O. This ordering is a re-entry barrier: the handler sits on
+    the root logger, while this module's own delivery path and the database
+    layer beneath it emit ordinary unmarked records of their own. Checking
+    the marker before any other work keeps those records from re-entering
+    the persistence path, so it must never be reordered behind normalization
+    or sink work.
 
     Owns its own :class:`ContextDefaultsFilter` instance so request_id/app_id
     enrichment never depends on another handler (e.g. the stderr handler)
