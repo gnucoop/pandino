@@ -175,7 +175,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
         return jsonify({"error": "No response from chat completion"}), 500
 
     except Exception as exc:
-        # SECOND ADOPTER SLICE C3 — Fact E, the terminal uncontrolled failure.
+        # The terminal uncontrolled failure.
         # One real failure boundary produces one LogRecord: this replaces the
         # legacy runtime event=completion_request_failed line, whose str(e)
         # interpolation is deliberately dropped. Only the exception class name

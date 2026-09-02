@@ -119,7 +119,7 @@ def complete_chat(
                 text=question, top_k=top_k, min_similarity=min_sim
             )
     except Exception as e:
-        # Fact B. Only the exception class name is persisted: str(e) may embed
+        # Only the exception class name is persisted: str(e) may embed
         # the query or vector-store connection detail.
         message, extra = build_operational_event(
             event="completion_retrieval_failed",
@@ -128,7 +128,7 @@ def complete_chat(
         logger.warning(message, extra=extra)
         raise RuntimeError(f"Vector retrieval failed: {str(e)}")
 
-    # Fact A. Emitted for every successful retrieval, including vector_count=0,
+    # Emitted for every successful retrieval, including vector_count=0,
     # and therefore before the no-context early return below: degraded-success
     # reconstruction depends on this record existing. This is the authoritative
     # structured emission at this seam and replaces the former runtime
@@ -242,7 +242,7 @@ def complete_chat(
     try:
         llm = choose_llm(llm_type, model, api_key=api_key)
 
-        # Fact C/D duration boundary: the timer brackets llm.invoke() and
+        # Duration boundary: the timer brackets llm.invoke() and
         # nothing else. choose_llm(), response parsing and the is_no_info
         # classifier stay outside it, so duration_ms keeps meaning "how long
         # did the provider take" rather than drifting with payload shape.
@@ -253,7 +253,7 @@ def complete_chat(
                 (time.perf_counter() - provider_call_started) * 1000
             )
         except Exception as e:
-            # Fact D. Emitted only once the provider attempt has actually
+            # Emitted only once the provider attempt has actually
             # started: a choose_llm() failure never reaches here. One record
             # serves both consumers — stderr keeps the traceback, the
             # Operational snapshot keeps only the bounded fields. This
@@ -288,7 +288,7 @@ def complete_chat(
             phrase.lower() in answer_text.lower() for phrase in no_info_phrases
         )
 
-        # Fact C. Carries the final classifier verdict, which is why it is
+        # Carries the final classifier verdict, which is why it is
         # emitted after parsing rather than at the timer stop. No token counts
         # (Usage owns those) and no answer content.
         message, extra = build_operational_event(

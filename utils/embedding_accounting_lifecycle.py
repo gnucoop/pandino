@@ -1,5 +1,5 @@
 # utils/embedding_accounting_lifecycle.py
-"""Request-lifecycle binding of the embedding-accounting sink (DC8).
+"""Request-lifecycle binding of the embedding-accounting sink.
 
 Owns exactly one responsibility: for the lifetime of each HTTP request,
 publish a sink over that request's accumulator, and unpublish it on
@@ -52,7 +52,7 @@ def register_embedding_accounting_hooks(app) -> None:
     The sink closes over the accumulator *instance*, never over ``flask.g``:
     provider capture may deliver from ``PGVectorStore``'s background loop
     thread, which has no Flask context, and must still reach the right
-    request's accumulator (DC8). ``flask.g`` is therefore touched only here,
+    request's accumulator. ``flask.g`` is therefore touched only here,
     in the request greenlet.
     """
     from flask import g  # noqa: PLC0415

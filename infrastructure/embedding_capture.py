@@ -3,8 +3,8 @@
 Extracts authoritative accounting metadata from a *native* provider
 embedding response and normalizes it into exactly one
 :class:`~utils.embedding_accounting.EmbeddingAccountingContribution` per
-successful provider accounting response (DC3), delivered through the sink
-ContextVar the foundation already publishes (DC8).
+successful provider accounting response, delivered through the sink
+ContextVar the foundation already publishes.
 
 Currently DeepInfra only: it is the configured default provider and the only
 one with `[V-RUNTIME]` provider-authoritative cost (§5.1). Other providers
@@ -15,9 +15,9 @@ Narrow on purpose, in the shape ``infrastructure/asr_accounting.py``
 established: this module does not write Usage, touch the database, read
 Flask context or AppConfig, or select the active provider. It is
 Flask-blind — it imports nothing from Flask — because capture runs on the
-far side of ``PGVectorStore``'s background event-loop thread (§14.3).
+far side of ``PGVectorStore``'s background event-loop thread.
 
-Observation-only (§12, §16): accounting capture must never turn a
+Observation-only: accounting capture must never turn a
 successful embedding call into a user-visible failure. Every capture
 failure degrades to "no contribution, one safe warning", and the vectors
 the provider library computed are returned unchanged.
@@ -57,7 +57,7 @@ class EmbeddingCaptureError(ValueError):
     """Raised when provider accounting data is missing or malformed.
 
     Never escapes to the caller of an embedding method: the capture wrapper
-    catches it and skips the contribution (§12).
+    catches it and skips the contribution.
     """
 
 
@@ -123,20 +123,20 @@ def extract_deepinfra_contribution(
 ) -> EmbeddingAccountingContribution:
     """Normalize one native DeepInfra embedding response into a contribution.
 
-    Authority (§10, DC7): the input quantity is the provider's own
+    Authority: the input quantity is the provider's own
     ``input_tokens`` — never a Maui-side count, which would also be wrong,
     since DeepInfra counts the ``passage: ``/``query: `` prefixes the
-    library prepends (§5.1). The monetary cost is
+    library prepends. The monetary cost is
     ``inference_status.cost``, passed through unchanged and never recomputed.
 
     ``inference_status.tokens_input`` duplicated ``input_tokens`` in the
     runtime probe. It is therefore used only as a *disagreement check*: on
-    mismatch this raises rather than silently picking one or merging them
-    (§13). ``request_id`` and ``inference_status.runtime_ms`` are optional
+    mismatch this raises rather than silently picking one or merging them.
+    ``request_id`` and ``inference_status.runtime_ms`` are optional
     metadata.
 
     No native field name, and nothing from ``embeddings``, the request body
-    or the raw payload, survives into the returned contribution (§9.3, §17).
+    or the raw payload, survives into the returned contribution.
 
     :raises EmbeddingCaptureError: if the authoritative fields are absent,
         malformed, or mutually contradictory.
@@ -185,13 +185,13 @@ class DeepInfraAccountingEmbeddings(DeepInfraEmbeddings):
     """``DeepInfraEmbeddings`` that also reports what it consumed.
 
     Capture sits in ``_embed``, the sole provider choke point for both
-    ``embed_documents`` and ``embed_query`` (§13). Neither of those methods
+    ``embed_documents`` and ``embed_query``. Neither of those methods
     is overridden, so batching (``batch_size``), the ``passage: ``/``query: ``
     prefixes, the request body, the endpoint and the error semantics remain
-    entirely the parent's (DC2) — and because ``langchain_core``'s
+    entirely the parent's — and because ``langchain_core``'s
     ``aembed_query``/``aembed_documents`` fall back to the sync methods via
     ``run_in_executor``, this one override covers the async path
-    ``PGVectorStore`` uses (§14.2), asserted by test rather than assumed.
+    ``PGVectorStore`` uses, asserted by test rather than assumed.
 
     The override reproduces the parent's request/parse/raise sequence
     verbatim rather than delegating to it, because the parent returns only
@@ -231,7 +231,7 @@ class DeepInfraAccountingEmbeddings(DeepInfraEmbeddings):
             )
 
         # Accounting is observed after the vectors are in hand, and can only
-        # ever be skipped (§12) — never propagated to the caller.
+        # ever be skipped — never propagated to the caller.
         self._emit_accounting_contribution(t)
 
         return embeddings
@@ -242,7 +242,7 @@ class DeepInfraAccountingEmbeddings(DeepInfraEmbeddings):
         Skips silently-but-diagnosably in the two cases §11 and §12 name:
 
         * **No operation context.** ``operation_kind`` is required by the
-          contract and DC4 says it comes from ambient context, so there is
+          contract and comes from ambient context, so there is
           nothing legitimate to record: inventing a kind would fabricate an
           attribution. Debug level, not warning — running outside a bound
           operation is a legitimate state, not a defect: direct construction
@@ -251,7 +251,7 @@ class DeepInfraAccountingEmbeddings(DeepInfraEmbeddings):
         * **Malformed accounting.** The vectors are valid and were billed;
           only the observation is unusable. Warning level, naming provider,
           model and the failure reason only — never the payload, the input
-          texts or the vectors (§17, §20).
+          texts or the vectors.
 
         The broad ``except Exception`` is deliberate: this runs on the far
         side of a thread hop, and no accounting defect may surface as an

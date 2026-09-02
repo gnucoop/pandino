@@ -1,8 +1,8 @@
 # utils/embedding_operation_context.py
 """Scoped ambient context naming the current logical embedding operation.
 
-Owns exactly one responsibility (DC5): carry an *immutable* value — one of
-``query``, ``document`` or ``probe`` (DC4) — downward from the narrowest
+Owns exactly one responsibility: carry an *immutable* value — one of
+``query``, ``document`` or ``probe`` — downward from the narrowest
 Maui-owned layer that knows the semantics into the provider-adjacent
 capture layer, with token/reset semantics and exception-safe restoration.
 
@@ -14,7 +14,7 @@ state is not shared.
 This module is Flask-blind: it imports nothing from Flask, needs no request
 context, and is safe to use from ``services/``, ``infrastructure/``, a
 background event-loop thread, or no request at all. It performs no logging,
-no I/O and no accumulation — accumulation is a separate primitive (DC6).
+no I/O and no accumulation — accumulation is a separate primitive.
 """
 
 from contextlib import contextmanager
@@ -31,9 +31,9 @@ __all__ = [
     "embedding_operation",
 ]
 
-#: Retrieval embedding. Shared by /completion.json and /agentchat: DC4
-#: records that they are the same normalized work and differ only in HTTP
-#: flow, which is a request-scope property.
+#: Retrieval embedding. Shared by /completion.json and /agentchat: they
+#: are the same normalized work and differ only in HTTP flow, which is a
+#: request-scope property.
 OPERATION_QUERY = "query"
 
 #: Document/chunk embedding during ingestion.
@@ -42,7 +42,7 @@ OPERATION_DOCUMENT = "document"
 #: Infrastructure dimensionality probe (``embed_query("test")``).
 OPERATION_PROBE = "probe"
 
-#: The complete CURRENT taxonomy (DC4). No fourth kind is invented here;
+#: The complete CURRENT taxonomy. No fourth kind is invented here;
 #: this is also the vocabulary the contribution contract validates against.
 OPERATION_KINDS = frozenset({OPERATION_QUERY, OPERATION_DOCUMENT, OPERATION_PROBE})
 

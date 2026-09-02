@@ -1,9 +1,9 @@
 # utils/embedding_usage_state.py
-"""Request-scoped accumulation of embedding-accounting contributions (§11).
+"""Request-scoped accumulation of embedding-accounting contributions.
 
 Owns exactly one responsibility: hold the ordered 0..N contributions
 produced by the current HTTP request, as request-local state on
-``flask.g``, and validate the request-level provider/model invariant (§9.5)
+``flask.g``, and validate the request-level provider/model invariant
 across them.
 
 Sibling to — not an extension of — ``utils.usage_request_state``, which is
@@ -64,14 +64,14 @@ class EmbeddingAccountingAccumulator:
         contribution. Raising here would run inside the capture path, on the
         far side of a thread hop, and would convert an accounting anomaly
         into a user-visible request failure — a poor trade for an
-        observation-only subsystem whose contract (§16.1) is that
+        observation-only subsystem whose contract is that
         consumption is independent of HTTP outcome. Dropping the
         contribution instead would lose real consumption, which is the one
         thing this module exists to keep. The violation is counted so a
         later phase can see the anomaly rather than infer it.
 
         The warning names provider and model only: both are configuration
-        identities, never user content (§17).
+        identities, never user content.
         """
         first = self._contributions[0] if self._contributions else None
         if first is not None and (
@@ -95,7 +95,7 @@ class EmbeddingAccountingAccumulator:
 
     @property
     def invariant_violations(self) -> int:
-        """How many appends violated the provider/model invariant (§9.5)."""
+        """How many appends violated the provider/model invariant."""
         return self._invariant_violations
 
 
@@ -124,7 +124,7 @@ def get_embedding_contributions() -> tuple:
 
 @contextmanager
 def bind_embedding_accounting():
-    """Bind this request's accumulator behind a sink, for the block (DC8).
+    """Bind this request's accumulator behind a sink, for the block.
 
     Creates (or reuses) the request's accumulator, publishes a sink closing
     over that **instance**, and unbinds on exit including on exception.

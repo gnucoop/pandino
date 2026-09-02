@@ -90,7 +90,7 @@ def _bind_embedding_usage_attribution() -> None:
     ``admin_rag_usage_username``, and only that: the admin session
     username and ``config.admin.username`` are login credentials, never
     resolved against ``users``. Absent configuration is the off-switch.
-    ``source`` is ``None`` by ratified policy - admin operations have no
+    ``source`` is ``None`` - admin operations have no
     client concept to report.
 
     Purely observational: it resolves a user id and binds it, or it binds

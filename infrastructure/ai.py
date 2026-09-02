@@ -180,7 +180,7 @@ def choose_emb_model(
             raise ValueError("DEEPINFRA_API_KEY environment variable is not set")
         # Capture-enabled subclass: same endpoint, request body, prefixes,
         # batching, vectors and error semantics as DeepInfraEmbeddings, plus
-        # provider-authoritative accounting observation (DC1, DC2).
+        # provider-authoritative accounting observation.
         return DeepInfraAccountingEmbeddings(
             model_id=emb_model, deepinfra_api_token=key
         )

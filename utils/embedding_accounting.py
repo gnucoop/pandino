@@ -1,16 +1,16 @@
 # utils/embedding_accounting.py
-"""Normalized embedding-accounting contribution contract (§9).
+"""Normalized embedding-accounting contribution contract.
 
 One :class:`EmbeddingAccountingContribution` represents exactly one
-successful provider accounting response (DC3). It is provider-agnostic: no
+successful provider accounting response. It is provider-agnostic: no
 native provider field name survives into it, and no raw provider payload,
-query text, document chunk or embedding vector may ever reach it (§17).
+query text, document chunk or embedding vector may ever reach it.
 
 The type is frozen: a contribution is a fact about a call that already
-happened. Aggregation (§9.6) is the concern of whatever consumes the
+happened. Aggregation is the concern of whatever consumes the
 accumulator, not of this module — this module owns the vocabulary and the
 per-item invariants only. It writes nothing, logs nothing, and knows
-nothing about Flask, HTTP endpoints or the Maui request id (§9.3).
+nothing about Flask, HTTP endpoints or the Maui request id.
 """
 
 from dataclasses import dataclass
@@ -31,7 +31,7 @@ __all__ = [
 ]
 
 #: The only unit the CURRENT provider set reports. Named rather than
-#: implied, because DC7 forbids a bare total: a Maui-derived quantity is not
+#: implied, because a bare total is forbidden: a Maui-derived quantity is not
 #: the same unit as a provider's input-token count.
 QUANTITY_UNIT_INPUT_TOKENS = "input_tokens"
 
@@ -42,7 +42,7 @@ ORIGIN_PROVIDER_REPORTED = "provider_reported"
 
 #: Computed locally by Maui. No CURRENT capture path produces this; the
 #: vocabulary exists so a future one cannot be silently indistinguishable
-#: from an authoritative count (DC7).
+#: from an authoritative count.
 ORIGIN_MAUI_DERIVED = "maui_derived"
 
 QUANTITY_ORIGINS = frozenset({ORIGIN_PROVIDER_REPORTED, ORIGIN_MAUI_DERIVED})
@@ -71,11 +71,11 @@ COST_STATES = frozenset(
 class EmbeddingAccountingContribution:
     """One normalized accounting fact per successful provider response.
 
-    Required (§9.1): ``provider``, ``model``, ``input_quantity``,
+    Required: ``provider``, ``model``, ``input_quantity``,
     ``quantity_unit``, ``quantity_origin``, ``cost_state``,
     ``operation_kind``.
 
-    Optional (§9.2), ``None`` when the provider does not supply them:
+    Optional, ``None`` when the provider does not supply them:
     ``provider_cost``, ``provider_request_id``, ``provider_runtime_ms``.
 
     ``provider_cost is None`` means *absent*, never zero: ``0.0`` is a valid

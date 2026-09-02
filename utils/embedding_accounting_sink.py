@@ -1,5 +1,5 @@
 # utils/embedding_accounting_sink.py
-"""Context-propagated delivery seam for accounting contributions (DC8).
+"""Context-propagated delivery seam for accounting contributions.
 
 Owns exactly one responsibility: publish an opaque, immutable *sink
 callable* in its own ContextVar so Flask-blind capture code can deliver a
@@ -7,7 +7,7 @@ normalized contribution without knowing what receives it:
 
     get_embedding_accounting_sink()(contribution)
 
-The sink travels *downward*, which is the direction and mutability DC5
+The sink travels *downward*, which is the direction and mutability
 verified as safe across ``PGVectorStore``'s background-loop hop and
 ``langchain_core``'s ``run_in_executor`` fallback. Mutation happens on the
 far side of the call, inside the Flask-aware owner of the accumulator
@@ -39,7 +39,7 @@ def no_op_sink(contribution) -> None:
     Silent by construction: the absence of a bound sink is the normal case
     outside an HTTP request (direct tests, the namespace probe, reusable
     Flask-independent services), not an anomaly worth logging — and the
-    contribution must never be logged in any case (§17).
+    contribution must never be logged in any case.
     """
     return None
 
