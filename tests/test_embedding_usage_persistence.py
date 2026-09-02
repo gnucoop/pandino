@@ -593,12 +593,16 @@ def test_main_registers_the_hooks_in_the_required_order():
 
 
 def test_production_attribution_binding_is_confined_to_the_approved_routes():
-    """Only /completion.json and /agentchat may bind attribution.
+    """Only /completion.json, /agentchat and /storeragfile may attribute.
 
-    The two ingestion flows already capture embedding contributions, so the
-    only thing keeping them out of Usage is that they bind no attribution.
-    This guard is therefore exact, not existential: it names every
-    production file allowed to reference the binder.
+    /admin/rag-files/upload already captures embedding contributions, so
+    the only thing keeping it out of Usage is that it binds no
+    attribution. This guard is therefore exact, not existential: it names
+    every production file allowed to reference the binder.
+
+    routes/ingestion.py joined the list when the ratified legacy Dino
+    exception brought /storeragfile inside the policy boundary; the
+    admin flow stays out and must not be added.
     """
     import subprocess
 
@@ -611,7 +615,7 @@ def test_production_attribution_binding_is_confined_to_the_approved_routes():
     )
 
     files = {line.split(":", 1)[0] for line in result.stdout.splitlines() if line}
-    assert files == {"routes/rag.py"}
+    assert files == {"routes/rag.py", "routes/ingestion.py"}
 
     with open(os.path.join(REPO_ROOT, "routes", "rag.py")) as handle:
         tree = ast.parse(handle.read())
@@ -641,3 +645,19 @@ def test_production_attribution_binding_is_confined_to_the_approved_routes():
         )
     }
     assert callers == {"completion_handler", "agentchat"}
+
+    with open(os.path.join(REPO_ROOT, "routes", "ingestion.py")) as handle:
+        ingestion_tree = ast.parse(handle.read())
+
+    ingestion_binders = {
+        node.name
+        for node in ast.walk(ingestion_tree)
+        if isinstance(node, ast.FunctionDef)
+        and any(
+            isinstance(call.func, ast.Name)
+            and call.func.id == "bind_usage_attribution"
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+        )
+    }
+    assert ingestion_binders == {"_bind_embedding_usage_attribution"}

@@ -585,25 +585,33 @@ def test_unattributed_contribution_writes_no_row(monkeypatch, caplog):
 # --------------------------------------------------------------------------
 
 
-def test_ingestion_and_admin_upload_flows_bind_no_attribution():
-    """Both already capture embedding contributions; neither may attribute.
+def test_admin_upload_flow_binds_no_attribution():
+    """/admin/rag-files/upload stays capture-only and may not attribute.
 
-    Asserted statically, on the modules owning /storeragfile and
-    /admin/rag-files/upload, so the guard cannot be satisfied by an
-    incidental early return in a route test.
+    Asserted statically, on the module owning /admin/rag-files/upload, so
+    the guard cannot be satisfied by an incidental early return in a route
+    test.
+
+    This is the retained half of the former
+    ``test_ingestion_and_admin_upload_flows_bind_no_attribution``. The
+    /storeragfile half was deliberately removed when the ratified legacy
+    Dino exception moved routes/ingestion.py inside the policy boundary;
+    that route's attribution is now covered by
+    tests/test_ingestion_route_usage_attribution.py. The admin half is
+    unchanged and must not be weakened: /admin/rag-files/upload remains
+    out of scope.
     """
-    for module in ("routes/ingestion.py", "routes/admin.py"):
-        with open(os.path.join(REPO_ROOT, module)) as handle:
-            source = handle.read()
-        assert "bind_usage_attribution" not in source
-        assert "usage_attribution_state" not in source
+    with open(os.path.join(REPO_ROOT, "routes/admin.py")) as handle:
+        source = handle.read()
+    assert "bind_usage_attribution" not in source
+    assert "usage_attribution_state" not in source
 
-        names = {
-            node.func.id
-            for node in ast.walk(ast.parse(source))
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-        }
-        assert "_bind_embedding_usage_attribution" not in names
+    names = {
+        node.func.id
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "_bind_embedding_usage_attribution" not in names
 
 
 def test_routes_never_call_the_writer_or_register_log_ids_directly():
