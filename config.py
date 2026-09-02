@@ -165,6 +165,15 @@ class AppConfig:
     # choice, never an implicit application fallback.
     dino_legacy_usage_username: Optional[str] = None
 
+    # Technical accounting identity used only by POST /admin/rag-files/upload
+    # embedding Usage attribution. Optional[str] = None means "no technical
+    # identity configured" — the off-switch: absent configuration leaves
+    # existing admin ingestion behaviour unchanged. This is an accounting
+    # identity, not an admin credential: AdminConfig holds login credentials
+    # and deliberately says nothing about the users table. The production
+    # username is a deployment choice, never an implicit application fallback.
+    admin_rag_usage_username: Optional[str] = None
+
 
 # ---------------------------------------------------------------------------
 # Loader
@@ -303,4 +312,5 @@ def load_config() -> AppConfig:
         compare_docs_token_cost=int(os.environ.get("COMPARE_DOCS_TOKEN_COST", "1")),
         dino_legacy_usage_username=os.environ.get("DINO_LEGACY_USAGE_USERNAME")
         or None,
+        admin_rag_usage_username=os.environ.get("ADMIN_RAG_USAGE_USERNAME") or None,
     )
