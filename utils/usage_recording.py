@@ -2,10 +2,10 @@
 """Public adoption boundary for recording explicit provider consumption.
 
 This is the surface a Maui flow uses to say *what it consumed*. It is not a
-generic utility: it is a public operation of the Usage subsystem, and
-everything it hides is deliberately not an adopter concern.
+generic utility: these are public operations of the Usage subsystem, and
+everything they hide is deliberately not an adopter concern.
 
-An adopter supplies consumption facts only::
+There are two consumption shapes, distinguished by who resolves the money::
 
     record_token_consumption(
         user_id=...,
@@ -16,14 +16,27 @@ An adopter supplies consumption facts only::
         token_output=...,
     )
 
-and receives a plain ``bool`` saying whether a Usage row was persisted.
+    record_resolved_consumption(
+        user_id=...,
+        provider=...,
+        model=...,
+        service=...,
+        cost=...,
+    )
+
+An adopter supplies consumption facts only, and receives a plain ``bool``
+saying whether a Usage row was persisted.
 
 What this boundary owns, so no adopter has to
 ----------------------------------------------
 * **Writer selection.** The token shape is priced by Maui, so
   ``infrastructure.database_pg.log_token_usage`` performs the pricing
-  lookup. Which writer serves which consumption shape is an internal
-  decision; an adopter never chooses one.
+  lookup; the resolved-cost shape carries its own money and is written by
+  ``log_usage_with_resolved_cost``, which performs no pricing lookup at
+  all. Which writer serves which consumption shape is an internal
+  decision; an adopter never chooses one. The token columns that writer
+  fills for a non-token row are a storage convention and stay behind this
+  boundary.
 * **The Usage row id.** The id is received here, used here, and never
   returned. A caller cannot hold one, so it cannot forget to do anything
   with one.
@@ -37,10 +50,12 @@ What this boundary owns, so no adopter has to
   to supply one fails as a ``TypeError`` at the call site.
 * **Client source.** Derived (see :func:`_derive_source`), never passed.
 
-This operation covers token consumption only: quantities Maui prices
-itself, from a provider-reported input/output token pair. Consumption
-whose monetary cost the caller has already resolved is outside its
-contract.
+Which operation to use follows from what the flow honestly holds. A flow
+holding a provider-reported input/output token pair, for Maui to price,
+records token consumption. A flow holding a monetary cost already resolved
+- by the provider, or by the flow against a governed rate - records
+resolved consumption, and supplies no quantity, because there is no
+quantity it could state honestly for every provider it serves.
 
 Failure model
 -------------
@@ -61,10 +76,11 @@ be distinguished from a success, and retrying would risk double-counting
 real money - the same reasoning recorded in
 ``utils.embedding_usage_persistence``.
 
-``token_input=0, token_output=0`` is accepted and records a row. Whether a
-zero-token call *should* produce one is a flow-level policy question that
-current adopters answer inconsistently, so any such guard stays at the
-call site rather than being decided here.
+``token_input=0, token_output=0`` and ``cost=0`` are accepted and record a
+row: a zero quantity is a real observation, not a missing one. Whether a
+zero-consumption call *should* produce a row is a flow-level policy
+question that current adopters answer inconsistently, so any such guard
+stays at the call site rather than being decided here.
 
 Request scope
 -------------
@@ -80,6 +96,7 @@ from infrastructure.database_pg import (
     get_user_by_id,
     get_user_by_username,
     log_token_usage,
+    log_usage_with_resolved_cost,
 )
 from utils.logging_config import get_request_id
 from utils.usage_attribution_state import get_usage_attribution
@@ -87,7 +104,7 @@ from utils.usage_request_state import set_usage_log_id
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["record_token_consumption"]
+__all__ = ["record_token_consumption", "record_resolved_consumption"]
 
 
 def _require_int(name: str, value) -> int:
@@ -104,6 +121,20 @@ def _require_non_negative_int(name: str, value) -> int:
     if quantity < 0:
         raise ValueError(f"{name} must be non-negative, got {quantity}")
     return quantity
+
+
+def _require_non_negative_number(name: str, value) -> float:
+    """Require a non-negative real number. Zero is valid.
+
+    ``bool`` is rejected for the same reason as in :func:`_require_int`. An
+    ``int`` is accepted and widened: a whole-number amount of money is a
+    real amount.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name} must be a real number, got {type(value).__name__}")
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative, got {value}")
+    return float(value)
 
 
 def _require_non_empty_str(name: str, value) -> str:
@@ -227,6 +258,68 @@ def record_token_consumption(
         # any of which can carry request content.
         logger.warning(
             "event=usage_token_recording_failed service=%s provider=%s "
+            "model=%s error_type=%s",
+            service,
+            provider,
+            model,
+            type(exc).__name__,
+        )
+        return False
+
+
+def record_resolved_consumption(
+    *,
+    user_id: int,
+    provider: str,
+    model: str,
+    service: str,
+    cost: float,
+) -> bool:
+    """Record one provider consumption whose monetary cost is already resolved.
+
+    :param user_id: resolved Maui user id owning the consumption.
+    :param provider: provider identity, as Maui's configuration spells it.
+    :param model: model the consumption was billed against.
+    :param service: HTTP endpoint that produced it, e.g. ``"/transcribe"``.
+        Supplied explicitly because it is not derivable: one route may
+        record more than one service literal.
+    :param cost: the resolved monetary cost to persist. Non-negative;
+        ``0`` is valid.
+    :return: ``True`` when a Usage row was persisted, ``False`` when a
+        runtime accounting failure prevented it.
+    :raises ValueError: on programmer-contract misuse of any public field.
+
+    No pricing lookup happens: the supplied cost is authoritative. As with
+    the token shape, ``request_id`` and ``source`` are derived rather than
+    accepted, and no Usage row id is returned, ever.
+    """
+    user_id = _require_int("user_id", user_id)
+    provider = _require_non_empty_str("provider", provider)
+    model = _require_non_empty_str("model", model)
+    service = _require_non_empty_str("service", service)
+    cost = _require_non_negative_number("cost", cost)
+
+    try:
+        request_id = get_request_id()
+        source = _derive_source(user_id)
+
+        log_id = log_usage_with_resolved_cost(
+            user_id=user_id,
+            cost=cost,
+            model=model,
+            provider=provider,
+            service=service,
+            request_id=request_id,
+            source=source,
+        )
+
+        set_usage_log_id(log_id)
+        return True
+    except Exception as exc:  # noqa: BLE001 - accounting must stay fail-open
+        # Names only configuration identities, the endpoint and the failure
+        # type. Never the cost, the user identity or the exception text.
+        logger.warning(
+            "event=usage_resolved_cost_recording_failed service=%s provider=%s "
             "model=%s error_type=%s",
             service,
             provider,

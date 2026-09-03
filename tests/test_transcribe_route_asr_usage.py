@@ -1,9 +1,13 @@
-"""Route-level tests for /transcribe audio ASR Usage integration (Usage Slice 3).
+"""Route-level tests for /transcribe audio ASR Usage integration.
 
 Covers only the audio branch of routes/multimodal.py::asr_parse: resolving
 an already-resolved ASR monetary cost via infrastructure.asr_accounting and
-persisting it via log_usage_with_resolved_cost(). Document and image
-branches are proven to remain untouched (no resolved-cost Usage write).
+handing it to record_resolved_consumption(). The assertions here are the
+adopter's own - which consumption facts the route states, and that the
+transcription response is never governed by accounting. What the boundary
+then derives, hides and registers is its own contract, proven in
+tests/test_usage_recording.py. Document and image branches are proven not
+to reach the resolved-cost boundary at all.
 
 No real provider network calls are made: asr_response() is monkeypatched to
 return a fake requests.Response-like object.
@@ -15,6 +19,7 @@ from types import SimpleNamespace
 from flask import Flask
 
 from routes import multimodal as multimodal_route
+from utils import usage_recording
 from utils.logging_config import register_request_context_hooks
 
 
@@ -67,7 +72,19 @@ def _common_monkeypatches(monkeypatch, *, get_user=None):
     )
 
 
-def test_deepinfra_audio_success_logs_resolved_cost_usage(monkeypatch):
+def _patch_boundary(monkeypatch, *, result=True):
+    """Capture what the route states to the resolved-cost boundary."""
+    recorded = []
+
+    def _record(**kwargs):
+        recorded.append(kwargs)
+        return result
+
+    monkeypatch.setattr(multimodal_route, "record_resolved_consumption", _record)
+    return recorded
+
+
+def test_deepinfra_audio_success_records_resolved_cost(monkeypatch):
     app = _make_app()
     _common_monkeypatches(monkeypatch)
     monkeypatch.setenv("DEEPINFRA_API_KEY", "fake-key")
@@ -80,39 +97,25 @@ def test_deepinfra_audio_success_logs_resolved_cost_usage(monkeypatch):
         multimodal_route, "asr_response", lambda *a, **k: FakeAsrResponse(200, payload)
     )
 
-    log_calls = []
-
-    def fake_log_usage_with_resolved_cost(**kwargs):
-        log_calls.append(kwargs)
-        return 777
-
-    handoff_calls = []
-    monkeypatch.setattr(
-        multimodal_route, "log_usage_with_resolved_cost", fake_log_usage_with_resolved_cost
-    )
-    monkeypatch.setattr(
-        multimodal_route, "set_usage_log_id", lambda log_id: handoff_calls.append(log_id)
-    )
+    recorded = _patch_boundary(monkeypatch)
 
     response = _post_audio(app)
 
     assert response.status_code == 200
     assert response.get_json() == {"text": "hello world"}
 
-    assert len(log_calls) == 1
-    call = log_calls[0]
+    assert len(recorded) == 1
+    call = recorded[0]
     assert call["user_id"] == 42
     assert call["cost"] == 0.0225
     assert call["provider"] == "Deepinfra"
     assert call["model"] == "test-asr-model"
     assert call["service"] == "/transcribe"
-    assert call["request_id"] == response.headers["X-Request-ID"]
-    assert call["source"] == "dino"
-
-    assert handoff_calls == [777]
+    # The adopter states consumption facts only.
+    assert set(call) == {"user_id", "provider", "model", "service", "cost"}
 
 
-def test_mistral_audio_success_uses_configured_rate_and_logs_usage(monkeypatch):
+def test_mistral_audio_success_uses_configured_rate_and_records_cost(monkeypatch):
     app = _make_app()
     app.config["MAUI_CONFIG"].models.asr_provider = "Mistral"
     app.config["MAUI_CONFIG"].models.asr_mistral_price_per_minute_usd = 0.003
@@ -132,27 +135,21 @@ def test_mistral_audio_success_uses_configured_rate_and_logs_usage(monkeypatch):
         multimodal_route, "asr_response", lambda *a, **k: FakeAsrResponse(200, payload)
     )
 
-    log_calls = []
-    monkeypatch.setattr(
-        multimodal_route,
-        "log_usage_with_resolved_cost",
-        lambda **kwargs: (log_calls.append(kwargs), 888)[1],
-    )
-    monkeypatch.setattr(multimodal_route, "set_usage_log_id", lambda log_id: None)
+    recorded = _patch_boundary(monkeypatch)
 
     response = _post_audio(app)
 
     assert response.status_code == 200
     assert response.get_json() == {"text": "bonjour"}
 
-    assert len(log_calls) == 1
-    call = log_calls[0]
+    assert len(recorded) == 1
+    call = recorded[0]
     assert call["provider"] == "Mistral"
     assert call["cost"] == (30 / 60.0) * 0.003
     assert call["service"] == "/transcribe"
 
 
-def test_mistral_missing_configured_rate_does_not_call_provider_or_log_usage(monkeypatch):
+def test_mistral_missing_configured_rate_does_not_call_provider_or_record(monkeypatch):
     app = _make_app()
     app.config["MAUI_CONFIG"].models.asr_provider = "Mistral"
     app.config["MAUI_CONFIG"].models.asr_mistral_price_per_minute_usd = None
@@ -165,19 +162,14 @@ def test_mistral_missing_configured_rate_does_not_call_provider_or_log_usage(mon
         "asr_response",
         lambda *a, **k: provider_calls.append(1) or FakeAsrResponse(200, {"text": "x"}),
     )
-    log_calls = []
-    monkeypatch.setattr(
-        multimodal_route,
-        "log_usage_with_resolved_cost",
-        lambda **kwargs: log_calls.append(kwargs),
-    )
+    recorded = _patch_boundary(monkeypatch)
 
     response = _post_audio(app)
 
     assert response.status_code == 500
     assert response.get_json() == {"error": "Missing ASR configuration"}
     assert provider_calls == []
-    assert log_calls == []
+    assert recorded == []
 
 
 def test_malformed_deepinfra_payload_does_not_break_transcription_response(monkeypatch):
@@ -190,23 +182,18 @@ def test_malformed_deepinfra_payload_does_not_break_transcription_response(monke
         multimodal_route, "asr_response", lambda *a, **k: FakeAsrResponse(200, payload)
     )
 
-    log_calls = []
-    monkeypatch.setattr(
-        multimodal_route,
-        "log_usage_with_resolved_cost",
-        lambda **kwargs: log_calls.append(kwargs),
-    )
+    recorded = _patch_boundary(monkeypatch)
 
     response = _post_audio(app)
 
     assert response.status_code == 200
     assert response.get_json() == {"text": "hello world"}
-    assert log_calls == []
+    # Cost resolution failed before the boundary, so nothing was recorded.
+    assert recorded == []
 
 
-def test_resolved_cost_persistence_failure_does_not_break_transcription_response(
-    monkeypatch,
-):
+def test_boundary_false_does_not_break_transcription_response(monkeypatch):
+    """Usage is fail-open: an unrecorded row never governs HTTP success."""
     app = _make_app()
     _common_monkeypatches(monkeypatch)
     monkeypatch.setenv("DEEPINFRA_API_KEY", "fake-key")
@@ -216,23 +203,16 @@ def test_resolved_cost_persistence_failure_does_not_break_transcription_response
         multimodal_route, "asr_response", lambda *a, **k: FakeAsrResponse(200, payload)
     )
 
-    def raise_db_failure(**kwargs):
-        raise RuntimeError("db is down")
-
-    handoff_calls = []
-    monkeypatch.setattr(multimodal_route, "log_usage_with_resolved_cost", raise_db_failure)
-    monkeypatch.setattr(
-        multimodal_route, "set_usage_log_id", lambda log_id: handoff_calls.append(log_id)
-    )
+    recorded = _patch_boundary(monkeypatch, result=False)
 
     response = _post_audio(app)
 
     assert response.status_code == 200
     assert response.get_json() == {"text": "hello world"}
-    assert handoff_calls == []
+    assert len(recorded) == 1
 
 
-def test_zero_resolved_cost_is_persisted_as_valid_usage(monkeypatch):
+def test_zero_resolved_cost_is_still_recorded(monkeypatch):
     app = _make_app()
     _common_monkeypatches(monkeypatch)
     monkeypatch.setenv("DEEPINFRA_API_KEY", "fake-key")
@@ -242,31 +222,20 @@ def test_zero_resolved_cost_is_persisted_as_valid_usage(monkeypatch):
         multimodal_route, "asr_response", lambda *a, **k: FakeAsrResponse(200, payload)
     )
 
-    log_calls = []
-    monkeypatch.setattr(
-        multimodal_route,
-        "log_usage_with_resolved_cost",
-        lambda **kwargs: (log_calls.append(kwargs), 999)[1],
-    )
-    monkeypatch.setattr(multimodal_route, "set_usage_log_id", lambda log_id: None)
+    recorded = _patch_boundary(monkeypatch)
 
     response = _post_audio(app)
 
     assert response.status_code == 200
-    assert len(log_calls) == 1
-    assert log_calls[0]["cost"] == 0.0
+    assert len(recorded) == 1
+    assert recorded[0]["cost"] == 0.0
 
 
-def test_document_branch_writes_no_resolved_cost_usage(monkeypatch):
+def test_document_branch_never_records_resolved_cost(monkeypatch):
     app = _make_app()
     _common_monkeypatches(monkeypatch)
 
-    log_calls = []
-    monkeypatch.setattr(
-        multimodal_route,
-        "log_usage_with_resolved_cost",
-        lambda **kwargs: log_calls.append(kwargs),
-    )
+    recorded = _patch_boundary(monkeypatch)
     monkeypatch.setattr(
         multimodal_route,
         "extract_and_normalize_document",
@@ -286,7 +255,54 @@ def test_document_branch_writes_no_resolved_cost_usage(monkeypatch):
 
     assert response.status_code == 200
     assert response.get_json() == {"text": "extracted document text"}
-    assert log_calls == []
+    assert recorded == []
+
+
+def test_audio_records_through_the_real_boundary(monkeypatch):
+    """One end-to-end pass with the real boundary in place: only the database
+    writer is stubbed, so the route's own facts must survive derivation,
+    registration and persistence."""
+    app = _make_app()
+    _common_monkeypatches(monkeypatch)
+    monkeypatch.setenv("DEEPINFRA_API_KEY", "fake-key")
+
+    payload = {"text": "hello world", "inference_status": {"cost": 0.0225}}
+    monkeypatch.setattr(
+        multimodal_route, "asr_response", lambda *a, **k: FakeAsrResponse(200, payload)
+    )
+
+    writes = []
+    monkeypatch.setattr(
+        usage_recording,
+        "log_usage_with_resolved_cost",
+        lambda **kwargs: (writes.append(kwargs), 4242)[1],
+    )
+    monkeypatch.setattr(
+        usage_recording,
+        "get_user_by_id",
+        lambda user_id: {"id": user_id, "username": "user@example.com"},
+    )
+    monkeypatch.setattr(
+        usage_recording,
+        "get_user_by_username",
+        lambda username: {"id": 42, "username": username, "client": "dino"},
+    )
+
+    response = _post_audio(app)
+
+    assert response.status_code == 200
+    assert response.get_json() == {"text": "hello world"}
+
+    assert len(writes) == 1
+    write = writes[0]
+    assert write["user_id"] == 42
+    assert write["cost"] == 0.0225
+    assert write["provider"] == "Deepinfra"
+    assert write["model"] == "test-asr-model"
+    assert write["service"] == "/transcribe"
+    # Derived by the boundary, never stated by the route.
+    assert write["request_id"] == response.headers["X-Request-ID"]
+    assert write["source"] == "dino"
 
 
 def _post_image(app, headers=None):
@@ -310,18 +326,13 @@ def _make_image_app():
     return app
 
 
-def test_image_branch_never_writes_resolved_cost_usage(monkeypatch):
-    """Vision accounting is token-based; log_usage_with_resolved_cost() must
-    never be invoked by the image branch (that writer is ASR-specific)."""
+def test_image_branch_never_records_resolved_cost(monkeypatch):
+    """Vision accounting is token-based; the resolved-cost boundary is the
+    audio shape and must never be reached from the image branch."""
     app = _make_image_app()
     _common_monkeypatches(monkeypatch)
 
-    resolved_cost_calls = []
-    monkeypatch.setattr(
-        multimodal_route,
-        "log_usage_with_resolved_cost",
-        lambda **kwargs: resolved_cost_calls.append(kwargs),
-    )
+    resolved_cost_calls = _patch_boundary(monkeypatch)
     monkeypatch.setattr(
         multimodal_route,
         "describe_image_with_usage",

@@ -8,11 +8,17 @@ Semantics: the primary provider-backed operation SUCCEEDED, the subsequent
 Usage-accounting attempt FAILED, the failure was CONTAINED, and the
 caller-visible primary result remains successful (HTTP 200, unchanged body).
 
-T5 replaces the two legacy runtime logs `asr_usage_accounting_failed` and
-`vision_usage_accounting_failed`. Both carried `exc_info=True`, so T5 must
-preserve equivalent RUNTIME diagnostic depth while the PERSISTED Operational
-snapshot stays traceback-free and message-safe. Those two projections are
-independent and are asserted independently.
+The fact has two shapes, distinguished by who owns the failure:
+
+* `reason="accounting_error"` - the route's own accounting preparation
+  raised. The route holds the exception, so the record carries `error_type`
+  and remains exception-aware at runtime, while the PERSISTED snapshot
+  stays traceback-free and message-safe. Those two projections are
+  independent and are asserted independently.
+* `reason="usage_not_recorded"` - the Usage recording boundary reported
+  that no row was persisted. The exception is the Usage subsystem's and is
+  diagnosed there, so this record carries no exception metadata at all and
+  none is fabricated.
 
 Only shared/external seams are monkeypatched (shared auth, the shared
 asr_response / describe_image_with_usage provider calls, the Usage writers).
@@ -28,6 +34,7 @@ from types import SimpleNamespace
 import pytest
 from flask import Flask
 
+from infrastructure.asr_accounting import AsrAccountingError
 from routes import multimodal as multimodal_route
 from utils.logging_config import (
     LOG_FORMAT,
@@ -297,6 +304,41 @@ def _assert_accounting_fact(record, *, branch, provider, model, error_type):
     _assert_free_of_forbidden(record)
 
 
+def _assert_flow_level_accounting_fact(record, *, branch, provider, model):
+    """The boundary-reported shape: the flow fact, with no Usage internals."""
+    assert record.levelno == logging.ERROR
+    assert record.maui_details == {"branch": branch, "reason": "usage_not_recorded"}
+    assert record.maui_provider == provider
+    assert record.maui_model == model
+
+    # No exception is owned here, so none is invented.
+    assert getattr(record, "maui_error_type", None) is None
+    assert record.exc_info is None
+    assert record.exc_text is None
+
+    snapshot = snapshot_from_record(record)
+    assert snapshot is not None
+    assert snapshot.level == "ERROR"
+    assert snapshot.event == _EVENT
+    assert snapshot.provider == provider
+    assert snapshot.model == model
+    assert snapshot.error_type is None
+
+    _assert_free_of_forbidden(record)
+
+
+def _patch_recording_boundary(monkeypatch, *, result):
+    """Stand in for the Usage recording boundary at the adopter's seam."""
+    calls: list[dict] = []
+
+    def _record(**kwargs):
+        calls.append(kwargs)
+        return result
+
+    monkeypatch.setattr(multimodal_route, "record_resolved_consumption", _record)
+    return calls
+
+
 def _assert_runtime_exception_context(record):
     """The legacy logs carried exc_info=True; the replacement must too."""
     assert record.exc_info is not None, (
@@ -310,17 +352,17 @@ def _assert_runtime_exception_context(record):
 # ---------------------------------------------------------------------------
 
 
-def test_audio_accounting_failure_persists_the_contained_fact(monkeypatch, caplog):
-    """The ASR operation succeeded; the Usage write then failed and was contained."""
+def test_audio_boundary_false_persists_the_flow_level_fact(monkeypatch, caplog):
+    """The ASR operation succeeded; the boundary reported no Usage row.
+
+    CASE B: the persisted memory is that the transcription succeeded and its
+    accounting did not. The Usage-internal cause is not the route's to state.
+    """
     app = _make_app()
     _patch_auth_and_user(monkeypatch)
     monkeypatch.setenv("DEEPINFRA_API_KEY", "fake-key")
     calls = _patch_asr(monkeypatch, FakeAsrResponse(200, _audio_payload()))
-
-    def _boom(**kwargs):
-        raise RuntimeError(_RAW_EXCEPTION_TEXT)
-
-    monkeypatch.setattr(multimodal_route, "log_usage_with_resolved_cost", _boom)
+    recorded = _patch_recording_boundary(monkeypatch, result=False)
 
     with caplog.at_level(logging.INFO):
         response = _post_audio(app)
@@ -337,15 +379,12 @@ def test_audio_accounting_failure_persists_the_contained_fact(monkeypatch, caplo
         _EVENT,
     ]
 
+    assert len(recorded) == 1, "the boundary must actually have been consulted"
+
     record = _the_operational_record(caplog, _EVENT)
-    _assert_accounting_fact(
-        record,
-        branch="audio",
-        provider=_ASR_PROVIDER,
-        model=_ASR_MODEL,
-        error_type="RuntimeError",
+    _assert_flow_level_accounting_fact(
+        record, branch="audio", provider=_ASR_PROVIDER, model=_ASR_MODEL
     )
-    _assert_runtime_exception_context(record)
 
     # The accounting failure never erases or replaces the primary completion.
     completed = _the_operational_record(caplog, "transcribe_operation_completed")
@@ -358,27 +397,30 @@ def test_audio_accounting_failure_persists_the_contained_fact(monkeypatch, caplo
 
 
 @pytest.mark.parametrize(
-    "seam, exception, expected_error_type",
+    "exception, expected_error_type",
     [
-        # The single existing handler fuses cost resolution, user lookup and
-        # the Usage writer; the coarse reason is the same for all of them.
-        ("log_usage_with_resolved_cost", RuntimeError(_RAW_EXCEPTION_TEXT), "RuntimeError"),
-        ("set_usage_log_id", ValueError(_RAW_EXCEPTION_TEXT), "ValueError"),
+        (AsrAccountingError(_RAW_EXCEPTION_TEXT), "AsrAccountingError"),
+        (RuntimeError(_RAW_EXCEPTION_TEXT), "RuntimeError"),
     ],
 )
 def test_audio_accounting_error_type_follows_the_real_exception(
-    monkeypatch, caplog, seam, exception, expected_error_type
+    monkeypatch, caplog, exception, expected_error_type
 ):
+    """CASE A: cost resolution is the route's own step, so it owns the type."""
     app = _make_app()
     _patch_auth_and_user(monkeypatch)
     monkeypatch.setenv("DEEPINFRA_API_KEY", "fake-key")
     _patch_asr(monkeypatch, FakeAsrResponse(200, _audio_payload()))
-    monkeypatch.setattr(multimodal_route, "log_usage_with_resolved_cost", lambda **k: 777)
+
+    def _must_not_run(**kwargs):
+        raise AssertionError("the boundary must not be reached")
+
+    monkeypatch.setattr(multimodal_route, "record_resolved_consumption", _must_not_run)
 
     def _boom(*args, **kwargs):
         raise exception
 
-    monkeypatch.setattr(multimodal_route, seam, _boom)
+    monkeypatch.setattr(multimodal_route, "resolve_asr_cost", _boom)
 
     with caplog.at_level(logging.INFO):
         response = _post_audio(app)
@@ -408,12 +450,14 @@ def test_audio_user_lookup_miss_is_the_same_contained_accounting_fact(
     )
     monkeypatch.setenv("DEEPINFRA_API_KEY", "fake-key")
     _patch_asr(monkeypatch, FakeAsrResponse(200, _audio_payload()))
+    recorded = _patch_recording_boundary(monkeypatch, result=True)
 
     with caplog.at_level(logging.INFO):
         response = _post_audio(app)
 
     assert response.status_code == 200
     assert response.get_json() == {"text": _TRANSCRIPT}
+    assert recorded == [], "no user means nothing to attribute consumption to"
 
     record = _the_operational_record(caplog, _EVENT)
     _assert_accounting_fact(
@@ -519,19 +563,14 @@ def test_audio_successful_accounting_emits_no_accounting_fact(monkeypatch, caplo
     monkeypatch.setenv("DEEPINFRA_API_KEY", "fake-key")
     _patch_asr(monkeypatch, FakeAsrResponse(200, _audio_payload()))
 
-    written: list[dict] = []
-    monkeypatch.setattr(
-        multimodal_route,
-        "log_usage_with_resolved_cost",
-        lambda **kwargs: written.append(kwargs) or 777,
-    )
+    recorded = _patch_recording_boundary(monkeypatch, result=True)
 
     with caplog.at_level(logging.INFO):
         response = _post_audio(app)
 
     assert response.status_code == 200
     assert response.get_json() == {"text": _TRANSCRIPT}
-    assert len(written) == 1, "the accounting write must actually have succeeded"
+    assert len(recorded) == 1, "the accounting record must actually have succeeded"
     assert _operational_event_sequence(caplog) == [
         "transcribe_branch_selected",
         "transcribe_operation_completed",
@@ -587,7 +626,7 @@ def test_unsupported_asr_provider_skip_is_not_an_accounting_failure(
         raise AssertionError("accounting must not be attempted for this provider")
 
     monkeypatch.setattr(
-        multimodal_route, "log_usage_with_resolved_cost", _must_not_run
+        multimodal_route, "record_resolved_consumption", _must_not_run
     )
 
     with caplog.at_level(logging.INFO):
@@ -724,6 +763,8 @@ def _assert_traceback_split(captured_records, sink, sentinel, *, branch,
 
 
 def test_audio_accounting_failure_splits_traceback_from_snapshot(monkeypatch):
+    """The route-owned failure keeps both projections: stderr traceback and a
+    bounded snapshot."""
     sentinel = "SENSITIVE-ACCOUNTING-BODY-secret-4242"
 
     class AccountingBoom(Exception):
@@ -734,10 +775,10 @@ def test_audio_accounting_failure_splits_traceback_from_snapshot(monkeypatch):
     monkeypatch.setenv("DEEPINFRA_API_KEY", "fake-key")
     _patch_asr(monkeypatch, FakeAsrResponse(200, _audio_payload()))
 
-    def _boom(**kwargs):
-        raise AccountingBoom(f"usage writer said {sentinel}")
+    def _boom(*args, **kwargs):
+        raise AccountingBoom(f"cost resolution said {sentinel}")
 
-    monkeypatch.setattr(multimodal_route, "log_usage_with_resolved_cost", _boom)
+    monkeypatch.setattr(multimodal_route, "resolve_asr_cost", _boom)
 
     captured, sink, response = _run_through_the_real_logging_boundary(
         _post_audio, app

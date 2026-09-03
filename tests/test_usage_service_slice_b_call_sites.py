@@ -691,3 +691,75 @@ def test_completion_handler_reads_log_id_only_inside_the_success_branch():
         "get_usage_log_id() in completion_handler must sit inside the "
         "record_token_consumption() success branch"
     )
+
+
+# --- the resolved-cost adopter, scoped to its branch ----------------------
+
+_RESOLVED_COST_PERSISTENCE_NAMES = (
+    "log_usage_with_resolved_cost",
+    "set_usage_log_id",
+    "get_request_id",
+)
+
+
+def _branch_body(function_node, mimetype_prefix):
+    """The body of the `file.mimetype.startswith(<prefix>)` branch.
+
+    Scoped to the branch rather than to asr_parse(), because that one
+    handler still hosts the unmigrated image token flow, which legitimately
+    names the direct persistence operations.
+    """
+    for node in ast.walk(function_node):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if (
+            isinstance(test, ast.Call)
+            and isinstance(test.func, ast.Attribute)
+            and test.func.attr == "startswith"
+            and test.args
+            and isinstance(test.args[0], ast.Constant)
+            and test.args[0].value == mimetype_prefix
+        ):
+            return node.body
+    raise AssertionError(f"no {mimetype_prefix!r} branch found in asr_parse()")
+
+
+def _called_names(nodes):
+    called = set()
+    for root in nodes:
+        for node in ast.walk(root):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name):
+                    called.add(node.func.id)
+                elif isinstance(node.func, ast.Attribute):
+                    called.add(node.func.attr)
+    return called
+
+
+def test_audio_branch_records_resolved_cost_through_the_boundary():
+    _, handler = _handler_ast("multimodal.py", "asr_parse")
+    called = _called_names(_branch_body(handler, "audio"))
+
+    assert "record_resolved_consumption" in called, (
+        "the /transcribe audio branch no longer records Usage through "
+        "record_resolved_consumption()"
+    )
+    for name in _RESOLVED_COST_PERSISTENCE_NAMES:
+        assert name not in called, (
+            f"the /transcribe audio branch calls {name}() directly; resolved-cost "
+            "persistence mechanics belong behind the recording boundary"
+        )
+    assert "log_token_usage" not in called, (
+        "the /transcribe audio branch records resolved cost, not tokens"
+    )
+
+
+def test_image_branch_still_owns_its_token_persistence():
+    """The image branch is deliberately unmigrated; the scoping above must
+    not silently start covering it."""
+    _, handler = _handler_ast("multimodal.py", "asr_parse")
+    called = _called_names(_branch_body(handler, "image"))
+
+    assert "log_token_usage" in called
+    assert "record_resolved_consumption" not in called

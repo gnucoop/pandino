@@ -100,7 +100,7 @@ def _patch_shared_seams(monkeypatch):
     )
     monkeypatch.setattr(multimodal_route, "set_usage_log_id", lambda log_id: None)
     monkeypatch.setattr(
-        multimodal_route, "log_usage_with_resolved_cost", lambda **kwargs: 777
+        multimodal_route, "record_resolved_consumption", lambda **kwargs: True
     )
     monkeypatch.setattr(multimodal_route, "log_token_usage", lambda **kwargs: 778)
 

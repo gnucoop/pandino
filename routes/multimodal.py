@@ -10,12 +10,15 @@ from services.document_text_service import extract_and_normalize_document, Docum
 import infrastructure.database_pg as database_pg
 from infrastructure.ai import describe_image_with_usage, asr_response
 from infrastructure.asr_accounting import resolve_asr_cost
-from infrastructure.database_pg import edit_tokens, log_token_usage, log_usage_with_resolved_cost
+from infrastructure.database_pg import edit_tokens, log_token_usage
 from utils.logging_config import get_request_id
 from utils.operational_event import build_operational_event
 from utils.usage_request_state import set_usage_log_id
 from services.audio_form_service import audioFormCompilation, audioFormPromptBuild
-from utils.usage_recording import record_token_consumption
+from utils.usage_recording import (
+    record_resolved_consumption,
+    record_token_consumption,
+)
 from routes.utils import assert_valid_api_key
 
 multimodal_bp = Blueprint("multimodal", __name__)
@@ -167,18 +170,9 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
                     user = database_pg.get_user_by_username(user_email)
                     if user is None:
                         raise RuntimeError(f"ASR usage user lookup failed for {user_email}")
-
-                    log_id = log_usage_with_resolved_cost(
-                        user_id=user["id"],
-                        cost=cost,
-                        model=config.models.asr_model,
-                        provider=asr_provider,
-                        service="/transcribe",
-                        request_id=get_request_id(),
-                        source=user.get("client"),
-                    )
-                    set_usage_log_id(log_id)
                 except Exception as e:
+                    # Accounting preparation is the route's own; it owns the
+                    # exception.
                     message, extra = build_operational_event(
                         event="transcribe_usage_accounting_failed",
                         provider=asr_provider,
@@ -190,6 +184,27 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
                         },
                     )
                     logger.exception(message, extra=extra)
+                else:
+                    if not record_resolved_consumption(
+                        user_id=int(user["id"]),
+                        provider=asr_provider,
+                        model=config.models.asr_model,
+                        service="/transcribe",
+                        cost=cost,
+                    ):
+                        # The transcription stands; its accounting does not.
+                        # The failure is the Usage subsystem's and is
+                        # diagnosed there, so no exception metadata here.
+                        message, extra = build_operational_event(
+                            event="transcribe_usage_accounting_failed",
+                            provider=asr_provider,
+                            model=config.models.asr_model,
+                            details={
+                                "branch": "audio",
+                                "reason": "usage_not_recorded",
+                            },
+                        )
+                        logger.error(message, extra=extra)
 
             return jsonify({"text": text}), 200
         else:

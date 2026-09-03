@@ -124,7 +124,7 @@ def _patch_shared_seams(monkeypatch):
     )
     monkeypatch.setattr(multimodal_route, "set_usage_log_id", lambda log_id: None)
     monkeypatch.setattr(
-        multimodal_route, "log_usage_with_resolved_cost", lambda **kwargs: 777
+        multimodal_route, "record_resolved_consumption", lambda **kwargs: True
     )
 
 
@@ -414,14 +414,14 @@ def test_audio_completion_precedes_the_accounting_block(monkeypatch, caplog):
 
     seen_at_accounting_time: list[int] = []
 
-    def _exploding_writer(**kwargs):
+    def _failing_record(**kwargs):
         seen_at_accounting_time.append(
             len(_operational_records(caplog, "transcribe_operation_completed"))
         )
-        raise RuntimeError("accounting writer down")
+        return False
 
     monkeypatch.setattr(
-        multimodal_route, "log_usage_with_resolved_cost", _exploding_writer
+        multimodal_route, "record_resolved_consumption", _failing_record
     )
 
     with caplog.at_level(logging.INFO):
@@ -442,7 +442,7 @@ def test_audio_completion_precedes_the_accounting_block(monkeypatch, caplog):
     assert len(accounting) == 1
     assert accounting[0].maui_details == {
         "branch": "audio",
-        "reason": "accounting_error",
+        "reason": "usage_not_recorded",
     }
     assert caplog.records.index(record) < caplog.records.index(accounting[0])
 
