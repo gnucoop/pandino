@@ -44,95 +44,26 @@ def _find_log_token_usage_calls():
     return calls
 
 
-def test_every_unmigrated_log_token_usage_call_site_passes_request_id():
+def test_no_route_adopter_calls_the_token_writer_directly():
+    """The direct token-writer census over routes/*.py is now empty.
+
+    This replaces the two former per-call-site checks that
+    ``request_id=``/``source=`` were passed manually: with /datachat
+    migrated there is no remaining adopter call site to check, because both
+    values are derived behind ``record_token_consumption()`` and cannot be
+    supplied at all.
+
+    Deliberately scoped to routes/*.py - the adopters. It is not a
+    repository-wide ban: ``utils.usage_recording`` calls the writer
+    internally by design, and ``infrastructure.database_pg`` owns its
+    implementation.
+    """
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 1
-
-    for filename, call in calls:
-        keywords = {kw.arg for kw in call.keywords}
-        assert "request_id" in keywords, (
-            f"log_token_usage() call in {filename} is missing request_id="
-        )
-
-
-def test_every_unmigrated_log_token_usage_call_site_passes_source():
-    calls = _find_log_token_usage_calls()
-
-    assert len(calls) == 1
-
-    for filename, call in calls:
-        keywords = {kw.arg for kw in call.keywords}
-        assert "source" in keywords, (
-            f"log_token_usage() call in {filename} is missing source="
-        )
-
-
-def _find_log_token_usage_assignments():
-    """Return (filename, target_name) for every ``x = log_token_usage(...)``.
-
-    Distinguishes capturing the return value (Usage Duration Slice B3
-    handoff prerequisite) from merely passing arguments - a call site could
-    pass ``service=``/``request_id=`` without ever binding the result to a
-    name.
-    """
-    assignments = []
-    for path in sorted(_ROUTES_DIR.glob("*.py")):
-        tree = ast.parse(path.read_text(), filename=str(path))
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Assign)
-                and isinstance(node.value, ast.Call)
-                and isinstance(node.value.func, ast.Name)
-                and node.value.func.id == "log_token_usage"
-                and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-            ):
-                assignments.append((path.name, node.targets[0].id))
-    return assignments
-
-
-def test_every_unmigrated_call_site_captures_log_id_locally():
-    """The remaining direct writer call binds the returned id.
-
-    Some previously discarded the return value (/audioformcompilation);
-    the last direct call site captures it internally, whether or not it is
-    exposed publicly. Adopters that have moved behind the Usage boundary
-    never see an id at all and are deliberately outside this count.
-    """
-    assignments = _find_log_token_usage_assignments()
-    calls = _find_log_token_usage_calls()
-
-    assert len(assignments) == len(calls) == 1
-
-
-def test_every_unmigrated_call_site_hands_off_log_id_to_usage_request_state():
-    """Every captured id is registered request-locally.
-
-    For each ``x = log_token_usage(...)`` in a route file, the same file
-    must contain a call ``set_usage_log_id(x)`` somewhere - proving the
-    handoff exists without pinning down its exact line position relative
-    to the assignment.
-    """
-    assignments = _find_log_token_usage_assignments()
-
-    for filename, target_name in assignments:
-        path = _ROUTES_DIR / filename
-        tree = ast.parse(path.read_text(), filename=str(path))
-
-        handed_off = any(
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "set_usage_log_id"
-            and len(node.args) == 1
-            and isinstance(node.args[0], ast.Name)
-            and node.args[0].id == target_name
-            for node in ast.walk(tree)
-        )
-        assert handed_off, (
-            f"{filename} captures log_token_usage() into {target_name!r} "
-            "but never hands it off via set_usage_log_id()"
-        )
+    assert calls == [], (
+        "routes/ must contain no direct log_token_usage() call; found: "
+        + ", ".join(filename for filename, _ in calls)
+    )
 
 
 _MULTIMODAL_PATH = _ROUTES_DIR / "multimodal.py"
@@ -483,16 +414,18 @@ _DIRECT_USAGE_NAMES = (
     "set_usage_log_id",
 )
 
-# The migrated token adopters, as (route file, handler function). Scoped
-# deliberately: the remaining adopters are intentionally unmigrated and
-# still call the writer directly, so a repository-wide prohibition would be
-# wrong today. Add a row here when an adopter migrates.
+# The migrated token adopters, as (route file, handler function). Scoped to
+# handler functions deliberately: the invariant must prohibit direct
+# persistence by an *adopter*, not by the boundary or the infrastructure
+# writer it legitimately uses. /datachat was the last production adopter to
+# migrate, so this tuple is now the complete set.
 _MIGRATED_TOKEN_ADOPTERS = (
     ("reporting.py", "prompt_handler"),
     ("multimodal.py", "audio_form_compile"),
     ("rag.py", "completion_handler"),
     ("rag.py", "agentchat"),
     ("documents.py", "compare_docs"),
+    ("datachat.py", "dataChat"),
 )
 
 
@@ -507,10 +440,10 @@ def _handler_ast(filename, function_name):
 def test_migrated_token_adopters_do_not_persist_usage_directly():
     """Structural invariant over every migrated token adopter.
 
-    Scoped to the handler function rather than the file, because
-    routes/multimodal.py still hosts the unmigrated /transcribe flow and
-    must keep its direct writer calls. A migrated handler may name none of
-    the direct Usage persistence operations.
+    Scoped to the handler function rather than the file, because one module
+    may host several flows and each carries its own consumption shape. A
+    migrated handler may name none of the direct Usage persistence
+    operations.
     """
     for filename, function_name in _MIGRATED_TOKEN_ADOPTERS:
         _, handler = _handler_ast(filename, function_name)

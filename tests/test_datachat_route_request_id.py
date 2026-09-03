@@ -101,6 +101,18 @@ class _StubEngine:
         return {"run_result": object()}
 
 
+class _TracelessStubEngine:
+    """No get_last_trace(), so the hasattr check in dataChat() fails and
+    trace_payload stays None - the no-trace gate."""
+
+    def __init__(self):
+        self.calls = []
+
+    def chat(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return {"kind": "text", "text": "stub response"}
+
+
 def _make_app():
     app = Flask(__name__)
     app.config["MAUI_CONFIG"] = SimpleNamespace(
@@ -132,23 +144,54 @@ def _make_app():
     return app, runtime_stream, agent_runs_stream
 
 
-def _patch_success_dependencies(monkeypatch, engine, log_calls=None):
+_DEFAULT_USER = {"id": 123, "username": "user@example.com", "client": "dino"}
+
+
+def _patch_success_dependencies(
+    monkeypatch,
+    engine,
+    record_calls=None,
+    user=_DEFAULT_USER,
+    recorded=True,
+    read_back_calls=None,
+    log_id=999,
+):
+    """Wire a /datachat app whose only Usage step is the adoption boundary.
+
+    ``record_token_consumption`` and ``get_usage_log_id`` are stubbed at the
+    route module, so these tests pin what the *adopter* states and reads,
+    never how the boundary persists it. ``user`` may be a dict, ``None``, or
+    a callable that raises, to exercise the accounting-side lookup paths.
+    """
     monkeypatch.setattr(datachat_route, "assert_valid_api_key", lambda *a, **k: None)
     monkeypatch.setattr(datachat_route, "get_user_tokens", lambda user_email: 10)
     monkeypatch.setattr(datachat_route, "getAgent", lambda api_key: engine)
     monkeypatch.setattr(datachat_route, "edit_tokens", lambda *a, **k: None)
+
+    def fake_get_user_by_username(user_email):
+        if callable(user):
+            return user(user_email)
+        return user
+
     monkeypatch.setattr(
-        datachat_route,
-        "get_user_by_username",
-        lambda user_email: {"id": 123, "username": user_email, "client": "dino"},
+        datachat_route, "get_user_by_username", fake_get_user_by_username
     )
 
-    def fake_log_token_usage(**kwargs):
-        if log_calls is not None:
-            log_calls.append(kwargs)
-        return 999
+    def fake_record_token_consumption(**kwargs):
+        if record_calls is not None:
+            record_calls.append(kwargs)
+        return recorded
 
-    monkeypatch.setattr(datachat_route, "log_token_usage", fake_log_token_usage)
+    monkeypatch.setattr(
+        datachat_route, "record_token_consumption", fake_record_token_consumption
+    )
+
+    def fake_get_usage_log_id():
+        if read_back_calls is not None:
+            read_back_calls.append(True)
+        return log_id
+
+    monkeypatch.setattr(datachat_route, "get_usage_log_id", fake_get_usage_log_id)
 
 
 def _last_agent_runs_record(agent_runs_stream):
@@ -256,7 +299,10 @@ def test_datachat_runtime_renders_app_id_after_auth_binding(monkeypatch):
         "get_user_by_username",
         lambda user_email: {"id": 123, "username": user_email, "client": "dino"},
     )
-    monkeypatch.setattr(datachat_route, "log_token_usage", lambda **kwargs: 999)
+    monkeypatch.setattr(
+        datachat_route, "record_token_consumption", lambda **kwargs: True
+    )
+    monkeypatch.setattr(datachat_route, "get_usage_log_id", lambda: 999)
 
     runtime_logger = app.config["DATACHAT_RUNTIME_LOGGER"]
     runtime_logger.handlers = []
@@ -290,65 +336,196 @@ def test_agent_runs_record_carries_ambient_request_id(monkeypatch):
     assert record["request_id"] == header_id
 
 
-def test_log_token_usage_receives_datachat_service_literal(monkeypatch):
+def test_datachat_states_only_consumption_facts_to_the_boundary(monkeypatch):
+    """The adopter states exactly the six public consumption facts.
+
+    request_id and source are absent by design: both are derived behind
+    record_token_consumption(), so supplying either is impossible rather
+    than merely discouraged.
+    """
     app, _stream, _agent_runs_stream = _make_app()
     engine = _StubEngine()
-    log_calls = []
-    _patch_success_dependencies(monkeypatch, engine, log_calls)
+    record_calls = []
+    _patch_success_dependencies(monkeypatch, engine, record_calls=record_calls)
 
     response = _post_chat(app.test_client())
 
     assert response.status_code == 200
-    assert len(log_calls) == 1
-    assert log_calls[0]["service"] == "/datachat"
-    assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]
-    assert log_calls[0]["source"] == "dino"
+    assert len(record_calls) == 1
+    assert record_calls[0] == {
+        "user_id": 123,
+        "provider": "test-provider",
+        "model": "test-model",
+        "service": "/datachat",
+        "token_input": 0,
+        "token_output": 0,
+    }
 
 
-def test_datachat_hands_off_captured_log_id_and_keeps_exposing_it(monkeypatch):
-    """Usage Duration Slice B3: /datachat already captured log_id locally
-    and already exposes it in the response. B3 must reuse that existing
-    local value for the request-local handoff without changing either
-    behavior."""
+def test_datachat_records_zero_token_pair_whenever_a_trace_exists(monkeypatch):
+    """The absent-count normalization is unchanged: the serialized runtime
+    reports None, the adopter states 0/0, and a row is still recorded. No
+    token>0 guard was introduced."""
     app, _stream, _agent_runs_stream = _make_app()
     engine = _StubEngine()
-    _patch_success_dependencies(monkeypatch, engine)
+    record_calls = []
+    _patch_success_dependencies(monkeypatch, engine, record_calls=record_calls)
 
-    handoff_calls = []
-    monkeypatch.setattr(
-        datachat_route, "set_usage_log_id", lambda log_id: handoff_calls.append(log_id)
+    response = _post_chat(app.test_client())
+
+    assert response.status_code == 200
+    assert [(c["token_input"], c["token_output"]) for c in record_calls] == [(0, 0)]
+
+
+def test_successful_recording_reads_back_log_id_and_exposes_it(monkeypatch):
+    """Case A: recording succeeds -> db_log_ok True, the id is read back
+    through get_usage_log_id(), and the response contract is preserved."""
+    app, stream, _agent_runs_stream = _make_app()
+    engine = _StubEngine()
+    read_back_calls = []
+    _patch_success_dependencies(
+        monkeypatch, engine, read_back_calls=read_back_calls, log_id=999
     )
 
     response = _post_chat(app.test_client())
 
     assert response.status_code == 200
-    assert handoff_calls == [999]
     assert response.get_json()["log_id"] == 999
+    assert read_back_calls == [True]
+
+    status_line = _extract_line(stream.getvalue(), "datachat_trace_status")
+    assert "db_log_ok=True" in status_line
+    assert "log_id=999" in status_line
+    end_line = _extract_line(stream.getvalue(), "datachat_request_end")
+    assert "log_id=999" in end_line
 
 
-def test_datachat_usage_write_failure_registers_no_log_id(monkeypatch):
-    """B3 invariant: no handoff when the Usage INSERT fails. /datachat
-    already catches this exception and keeps db_log_ok False / log_id
-    None; that existing behavior must be unchanged."""
-    app, _stream, _agent_runs_stream = _make_app()
+def test_recording_returning_false_omits_log_id_and_never_reads_back(monkeypatch):
+    """Case B: the boundary reports a runtime accounting failure. The
+    response stays 200 without log_id, db_log_ok stays False, and no stale
+    request-scoped id is read."""
+    app, stream, _agent_runs_stream = _make_app()
     engine = _StubEngine()
-    _patch_success_dependencies(monkeypatch, engine)
-
-    def raising_log_token_usage(**kwargs):
-        raise RuntimeError("db unavailable")
-
-    monkeypatch.setattr(datachat_route, "log_token_usage", raising_log_token_usage)
-
-    handoff_calls = []
-    monkeypatch.setattr(
-        datachat_route, "set_usage_log_id", lambda log_id: handoff_calls.append(log_id)
+    read_back_calls = []
+    _patch_success_dependencies(
+        monkeypatch, engine, recorded=False, read_back_calls=read_back_calls
     )
 
     response = _post_chat(app.test_client())
 
     assert response.status_code == 200
     assert "log_id" not in response.get_json()
-    assert handoff_calls == []
+    assert read_back_calls == []
+
+    status_line = _extract_line(stream.getvalue(), "datachat_trace_status")
+    assert "db_log_ok=False" in status_line
+    assert "log_id=none" in status_line
+
+
+def test_absent_trace_records_nothing_and_omits_log_id(monkeypatch):
+    """Case C: the trace gate is unchanged. No trace means no explicit Usage
+    recording at all - not a zero-token row."""
+    app, stream, _agent_runs_stream = _make_app()
+    engine = _TracelessStubEngine()
+    record_calls = []
+    read_back_calls = []
+    _patch_success_dependencies(
+        monkeypatch,
+        engine,
+        record_calls=record_calls,
+        read_back_calls=read_back_calls,
+    )
+
+    response = _post_chat(app.test_client())
+
+    assert response.status_code == 200
+    assert record_calls == []
+    assert read_back_calls == []
+    assert "log_id" not in response.get_json()
+
+    status_line = _extract_line(stream.getvalue(), "datachat_trace_status")
+    assert "trace_present=False" in status_line
+    assert "db_log_ok=False" in status_line
+
+
+@pytest.mark.parametrize(
+    "user",
+    [
+        pytest.param(None, id="missing_user_row"),
+        pytest.param({"username": "user@example.com"}, id="absent_user_id"),
+        pytest.param({"id": "123", "username": "u"}, id="non_int_user_id"),
+    ],
+)
+def test_missing_or_invalid_user_records_nothing(monkeypatch, user):
+    """Case D: an unusable accounting-side identity skips recording and
+    leaves the DataChat response untouched."""
+    app, _stream, _agent_runs_stream = _make_app()
+    engine = _StubEngine()
+    record_calls = []
+    read_back_calls = []
+    _patch_success_dependencies(
+        monkeypatch,
+        engine,
+        user=user,
+        record_calls=record_calls,
+        read_back_calls=read_back_calls,
+    )
+
+    response = _post_chat(app.test_client())
+
+    assert response.status_code == 200
+    assert response.get_json()["response"] is not None
+    assert record_calls == []
+    assert read_back_calls == []
+    assert "log_id" not in response.get_json()
+
+
+def test_user_lookup_failure_warns_safely_and_changes_nothing(monkeypatch, caplog):
+    """Case E: the accounting-side lookup raising is fail-open.
+
+    The exception message carries sensitive-looking text to prove the
+    adopter's warning names only the exception type - never the username,
+    the message, or a traceback.
+    """
+    app, _stream, _agent_runs_stream = _make_app()
+    engine = _StubEngine()
+    record_calls = []
+    read_back_calls = []
+
+    secret = "password=hunter2 user@example.com api_key=test-key"
+
+    def raising_lookup(user_email):
+        raise RuntimeError(secret)
+
+    _patch_success_dependencies(
+        monkeypatch,
+        engine,
+        user=raising_lookup,
+        record_calls=record_calls,
+        read_back_calls=read_back_calls,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="routes.datachat"):
+        response = _post_chat(app.test_client())
+
+    assert response.status_code == 200
+    assert response.get_json()["response"] is not None
+    assert "log_id" not in response.get_json()
+    assert record_calls == []
+    assert read_back_calls == []
+
+    warnings = [
+        r
+        for r in caplog.records
+        if "datachat_usage_user_lookup_failed" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "error_type=RuntimeError" in message
+    assert secret not in message
+    assert "hunter2" not in message
+    assert "user@example.com" not in message
+    assert "test-key" not in message
 
 
 def test_agent_runs_extra_has_channel_and_response_kind_but_not_request_id(monkeypatch):
