@@ -10,10 +10,8 @@ from services.document_text_service import extract_and_normalize_document, Docum
 import infrastructure.database_pg as database_pg
 from infrastructure.ai import describe_image_with_usage, asr_response
 from infrastructure.asr_accounting import resolve_asr_cost
-from infrastructure.database_pg import edit_tokens, log_token_usage
-from utils.logging_config import get_request_id
+from infrastructure.database_pg import edit_tokens
 from utils.operational_event import build_operational_event
-from utils.usage_request_state import set_usage_log_id
 from services.audio_form_service import audioFormCompilation, audioFormPromptBuild
 from utils.usage_recording import (
     record_resolved_consumption,
@@ -310,22 +308,14 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
 
         try:
             token_usage = result["token_usage"]
+            token_input = token_usage["input_tokens"]
+            token_output = token_usage["output_tokens"]
             user = database_pg.get_user_by_username(user_email)
             if user is None:
                 raise RuntimeError(f"Vision usage user lookup failed for {user_email}")
-
-            log_id = log_token_usage(
-                user_id=user["id"],
-                token_input=token_usage["input_tokens"],
-                token_output=token_usage["output_tokens"],
-                model=vision_model,
-                provider=vision_provider,
-                service="/transcribe",
-                request_id=get_request_id(),
-                source=user.get("client"),
-            )
-            set_usage_log_id(log_id)
         except Exception as e:
+            # Accounting preparation is the route's own; it owns the
+            # exception.
             message, extra = build_operational_event(
                 event="transcribe_usage_accounting_failed",
                 provider=vision_provider,
@@ -334,6 +324,28 @@ def asr_parse() -> Union[Response, tuple[Response, int]]:
                 details={"branch": "image", "reason": "accounting_error"},
             )
             logger.exception(message, extra=extra)
+        else:
+            if not record_token_consumption(
+                user_id=int(user["id"]),
+                provider=vision_provider,
+                model=vision_model,
+                service="/transcribe",
+                token_input=token_input,
+                token_output=token_output,
+            ):
+                # The description stands; its accounting does not. The
+                # failure is the Usage subsystem's and is diagnosed there,
+                # so no exception metadata here.
+                message, extra = build_operational_event(
+                    event="transcribe_usage_accounting_failed",
+                    provider=vision_provider,
+                    model=vision_model,
+                    details={
+                        "branch": "image",
+                        "reason": "usage_not_recorded",
+                    },
+                )
+                logger.error(message, extra=extra)
 
         return jsonify({"text": text}), 200
 

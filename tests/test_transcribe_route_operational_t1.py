@@ -6,7 +6,7 @@ Facts under test, both owned by routes/multimodal.py::asr_parse():
     transcribe_branch_selected    (INFO / WARNING, details.branch)
 
 Only external/shared seams are monkeypatched (shared auth, provider calls,
-document extraction, Usage writers). The route guards, the first-match-wins
+document extraction, Usage recording boundary). The route guards, the first-match-wins
 dispatch, the HTTP return behaviour and the Operational logging boundary are
 all exercised for real.
 
@@ -98,11 +98,12 @@ def _patch_shared_seams(monkeypatch):
         "get_user_by_username",
         lambda user_email: {"id": 42, "username": user_email, "client": "dino"},
     )
-    monkeypatch.setattr(multimodal_route, "set_usage_log_id", lambda log_id: None)
     monkeypatch.setattr(
         multimodal_route, "record_resolved_consumption", lambda **kwargs: True
     )
-    monkeypatch.setattr(multimodal_route, "log_token_usage", lambda **kwargs: 778)
+    monkeypatch.setattr(
+        multimodal_route, "record_token_consumption", lambda **kwargs: True
+    )
 
 
 def _post(app, *, filename, mimetype, headers=None, data=None):

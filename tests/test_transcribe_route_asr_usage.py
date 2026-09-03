@@ -1,16 +1,17 @@
-"""Route-level tests for /transcribe audio ASR Usage integration.
+"""Route-level tests for /transcribe provider-backed Usage integration.
 
-Covers only the audio branch of routes/multimodal.py::asr_parse: resolving
-an already-resolved ASR monetary cost via infrastructure.asr_accounting and
-handing it to record_resolved_consumption(). The assertions here are the
-adopter's own - which consumption facts the route states, and that the
-transcription response is never governed by accounting. What the boundary
-then derives, hides and registers is its own contract, proven in
-tests/test_usage_recording.py. Document and image branches are proven not
-to reach the resolved-cost boundary at all.
+Covers both provider-backed branches of routes/multimodal.py::asr_parse.
+Audio resolves an already-resolved ASR monetary cost via
+infrastructure.asr_accounting and hands it to record_resolved_consumption();
+image hands a provider-reported token pair to record_token_consumption().
+The assertions here are the adopter's own - which consumption facts each
+branch states, and that the response is never governed by accounting. What
+the boundary then derives, hides and registers is its own contract, proven
+in tests/test_usage_recording.py. The document branch, and the image branch,
+are both proven not to reach the resolved-cost shape at all.
 
-No real provider network calls are made: asr_response() is monkeypatched to
-return a fake requests.Response-like object.
+No real provider network calls are made: asr_response() and
+describe_image_with_usage() are monkeypatched.
 """
 
 import io
@@ -326,6 +327,26 @@ def _make_image_app():
     return app
 
 
+def _patch_token_boundary(monkeypatch, *, result=True):
+    """Capture what the image branch states to the token boundary."""
+    recorded = []
+
+    def _record(**kwargs):
+        recorded.append(kwargs)
+        return result
+
+    monkeypatch.setattr(multimodal_route, "record_token_consumption", _record)
+    return recorded
+
+
+def _patch_vision(monkeypatch, token_usage, description="described image text"):
+    monkeypatch.setattr(
+        multimodal_route,
+        "describe_image_with_usage",
+        lambda *a, **k: {"description": description, "token_usage": token_usage},
+    )
+
+
 def test_image_branch_never_records_resolved_cost(monkeypatch):
     """Vision accounting is token-based; the resolved-cost boundary is the
     audio shape and must never be reached from the image branch."""
@@ -333,46 +354,26 @@ def test_image_branch_never_records_resolved_cost(monkeypatch):
     _common_monkeypatches(monkeypatch)
 
     resolved_cost_calls = _patch_boundary(monkeypatch)
-    monkeypatch.setattr(
-        multimodal_route,
-        "describe_image_with_usage",
-        lambda *a, **k: {
-            "description": "described image text",
-            "token_usage": {"input_tokens": 12, "output_tokens": 7, "total_tokens": 19},
-        },
+    token_calls = _patch_token_boundary(monkeypatch)
+    _patch_vision(
+        monkeypatch, {"input_tokens": 12, "output_tokens": 7, "total_tokens": 19}
     )
-    monkeypatch.setattr(multimodal_route, "log_token_usage", lambda **kwargs: 555)
-    monkeypatch.setattr(multimodal_route, "set_usage_log_id", lambda log_id: None)
 
     response = _post_image(app)
 
     assert response.status_code == 200
     assert response.get_json() == {"text": "described image text"}
     assert resolved_cost_calls == []
+    assert len(token_calls) == 1
 
 
-def test_image_success_logs_token_usage_and_hands_off_log_id(monkeypatch):
+def test_image_success_records_token_consumption(monkeypatch):
     app = _make_image_app()
     _common_monkeypatches(monkeypatch)
 
-    monkeypatch.setattr(
-        multimodal_route,
-        "describe_image_with_usage",
-        lambda *a, **k: {
-            "description": "described image text",
-            "token_usage": {"input_tokens": 12, "output_tokens": 7, "total_tokens": 19},
-        },
-    )
-
-    log_calls = []
-    monkeypatch.setattr(
-        multimodal_route,
-        "log_token_usage",
-        lambda **kwargs: (log_calls.append(kwargs), 555)[1],
-    )
-    handoff_calls = []
-    monkeypatch.setattr(
-        multimodal_route, "set_usage_log_id", lambda log_id: handoff_calls.append(log_id)
+    recorded = _patch_token_boundary(monkeypatch)
+    _patch_vision(
+        monkeypatch, {"input_tokens": 12, "output_tokens": 7, "total_tokens": 19}
     )
 
     response = _post_image(app)
@@ -382,76 +383,61 @@ def test_image_success_logs_token_usage_and_hands_off_log_id(monkeypatch):
     # Public response is unchanged - no accounting metadata leaks into it.
     assert set(response.get_json().keys()) == {"text"}
 
-    assert len(log_calls) == 1
-    call = log_calls[0]
+    assert len(recorded) == 1
+    call = recorded[0]
     assert call["user_id"] == 42
-    assert call["token_input"] == 12
-    assert call["token_output"] == 7
     assert call["provider"] == "test-vision-provider"
     assert call["model"] == "test-vision-model"
     assert call["service"] == "/transcribe"
-    assert call["request_id"] == response.headers["X-Request-ID"]
-    assert call["source"] == "dino"
+    assert call["token_input"] == 12
+    assert call["token_output"] == 7
+    # The adopter states consumption facts only: request_id, source and the
+    # row id are the boundary's, and are proven in tests/test_usage_recording.py.
+    assert set(call) == {
+        "user_id",
+        "provider",
+        "model",
+        "service",
+        "token_input",
+        "token_output",
+    }
 
-    assert handoff_calls == [555]
 
-
-def test_image_usage_persistence_failure_does_not_break_response(monkeypatch):
-    """Vision succeeds, log_token_usage() fails: the request must still
-    succeed with the original description, and the accounting failure must
-    surface only as an ERROR log, not a re-raised exception."""
+def test_image_zero_token_usage_is_still_recorded(monkeypatch):
+    """A zero/zero observation is real; the image branch has no >0 guard."""
     app = _make_image_app()
     _common_monkeypatches(monkeypatch)
 
-    monkeypatch.setattr(
-        multimodal_route,
-        "describe_image_with_usage",
-        lambda *a, **k: {
-            "description": "described image text",
-            "token_usage": {"input_tokens": 12, "output_tokens": 7, "total_tokens": 19},
-        },
-    )
-
-    def raise_db_failure(**kwargs):
-        raise RuntimeError("db is down")
-
-    handoff_calls = []
-    monkeypatch.setattr(multimodal_route, "log_token_usage", raise_db_failure)
-    monkeypatch.setattr(
-        multimodal_route, "set_usage_log_id", lambda log_id: handoff_calls.append(log_id)
+    recorded = _patch_token_boundary(monkeypatch)
+    _patch_vision(
+        monkeypatch, {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     )
 
     response = _post_image(app)
 
     assert response.status_code == 200
     assert response.get_json() == {"text": "described image text"}
-    assert handoff_calls == []
+    assert len(recorded) == 1
+    assert recorded[0]["token_input"] == 0
+    assert recorded[0]["token_output"] == 0
 
 
-def test_image_usage_persistence_failure_is_logged_at_error(monkeypatch, caplog):
+def test_image_recording_failure_does_not_break_response(monkeypatch):
+    """Vision succeeds, the boundary reports no row: the request must still
+    succeed with the original description."""
     app = _make_image_app()
     _common_monkeypatches(monkeypatch)
 
-    monkeypatch.setattr(
-        multimodal_route,
-        "describe_image_with_usage",
-        lambda *a, **k: {
-            "description": "described image text",
-            "token_usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
-        },
-    )
-    monkeypatch.setattr(
-        multimodal_route, "log_token_usage", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("db is down"))
+    recorded = _patch_token_boundary(monkeypatch, result=False)
+    _patch_vision(
+        monkeypatch, {"input_tokens": 12, "output_tokens": 7, "total_tokens": 19}
     )
 
-    with caplog.at_level("ERROR", logger=multimodal_route.logger.name):
-        response = _post_image(app)
+    response = _post_image(app)
 
     assert response.status_code == 200
-    assert any(
-        "event=transcribe_usage_accounting_failed" in record.getMessage()
-        for record in caplog.records
-    )
+    assert response.get_json() == {"text": "described image text"}
+    assert len(recorded) == 1
 
 
 def test_image_vision_failure_is_not_swallowed_by_usage_containment(monkeypatch):
@@ -463,18 +449,57 @@ def test_image_vision_failure_is_not_swallowed_by_usage_containment(monkeypatch)
     def raise_vision_failure(*a, **k):
         raise RuntimeError("vision provider is down")
 
-    log_calls = []
+    recorded = _patch_token_boundary(monkeypatch)
     monkeypatch.setattr(
         multimodal_route, "describe_image_with_usage", raise_vision_failure
-    )
-    monkeypatch.setattr(
-        multimodal_route,
-        "log_token_usage",
-        lambda **kwargs: log_calls.append(kwargs),
     )
 
     response = _post_image(app)
 
     assert response.status_code == 500
     assert "vision provider is down" in response.get_json()["error"]
-    assert log_calls == []
+    assert recorded == []
+
+
+def test_image_records_through_the_real_boundary(monkeypatch):
+    """The image mirror of the audio end-to-end pass: with the real boundary
+    in place, only the token writer is stubbed."""
+    app = _make_image_app()
+    _common_monkeypatches(monkeypatch)
+    _patch_vision(
+        monkeypatch, {"input_tokens": 12, "output_tokens": 7, "total_tokens": 19}
+    )
+
+    writes = []
+    monkeypatch.setattr(
+        usage_recording,
+        "log_token_usage",
+        lambda **kwargs: (writes.append(kwargs), 4242)[1],
+    )
+    monkeypatch.setattr(
+        usage_recording,
+        "get_user_by_id",
+        lambda user_id: {"id": user_id, "username": "user@example.com"},
+    )
+    monkeypatch.setattr(
+        usage_recording,
+        "get_user_by_username",
+        lambda username: {"id": 42, "username": username, "client": "dino"},
+    )
+
+    response = _post_image(app)
+
+    assert response.status_code == 200
+    assert response.get_json() == {"text": "described image text"}
+
+    assert len(writes) == 1
+    write = writes[0]
+    assert write["user_id"] == 42
+    assert write["token_input"] == 12
+    assert write["token_output"] == 7
+    assert write["provider"] == "test-vision-provider"
+    assert write["model"] == "test-vision-model"
+    assert write["service"] == "/transcribe"
+    # Derived by the boundary, never stated by the route.
+    assert write["request_id"] == response.headers["X-Request-ID"]
+    assert write["source"] == "dino"

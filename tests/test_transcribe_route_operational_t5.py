@@ -21,7 +21,7 @@ The fact has two shapes, distinguished by who owns the failure:
   none is fabricated.
 
 Only shared/external seams are monkeypatched (shared auth, the shared
-asr_response / describe_image_with_usage provider calls, the Usage writers).
+asr_response / describe_image_with_usage provider calls, the Usage recording boundary).
 The route's pre-existing accounting try/except boundaries, its fail-open
 behaviour, its HTTP returns and the Operational logging boundary are all
 exercised for real.
@@ -162,7 +162,6 @@ def _patch_auth_and_user(monkeypatch):
         "get_user_by_username",
         lambda user_email: {"id": 42, "username": user_email, "client": "dino"},
     )
-    monkeypatch.setattr(multimodal_route, "set_usage_log_id", lambda log_id: None)
 
 
 def _patch_asr(monkeypatch, result):
@@ -327,7 +326,9 @@ def _assert_flow_level_accounting_fact(record, *, branch, provider, model):
     _assert_free_of_forbidden(record)
 
 
-def _patch_recording_boundary(monkeypatch, *, result):
+def _patch_recording_boundary(
+    monkeypatch, *, result, operation="record_resolved_consumption"
+):
     """Stand in for the Usage recording boundary at the adopter's seam."""
     calls: list[dict] = []
 
@@ -335,8 +336,15 @@ def _patch_recording_boundary(monkeypatch, *, result):
         calls.append(kwargs)
         return result
 
-    monkeypatch.setattr(multimodal_route, "record_resolved_consumption", _record)
+    monkeypatch.setattr(multimodal_route, operation, _record)
     return calls
+
+
+def _patch_token_boundary(monkeypatch, *, result):
+    """The image branch's seam: the token shape of the same boundary."""
+    return _patch_recording_boundary(
+        monkeypatch, result=result, operation="record_token_consumption"
+    )
 
 
 def _assert_runtime_exception_context(record):
@@ -478,17 +486,14 @@ def test_audio_user_lookup_miss_is_the_same_contained_accounting_fact(
 
 
 def test_image_accounting_failure_persists_the_contained_fact(monkeypatch, caplog):
-    """The vision operation succeeded; the Usage write then failed and was contained."""
+    """CASE B: the vision operation succeeded; the boundary reported no row."""
     app = _make_app()
     _patch_auth_and_user(monkeypatch)
     calls = _patch_vision(
         monkeypatch, {"description": _DESCRIPTION, "token_usage": _TOKEN_USAGE}
     )
 
-    def _boom(**kwargs):
-        raise RuntimeError(_RAW_EXCEPTION_TEXT)
-
-    monkeypatch.setattr(multimodal_route, "log_token_usage", _boom)
+    recorded = _patch_token_boundary(monkeypatch, result=False)
 
     with caplog.at_level(logging.INFO):
         response = _post_image(app)
@@ -497,6 +502,7 @@ def test_image_accounting_failure_persists_the_contained_fact(monkeypatch, caplo
     assert response.status_code == 200
     assert response.get_json() == {"text": _DESCRIPTION}
     assert len(calls) == 1, "the shared vision helper must actually have run"
+    assert len(recorded) == 1, "the boundary must actually have been consulted"
 
     # The degraded-success timeline, in order. transcribe_operation_completed
     # marks completion of the PRIMARY image operation, so it precedes the
@@ -508,14 +514,9 @@ def test_image_accounting_failure_persists_the_contained_fact(monkeypatch, caplo
     ]
 
     record = _the_operational_record(caplog, _EVENT)
-    _assert_accounting_fact(
-        record,
-        branch="image",
-        provider=_VISION_PROVIDER,
-        model=_VISION_MODEL,
-        error_type="RuntimeError",
+    _assert_flow_level_accounting_fact(
+        record, branch="image", provider=_VISION_PROVIDER, model=_VISION_MODEL
     )
-    _assert_runtime_exception_context(record)
 
     completed = _the_operational_record(caplog, "transcribe_operation_completed")
     assert completed.maui_details == {"branch": "image"}
@@ -532,7 +533,7 @@ def test_image_missing_token_usage_is_the_same_contained_accounting_fact(
     """A malformed vision result reaches the same single coarse handler."""
     app = _make_app()
     _patch_auth_and_user(monkeypatch)
-    monkeypatch.setattr(multimodal_route, "log_token_usage", lambda **k: 778)
+    recorded = _patch_token_boundary(monkeypatch, result=True)
     _patch_vision(monkeypatch, {"description": _DESCRIPTION})
 
     with caplog.at_level(logging.INFO):
@@ -540,6 +541,7 @@ def test_image_missing_token_usage_is_the_same_contained_accounting_fact(
 
     assert response.status_code == 200
     assert response.get_json() == {"text": _DESCRIPTION}
+    assert recorded == [], "malformed usage means nothing honest to record"
 
     record = _the_operational_record(caplog, _EVENT)
     _assert_accounting_fact(
@@ -585,19 +587,14 @@ def test_image_successful_accounting_emits_no_accounting_fact(monkeypatch, caplo
         monkeypatch, {"description": _DESCRIPTION, "token_usage": _TOKEN_USAGE}
     )
 
-    written: list[dict] = []
-    monkeypatch.setattr(
-        multimodal_route,
-        "log_token_usage",
-        lambda **kwargs: written.append(kwargs) or 778,
-    )
+    written = _patch_token_boundary(monkeypatch, result=True)
 
     with caplog.at_level(logging.INFO):
         response = _post_image(app)
 
     assert response.status_code == 200
     assert response.get_json() == {"text": _DESCRIPTION}
-    assert len(written) == 1, "the accounting write must actually have succeeded"
+    assert len(written) == 1, "the accounting record must actually have succeeded"
     assert _operational_event_sequence(caplog) == [
         "transcribe_branch_selected",
         "transcribe_operation_completed",
@@ -799,6 +796,7 @@ def test_audio_accounting_failure_splits_traceback_from_snapshot(monkeypatch):
 
 
 def test_image_accounting_failure_splits_traceback_from_snapshot(monkeypatch):
+    """CASE A only: the route holds the exception, so it holds the traceback."""
     sentinel = "SENSITIVE-ACCOUNTING-BODY-secret-9191"
 
     class AccountingBoom(Exception):
@@ -809,11 +807,14 @@ def test_image_accounting_failure_splits_traceback_from_snapshot(monkeypatch):
     _patch_vision(
         monkeypatch, {"description": _DESCRIPTION, "token_usage": _TOKEN_USAGE}
     )
+    _patch_token_boundary(monkeypatch, result=True)
 
-    def _boom(**kwargs):
-        raise AccountingBoom(f"usage writer said {sentinel}")
+    def _boom(user_email):
+        raise AccountingBoom(f"user lookup said {sentinel}")
 
-    monkeypatch.setattr(multimodal_route, "log_token_usage", _boom)
+    monkeypatch.setattr(
+        multimodal_route.database_pg, "get_user_by_username", _boom
+    )
 
     captured, sink, response = _run_through_the_real_logging_boundary(
         _post_image, app

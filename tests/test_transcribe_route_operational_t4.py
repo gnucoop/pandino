@@ -7,7 +7,7 @@ scoped to the IMAGE branch:
     transcribe_operation_failed     (ERROR, details.branch/reason)
 
 Only shared/external seams are monkeypatched (shared auth, the shared
-describe_image_with_usage vision helper, the Usage writers). The image
+describe_image_with_usage vision helper, the Usage recording boundary). The image
 dispatch gate, the route's existing broad try/except, the HTTP return
 behaviour and the Operational logging boundary are all exercised for real.
 
@@ -103,15 +103,16 @@ def _make_app():
 
 
 def _patch_shared_seams(monkeypatch):
-    """Only shared/external seams: auth and the Usage writers."""
+    """Only shared/external seams: auth and the Usage recording boundary."""
     monkeypatch.setattr(multimodal_route, "assert_valid_api_key", lambda *a, **k: None)
     monkeypatch.setattr(
         multimodal_route.database_pg,
         "get_user_by_username",
         lambda user_email: {"id": 42, "username": user_email, "client": "dino"},
     )
-    monkeypatch.setattr(multimodal_route, "set_usage_log_id", lambda log_id: None)
-    monkeypatch.setattr(multimodal_route, "log_token_usage", lambda **kwargs: 778)
+    monkeypatch.setattr(
+        multimodal_route, "record_token_consumption", lambda **kwargs: True
+    )
 
 
 def _patch_vision(monkeypatch, result):
@@ -269,10 +270,9 @@ def test_image_success_completion_survives_a_failing_accounting_attempt(
     app = _make_app()
     _patch_shared_seams(monkeypatch)
 
-    def _boom(**kwargs):
-        raise RuntimeError(_RAW_EXCEPTION_TEXT)
-
-    monkeypatch.setattr(multimodal_route, "log_token_usage", _boom)
+    monkeypatch.setattr(
+        multimodal_route, "record_token_consumption", lambda **kwargs: False
+    )
     _patch_vision(
         monkeypatch,
         {"description": _DESCRIPTION, "token_usage": _TOKEN_USAGE},

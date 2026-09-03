@@ -434,13 +434,14 @@ def test_document_outcomes_do_not_leak_into_the_image_branch(monkeypatch, caplog
     """
     app = _make_app()
     _patch_shared_seams(monkeypatch)
-    monkeypatch.setattr(multimodal_route, "log_token_usage", lambda **kwargs: 778)
     monkeypatch.setattr(
         multimodal_route.database_pg,
         "get_user_by_username",
         lambda user_email: {"id": 42, "username": user_email, "client": "dino"},
     )
-    monkeypatch.setattr(multimodal_route, "set_usage_log_id", lambda log_id: None)
+    monkeypatch.setattr(
+        multimodal_route, "record_token_consumption", lambda **kwargs: True
+    )
     monkeypatch.setattr(
         multimodal_route,
         "describe_image_with_usage",

@@ -8,7 +8,7 @@ scoped to the AUDIO branch:
     transcribe_operation_failed     (ERROR,   details.branch/reason)
 
 Only external/shared seams are monkeypatched (shared auth, the shared
-asr_response provider call, Usage writers). The audio guards, the provider
+asr_response provider call, Usage recording boundary). The audio guards, the provider
 dispatch, the response interpretation, the HTTP return behaviour and the
 Operational logging boundary are all exercised for real.
 
@@ -115,16 +115,18 @@ def _make_app(
 
 
 def _patch_shared_seams(monkeypatch):
-    """Only shared/external seams: auth and the Usage writers."""
+    """Only shared/external seams: auth and the Usage recording boundary."""
     monkeypatch.setattr(multimodal_route, "assert_valid_api_key", lambda *a, **k: None)
     monkeypatch.setattr(
         multimodal_route.database_pg,
         "get_user_by_username",
         lambda user_email: {"id": 42, "username": user_email, "client": "dino"},
     )
-    monkeypatch.setattr(multimodal_route, "set_usage_log_id", lambda log_id: None)
     monkeypatch.setattr(
         multimodal_route, "record_resolved_consumption", lambda **kwargs: True
+    )
+    monkeypatch.setattr(
+        multimodal_route, "record_token_consumption", lambda **kwargs: True
     )
 
 

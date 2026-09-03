@@ -1,16 +1,16 @@
 """Focused tests over the direct Usage writer call sites in routes/.
 
-Originally proving that the three call sites without a test seam
-(audio_form_compile, prompt_handler, completion_handler) pass the canonical
-`service` literal to log_token_usage(); datachat, agentchat and compare_docs
-already had seams, extended in tests/test_datachat_route_request_id.py,
-tests/test_agentchat_route_lifecycle_identity.py and
-tests/test_documents_route.py respectively.
+Originally proving that every direct ``log_token_usage()`` call site passed
+the canonical ``service`` literal, ``request_id`` and ``source``, and bound
+the returned row id for duration linkage.
 
-/prompt.txt has since migrated to the explicit Usage adoption boundary
-(utils.usage_recording), so it no longer calls the writer directly. The
-structural counts below therefore cover the six adopters that remain
-unmigrated, and prompt_handler is covered by boundary-shaped tests instead.
+Adopters have since migrated to the explicit Usage adoption boundary
+(utils.usage_recording) and no longer call the writer directly. The
+structural counts below therefore cover only the two call sites that remain
+unmigrated - /datachat (routes/datachat.py) and /agentchat (routes/rag.py) -
+which keep every per-call obligation. Migrated adopters never see a row id
+at all and are covered by boundary-shaped tests instead, in this module and
+in tests/test_usage_recording.py.
 """
 
 import ast
@@ -47,7 +47,7 @@ def _find_log_token_usage_calls():
 def test_every_unmigrated_log_token_usage_call_site_passes_request_id():
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 3
+    assert len(calls) == 2
 
     for filename, call in calls:
         keywords = {kw.arg for kw in call.keywords}
@@ -59,7 +59,7 @@ def test_every_unmigrated_log_token_usage_call_site_passes_request_id():
 def test_every_unmigrated_log_token_usage_call_site_passes_source():
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 3
+    assert len(calls) == 2
 
     for filename, call in calls:
         keywords = {kw.arg for kw in call.keywords}
@@ -104,7 +104,7 @@ def test_every_unmigrated_call_site_captures_log_id_locally():
     assignments = _find_log_token_usage_assignments()
     calls = _find_log_token_usage_calls()
 
-    assert len(assignments) == len(calls) == 3
+    assert len(assignments) == len(calls) == 2
 
 
 def test_every_unmigrated_call_site_hands_off_log_id_to_usage_request_state():
@@ -134,6 +134,63 @@ def test_every_unmigrated_call_site_hands_off_log_id_to_usage_request_state():
             f"{filename} captures log_token_usage() into {target_name!r} "
             "but never hands it off via set_usage_log_id()"
         )
+
+
+_MULTIMODAL_PATH = _ROUTES_DIR / "multimodal.py"
+
+
+def _multimodal_names():
+    """Every bare name imported or called in routes/multimodal.py."""
+    tree = ast.parse(_MULTIMODAL_PATH.read_text(), filename=str(_MULTIMODAL_PATH))
+
+    imported = set()
+    called = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            imported.update(alias.asname or alias.name for alias in node.names)
+        elif isinstance(node, ast.Import):
+            imported.update((alias.asname or alias.name).split(".")[0]
+                            for alias in node.names)
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            called.add(node.func.id)
+    return imported, called
+
+
+def test_transcribe_module_no_longer_owns_usage_persistence():
+    """/transcribe states consumption; it never persists it.
+
+    Both provider-backed branches are behind the boundary, so the module
+    holds no Usage writer, no manual request correlation for Usage and no
+    row-id registration. ``get_request_id`` is named here only because this
+    module has no unrelated production use of it left; its removal from
+    Maui globally is emphatically not implied.
+    """
+    imported, called = _multimodal_names()
+
+    for name in (
+        "log_token_usage",
+        "log_usage_with_resolved_cost",
+        "set_usage_log_id",
+        "get_usage_log_id",
+        "get_request_id",
+    ):
+        assert name not in imported, (
+            f"routes/multimodal.py still imports {name!r}; Usage persistence "
+            "belongs behind utils.usage_recording"
+        )
+        assert name not in called, (
+            f"routes/multimodal.py still calls {name!r}; Usage persistence "
+            "belongs behind utils.usage_recording"
+        )
+
+
+def test_transcribe_uses_both_shapes_of_the_recording_boundary():
+    """Audio resolves its own money; image reports tokens for Maui to price."""
+    imported, called = _multimodal_names()
+
+    for name in ("record_resolved_consumption", "record_token_consumption"):
+        assert name in imported, f"routes/multimodal.py must import {name!r}"
+        assert name in called, f"routes/multimodal.py must call {name!r}"
 
 
 def _build_audio_form_app(monkeypatch, token_usage):
@@ -702,13 +759,19 @@ _RESOLVED_COST_PERSISTENCE_NAMES = (
     "get_request_id",
 )
 
+_TOKEN_PERSISTENCE_NAMES = (
+    "log_token_usage",
+    "set_usage_log_id",
+    "get_request_id",
+)
+
 
 def _branch_body(function_node, mimetype_prefix):
     """The body of the `file.mimetype.startswith(<prefix>)` branch.
 
     Scoped to the branch rather than to asr_parse(), because that one
-    handler still hosts the unmigrated image token flow, which legitimately
-    names the direct persistence operations.
+    handler hosts two different consumption shapes and each must be pinned
+    to its own.
     """
     for node in ast.walk(function_node):
         if not isinstance(node, ast.If):
@@ -756,11 +819,21 @@ def test_audio_branch_records_resolved_cost_through_the_boundary():
     )
 
 
-def test_image_branch_still_owns_its_token_persistence():
-    """The image branch is deliberately unmigrated; the scoping above must
-    not silently start covering it."""
+def test_image_branch_records_tokens_through_the_boundary():
+    """The image branch states a token pair; it never persists one, and it
+    never reaches the resolved-cost shape."""
     _, handler = _handler_ast("multimodal.py", "asr_parse")
     called = _called_names(_branch_body(handler, "image"))
 
-    assert "log_token_usage" in called
-    assert "record_resolved_consumption" not in called
+    assert "record_token_consumption" in called, (
+        "the /transcribe image branch no longer records Usage through "
+        "record_token_consumption()"
+    )
+    for name in _TOKEN_PERSISTENCE_NAMES:
+        assert name not in called, (
+            f"the /transcribe image branch calls {name}() directly; token "
+            "persistence mechanics belong behind the recording boundary"
+        )
+    assert "record_resolved_consumption" not in called, (
+        "the /transcribe image branch records tokens, not a resolved cost"
+    )
