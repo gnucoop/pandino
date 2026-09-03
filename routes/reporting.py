@@ -5,11 +5,9 @@ from flask import Blueprint, request, current_app
 from config import PROVIDER_API_KEY_MAP
 from infrastructure.database_pg import (
     edit_tokens,
-    log_token_usage,
     get_user_by_username,
 )
-from utils.logging_config import get_request_id
-from utils.usage_request_state import set_usage_log_id
+from utils.usage_recording import record_token_consumption
 import infrastructure.database_pg as database_pg
 from services.prompt_service import reply_to_prompt
 from routes.utils import assert_valid_api_key
@@ -64,17 +62,14 @@ def prompt_handler():
     token_usage = result["token_usage"]
     user = database_pg.get_user_by_username(username)
     if user and (token_usage["input_tokens"] > 0 or token_usage["output_tokens"] > 0):
-        log_id = log_token_usage(
+        record_token_consumption(
             user_id=int(user["id"]),
+            provider=llm_type,
+            model=model_name,
+            service="/prompt.txt",
             token_input=token_usage["input_tokens"],
             token_output=token_usage["output_tokens"],
-            model=model_name,
-            provider=llm_type,
-            service="/prompt.txt",
-            request_id=get_request_id(),
-            source=user.get("client"),
         )
-        set_usage_log_id(log_id)
 
     edit_tokens(username, -token_cost)
 

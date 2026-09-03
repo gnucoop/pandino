@@ -1,10 +1,16 @@
-"""Focused tests proving the three Usage writer call sites that previously had
-no test seam (audio_form_compile, prompt_handler, completion_handler) pass the
-canonical Usage Service Slice B `service` literal to log_token_usage().
+"""Focused tests over the direct Usage writer call sites in routes/.
 
-datachat, agentchat and compare_docs already had test seams, extended in
-tests/test_datachat_route_request_id.py, tests/test_agentchat_route_lifecycle_identity.py
-and tests/test_documents_route.py respectively.
+Originally proving that the three call sites without a test seam
+(audio_form_compile, prompt_handler, completion_handler) pass the canonical
+`service` literal to log_token_usage(); datachat, agentchat and compare_docs
+already had seams, extended in tests/test_datachat_route_request_id.py,
+tests/test_agentchat_route_lifecycle_identity.py and
+tests/test_documents_route.py respectively.
+
+/prompt.txt has since migrated to the explicit Usage adoption boundary
+(utils.usage_recording), so it no longer calls the writer directly. The
+structural counts below therefore cover the six adopters that remain
+unmigrated, and prompt_handler is covered by boundary-shaped tests instead.
 """
 
 import ast
@@ -16,6 +22,7 @@ from flask import Flask
 from routes import multimodal as multimodal_route
 from routes import reporting as reporting_route
 from routes import rag as rag_route
+from utils import usage_recording
 from utils.logging_config import register_request_context_hooks
 
 _ROUTES_DIR = Path(__file__).resolve().parent.parent / "routes"
@@ -36,10 +43,10 @@ def _find_log_token_usage_calls():
     return calls
 
 
-def test_exactly_seven_production_log_token_usage_call_sites_pass_request_id():
+def test_every_unmigrated_log_token_usage_call_site_passes_request_id():
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 7
+    assert len(calls) == 6
 
     for filename, call in calls:
         keywords = {kw.arg for kw in call.keywords}
@@ -48,10 +55,10 @@ def test_exactly_seven_production_log_token_usage_call_sites_pass_request_id():
         )
 
 
-def test_exactly_seven_production_log_token_usage_call_sites_pass_source():
+def test_every_unmigrated_log_token_usage_call_site_passes_source():
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 7
+    assert len(calls) == 6
 
     for filename, call in calls:
         keywords = {kw.arg for kw in call.keywords}
@@ -84,21 +91,23 @@ def _find_log_token_usage_assignments():
     return assignments
 
 
-def test_all_six_call_sites_capture_log_id_locally():
-    """Usage Duration Slice B3: every writer now binds the returned id.
+def test_every_unmigrated_call_site_captures_log_id_locally():
+    """Every remaining direct writer call binds the returned id.
 
-    Three of the six previously discarded the return value
-    (/compare_docs, /audioformcompilation, /prompt.txt); B3 requires all
-    six to capture it internally, whether or not it is exposed publicly.
+    Some previously discarded the return value (/compare_docs,
+    /audioformcompilation); all remaining direct call sites now capture it
+    internally, whether or not it is exposed publicly. Adopters that have
+    moved behind the Usage boundary never see an id at all and are
+    deliberately outside this count.
     """
     assignments = _find_log_token_usage_assignments()
     calls = _find_log_token_usage_calls()
 
-    assert len(assignments) == len(calls) == 7
+    assert len(assignments) == len(calls) == 6
 
 
-def test_all_six_call_sites_hand_off_log_id_to_usage_request_state():
-    """Usage Duration Slice B3: every captured id is registered request-locally.
+def test_every_unmigrated_call_site_hands_off_log_id_to_usage_request_state():
+    """Every captured id is registered request-locally.
 
     For each ``x = log_token_usage(...)`` in a route file, the same file
     must contain a call ``set_usage_log_id(x)`` somewhere - proving the
@@ -193,7 +202,8 @@ def test_audio_form_compile_logs_usage_with_audioformcompilation_service(monkeyp
     assert "log_id" not in response.get_json()
 
 
-def test_prompt_handler_logs_usage_with_prompt_txt_service(monkeypatch):
+def _build_prompt_app(monkeypatch, token_usage):
+    """Wire a /prompt.txt app whose only unstubbed Usage step is the boundary."""
     app = Flask(__name__)
     app.config["MAUI_CONFIG"] = SimpleNamespace(
         prompt_token_cost=1,
@@ -201,8 +211,6 @@ def test_prompt_handler_logs_usage_with_prompt_txt_service(monkeypatch):
     )
     register_request_context_hooks(app)
     app.register_blueprint(reporting_route.reporting_bp)
-
-    log_calls = []
 
     monkeypatch.setattr(reporting_route, "assert_valid_api_key", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -216,21 +224,54 @@ def test_prompt_handler_logs_usage_with_prompt_txt_service(monkeypatch):
     monkeypatch.setattr(
         reporting_route,
         "reply_to_prompt",
-        lambda *a, **k: {
-            "content": "reply text",
-            "token_usage": {"input_tokens": 5, "output_tokens": 3},
-        },
+        lambda *a, **k: {"content": "reply text", "token_usage": token_usage},
     )
+    monkeypatch.setattr(reporting_route, "edit_tokens", lambda *a, **k: None)
+    return app
+
+
+def _stub_boundary_user_lookups(monkeypatch, client=None):
+    """Stub the boundary's own identity reads.
+
+    The boundary binds these by direct name import, so patching
+    ``database_pg`` for the route does not reach them - which is itself the
+    point: source derivation is the boundary's business, not the route's.
+    """
+    monkeypatch.setattr(
+        usage_recording,
+        "get_user_by_id",
+        lambda user_id: {"id": user_id, "username": "user@example.com"},
+    )
+    monkeypatch.setattr(
+        usage_recording,
+        "get_user_by_username",
+        lambda username: {"id": 42, "username": username, "client": client},
+    )
+
+
+def test_prompt_handler_records_usage_through_the_adoption_boundary(monkeypatch):
+    """/prompt.txt is the first adopter of the explicit Usage boundary.
+
+    The route now states consumption facts only: the writer, request_id,
+    source, the row id and its registration all sit behind
+    ``record_token_consumption``.
+    """
+    app = _build_prompt_app(
+        monkeypatch, {"input_tokens": 5, "output_tokens": 3}
+    )
+
+    log_calls = []
+    handoff_calls = []
+
     def fake_log_token_usage(**kwargs):
         log_calls.append(kwargs)
         return 4343
 
-    handoff_calls = []
-    monkeypatch.setattr(reporting_route, "log_token_usage", fake_log_token_usage)
+    monkeypatch.setattr(usage_recording, "log_token_usage", fake_log_token_usage)
     monkeypatch.setattr(
-        reporting_route, "set_usage_log_id", lambda log_id: handoff_calls.append(log_id)
+        usage_recording, "set_usage_log_id", lambda log_id: handoff_calls.append(log_id)
     )
-    monkeypatch.setattr(reporting_route, "edit_tokens", lambda *a, **k: None)
+    _stub_boundary_user_lookups(monkeypatch)
 
     response = app.test_client().post(
         "/prompt.txt",
@@ -241,13 +282,103 @@ def test_prompt_handler_logs_usage_with_prompt_txt_service(monkeypatch):
     assert response.status_code == 200
     assert len(log_calls) == 1
     assert log_calls[0]["service"] == "/prompt.txt"
+    assert log_calls[0]["provider"] == "test-provider"
+    assert log_calls[0]["model"] == "test-model"
+    assert log_calls[0]["token_input"] == 5
+    assert log_calls[0]["token_output"] == 3
+    # request_id and source are derived inside the boundary, not passed by
+    # the route.
     assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]
     assert log_calls[0]["source"] is None
-    # Slice B3: the returned id is now captured and handed off request-locally...
+    # The row id is registered by the boundary; the route never sees it...
     assert handoff_calls == [4343]
-    # ...but public response exposure is unchanged - /prompt.txt returns the
+    # ...and public response exposure is unchanged - /prompt.txt returns the
     # plain-text reply only, never log_id.
     assert response.get_data(as_text=True) == "reply text"
+
+
+def test_prompt_handler_keeps_its_zero_token_guard(monkeypatch):
+    """The >0 guard stays a flow-level rule at the call site: the boundary
+    accepts 0/0, so a recorded call here would prove the guard was lost."""
+    app = _build_prompt_app(
+        monkeypatch, {"input_tokens": 0, "output_tokens": 0}
+    )
+
+    recorded = []
+    monkeypatch.setattr(
+        usage_recording, "log_token_usage", lambda **kwargs: recorded.append(kwargs)
+    )
+
+    response = app.test_client().post(
+        "/prompt.txt",
+        data={"prompt": "hello", "username": "user@example.com"},
+        headers={"X-API-KEY": "test-key"},
+    )
+
+    assert response.status_code == 200
+    assert recorded == []
+    assert response.get_data(as_text=True) == "reply text"
+
+
+def test_prompt_handler_response_survives_a_usage_failure(monkeypatch):
+    """Accepted behaviour change: an accounting failure used to escape this
+    route as a 500. It is now contained by the boundary."""
+    app = _build_prompt_app(
+        monkeypatch, {"input_tokens": 5, "output_tokens": 3}
+    )
+
+    def boom(**kwargs):
+        raise RuntimeError("database is unreachable")
+
+    monkeypatch.setattr(usage_recording, "log_token_usage", boom)
+    _stub_boundary_user_lookups(monkeypatch)
+
+    response = app.test_client().post(
+        "/prompt.txt",
+        data={"prompt": "hello", "username": "user@example.com"},
+        headers={"X-API-KEY": "test-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.get_data(as_text=True) == "reply text"
+
+
+def test_prompt_txt_route_does_not_persist_usage_directly():
+    """Structural invariant for the migrated surface only.
+
+    Scoped to routes/reporting.py: the other adopters are intentionally
+    unmigrated and still call the writer directly.
+    """
+    source = (_ROUTES_DIR / "reporting.py").read_text()
+    tree = ast.parse(source, filename="reporting.py")
+
+    called = {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+    assert "log_token_usage" not in called
+    assert "log_usage_with_resolved_cost" not in called
+    assert "set_usage_log_id" not in called
+
+    attribute_calls = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert "log_token_usage" not in attribute_calls
+    assert "log_usage_with_resolved_cost" not in attribute_calls
+    assert "set_usage_log_id" not in attribute_calls
+
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert "log_token_usage" not in imported
+    assert "set_usage_log_id" not in imported
+    assert "record_token_consumption" in imported
 
 
 def test_completion_handler_logs_usage_with_completion_json_service(monkeypatch):
