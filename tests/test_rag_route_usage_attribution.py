@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from flask import Flask
 
 from routes import rag as rag_route
+from utils import usage_recording
 from utils.embedding_accounting import (
     COST_PROVIDER_AUTHORITATIVE,
     EmbeddingAccountingContribution,
@@ -120,6 +121,19 @@ def _patch_common(monkeypatch, captured, user=None, lookup=None):
 
     monkeypatch.setattr(rag_route, "log_token_usage", fake_log_token_usage)
     monkeypatch.setattr(rag_route, "edit_tokens", lambda *a, **k: None)
+
+    # /completion.json now records through utils.usage_recording, which binds
+    # the writer and its identity reads by direct name import - patching
+    # rag_route does not reach them, which is exactly the point. /agentchat
+    # is still legacy and keeps using the rag_route seam above; each route
+    # exercises only one of the two, so both report into the same list.
+    monkeypatch.setattr(usage_recording, "log_token_usage", fake_log_token_usage)
+    monkeypatch.setattr(
+        usage_recording,
+        "get_user_by_id",
+        lambda user_id: {"id": user_id, "username": user["username"]},
+    )
+    monkeypatch.setattr(usage_recording, "get_user_by_username", lambda username: user)
 
 
 def _patch_completion(monkeypatch, captured, contributions=(), exc=None, **kwargs):

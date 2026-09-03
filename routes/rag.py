@@ -6,11 +6,16 @@ from typing import Union, Optional
 from flask import Blueprint, Response, current_app, jsonify, request
 
 import infrastructure.database_pg as database_pg
-from infrastructure.database_pg import edit_tokens, get_user_by_username, log_token_usage
+from infrastructure.database_pg import (
+    edit_tokens,
+    get_user_by_username,
+    log_token_usage,
+)
 from utils.logging_config import get_request_id
 from utils.operational_event import build_operational_event
 from utils.usage_attribution_state import bind_usage_attribution
-from utils.usage_request_state import set_usage_log_id
+from utils.usage_recording import record_token_consumption
+from utils.usage_request_state import get_usage_log_id, set_usage_log_id
 from infrastructure.ai import choose_emb_model
 from infrastructure.vector_store import MauiVectorStore
 from services.completion_service import complete_chat, CompletionRequest
@@ -146,17 +151,18 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
                 token_in = resp["token_usage"]["input_tokens"]
                 token_out = resp["token_usage"]["output_tokens"]
                 if isinstance(user_id, int) and (token_in > 0 or token_out > 0):
-                    log_id = log_token_usage(
+
+                    if record_token_consumption(
                         user_id=user_id,
+                        provider=llm_type,
+                        model=model,
+                        service="/completion.json",
                         token_input=token_in,
                         token_output=token_out,
-                        model=model,
-                        provider=llm_type,
-                        service="/completion.json",
-                        request_id=get_request_id(),
-                        source=user.get("client"),
-                    )
-                    set_usage_log_id(log_id)
+                    ):
+                        # Preserve the existing response contract without exposing row identity
+                        # through the recording API.
+                        log_id = get_usage_log_id()
 
             if resp["vectors"]:
                 for vec in resp["vectors"]:
@@ -175,11 +181,7 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
         return jsonify({"error": "No response from chat completion"}), 500
 
     except Exception as exc:
-        # The terminal uncontrolled failure.
-        # One real failure boundary produces one LogRecord: this replaces the
-        # legacy runtime event=completion_request_failed line, whose str(e)
-        # interpolation is deliberately dropped. Only the exception class name
-        # is persisted; the timeline identifies the phase.
+        # Persist only the exception type at the terminal failure boundary.
         message, extra = build_operational_event(
             event="completion_uncontrolled_failure",
             error_type=type(exc).__name__,
@@ -324,5 +326,7 @@ def agentchat() -> Response | tuple[Response, int]:
 
     except Exception as e:
         logger.error("event=agentchat_unexpected_error error=%s", str(e))
-        logger.error("event=agentchat_unexpected_error_trace trace=%s", traceback.format_exc())
+        logger.error(
+            "event=agentchat_unexpected_error_trace trace=%s", traceback.format_exc()
+        )
         return jsonify({"error": "An unexpected error occurred"}), 500

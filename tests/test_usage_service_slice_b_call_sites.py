@@ -23,6 +23,7 @@ from routes import multimodal as multimodal_route
 from routes import reporting as reporting_route
 from routes import rag as rag_route
 from utils import usage_recording
+from utils.usage_request_state import set_usage_log_id
 from utils.logging_config import register_request_context_hooks
 
 _ROUTES_DIR = Path(__file__).resolve().parent.parent / "routes"
@@ -46,7 +47,7 @@ def _find_log_token_usage_calls():
 def test_every_unmigrated_log_token_usage_call_site_passes_request_id():
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 5
+    assert len(calls) == 4
 
     for filename, call in calls:
         keywords = {kw.arg for kw in call.keywords}
@@ -58,7 +59,7 @@ def test_every_unmigrated_log_token_usage_call_site_passes_request_id():
 def test_every_unmigrated_log_token_usage_call_site_passes_source():
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 5
+    assert len(calls) == 4
 
     for filename, call in calls:
         keywords = {kw.arg for kw in call.keywords}
@@ -103,7 +104,7 @@ def test_every_unmigrated_call_site_captures_log_id_locally():
     assignments = _find_log_token_usage_assignments()
     calls = _find_log_token_usage_calls()
 
-    assert len(assignments) == len(calls) == 5
+    assert len(assignments) == len(calls) == 4
 
 
 def test_every_unmigrated_call_site_hands_off_log_id_to_usage_request_state():
@@ -433,6 +434,7 @@ _DIRECT_USAGE_NAMES = (
 _MIGRATED_TOKEN_ADOPTERS = (
     ("reporting.py", "prompt_handler"),
     ("multimodal.py", "audio_form_compile"),
+    ("rag.py", "completion_handler"),
 )
 
 
@@ -510,7 +512,9 @@ def test_migrated_token_adopters_import_the_adoption_boundary():
                 )
 
 
-def test_completion_handler_logs_usage_with_completion_json_service(monkeypatch):
+def _build_completion_app(monkeypatch, token_usage):
+    """Wire a /completion.json app whose only unstubbed Usage step is the
+    boundary."""
     app = Flask(__name__)
     app.config["MAUI_CONFIG"] = SimpleNamespace(
         completion_token_cost=1,
@@ -524,8 +528,6 @@ def test_completion_handler_logs_usage_with_completion_json_service(monkeypatch)
     )
     register_request_context_hooks(app)
     app.register_blueprint(rag_route.rag_bp)
-
-    log_calls = []
 
     monkeypatch.setattr(rag_route, "assert_valid_api_key", lambda *a, **k: None)
     monkeypatch.setattr(rag_route.database_pg, "get_user_tokens", lambda username: 10)
@@ -542,33 +544,150 @@ def test_completion_handler_logs_usage_with_completion_json_service(monkeypatch)
         lambda *a, **k: {
             "answer": "an answer",
             "vectors": [],
-            "token_usage": {"input_tokens": 5, "output_tokens": 3},
+            "token_usage": token_usage,
         },
     )
-    def fake_log_token_usage(**kwargs):
-        log_calls.append(kwargs)
-        return 4444
-
-    handoff_calls = []
-    monkeypatch.setattr(rag_route, "log_token_usage", fake_log_token_usage)
-    monkeypatch.setattr(
-        rag_route, "set_usage_log_id", lambda log_id: handoff_calls.append(log_id)
-    )
     monkeypatch.setattr(rag_route, "edit_tokens", lambda *a, **k: None)
+    return app
 
-    response = app.test_client().post(
+
+def _post_completion_json(app):
+    return app.test_client().post(
         "/completion.json",
         json={"chat": ["hello"], "username": "user@example.com"},
         headers={"X-API-KEY": "test-key"},
     )
 
+
+def test_completion_handler_records_usage_through_the_adoption_boundary(monkeypatch):
+    """Case A: recording succeeds.
+
+    /completion.json is the third adopter, and the first whose published
+    HTTP contract needs the persisted row id. It still supplies consumption
+    facts only; the id reaches the payload through the separate
+    request-scoped read, never as a return value of recording.
+    """
+    app = _build_completion_app(monkeypatch, {"input_tokens": 5, "output_tokens": 3})
+
+    log_calls = []
+    monkeypatch.setattr(
+        usage_recording,
+        "log_token_usage",
+        lambda **kwargs: (log_calls.append(kwargs), 4444)[1],
+    )
+    _stub_boundary_user_lookups(monkeypatch, client="coopi")
+
+    response = _post_completion_json(app)
+
     assert response.status_code == 200
+
     assert len(log_calls) == 1
-    assert log_calls[0]["service"] == "/completion.json"
-    assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]
-    assert log_calls[0]["source"] == "coopi"
-    # Slice B3: the returned id is now handed off request-locally...
-    assert handoff_calls == [4444]
-    # ...and public response exposure is unchanged - /completion.json already
-    # returned log_id before B3 and must keep doing so.
+    call = log_calls[0]
+    assert call["user_id"] == 42
+    assert call["provider"] == "test-provider"
+    assert call["model"] == "test-model"
+    assert call["service"] == "/completion.json"
+    assert call["token_input"] == 5
+    assert call["token_output"] == 3
+    # Derived behind the boundary; the route passes neither.
+    assert call["request_id"] == response.headers["X-Request-ID"]
+    assert call["source"] == "coopi"
+
+    # The pre-existing client contract, preserved verbatim.
     assert response.get_json()["log_id"] == 4444
+
+
+def test_completion_handler_omits_log_id_when_recording_fails(monkeypatch):
+    """Case B: recording fails.
+
+    The bool carries accounting success, so the response must expose no
+    log_id at all - not a stale one, not an unrelated one - while the HTTP
+    response itself stays successful.
+    """
+    app = _build_completion_app(monkeypatch, {"input_tokens": 5, "output_tokens": 3})
+
+    def boom(**kwargs):
+        raise RuntimeError("database is unreachable")
+
+    monkeypatch.setattr(usage_recording, "log_token_usage", boom)
+    _stub_boundary_user_lookups(monkeypatch, client="coopi")
+
+    response = _post_completion_json(app)
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert payload["answer"] == "an answer"
+    assert "log_id" not in payload
+
+
+def test_completion_handler_zero_token_guard_exposes_no_foreign_log_id(monkeypatch):
+    """Case C: the >0 guard prevents recording.
+
+    The guard stays route-owned, and - the point of this case - a request
+    that carries an unrelated Usage row id in request state must not leak it
+    into the payload merely because the route reads that state. The read
+    sits inside the recording-succeeded branch, so it is never reached here.
+    """
+    app = _build_completion_app(monkeypatch, {"input_tokens": 0, "output_tokens": 0})
+
+    recorded = []
+    monkeypatch.setattr(
+        usage_recording, "log_token_usage", lambda **kwargs: recorded.append(kwargs)
+    )
+
+    # Seed request state with a foreign id, as another Usage mechanism would.
+    @app.before_request
+    def _seed_foreign_usage_row():
+        set_usage_log_id(9999)
+
+    response = _post_completion_json(app)
+
+    assert response.status_code == 200
+    assert recorded == []
+    payload = response.get_json()
+    assert payload["answer"] == "an answer"
+    assert "log_id" not in payload
+
+
+def test_completion_handler_reads_log_id_only_inside_the_success_branch():
+    """Structural proof for cases B and C.
+
+    The request-state read is the accepted client-contract escape hatch, so
+    its position matters: it must be guarded by the recording result rather
+    than run unconditionally. An unguarded read would expose whatever the
+    request last registered.
+    """
+    _, handler = _handler_ast("rag.py", "completion_handler")
+
+    guarded_reads = 0
+    total_reads = 0
+    for node in ast.walk(handler):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "get_usage_log_id"
+        ):
+            total_reads += 1
+
+    for node in ast.walk(handler):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if (
+            isinstance(test, ast.Call)
+            and isinstance(test.func, ast.Name)
+            and test.func.id == "record_token_consumption"
+        ):
+            guarded_reads += sum(
+                1
+                for child in ast.walk(node)
+                if isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id == "get_usage_log_id"
+            )
+
+    assert total_reads == 1, "completion_handler should read the id exactly once"
+    assert guarded_reads == total_reads, (
+        "get_usage_log_id() in completion_handler must sit inside the "
+        "record_token_consumption() success branch"
+    )
