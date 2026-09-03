@@ -44,7 +44,7 @@ def _patch_success_dependencies(monkeypatch):
     )
     monkeypatch.setattr(documents_route, "edit_tokens", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        documents_route, "log_token_usage", lambda *args, **kwargs: None
+        documents_route, "record_token_consumption", lambda **kwargs: True
     )
     monkeypatch.setattr(documents_route.os, "getenv", lambda *args, **kwargs: None)
 
@@ -126,7 +126,9 @@ def test_compare_docs_uses_document_extraction_service_and_preserves_response(
     )
     monkeypatch.setattr(documents_route, "compare_documents", fake_compare_documents)
     monkeypatch.setattr(
-        documents_route, "log_token_usage", lambda **kwargs: log_calls.append(kwargs)
+        documents_route,
+        "record_token_consumption",
+        lambda **kwargs: log_calls.append(kwargs) or True
     )
     monkeypatch.setattr(
         documents_route,
@@ -220,8 +222,6 @@ def test_compare_docs_uses_document_extraction_service_and_preserves_response(
             "model": "gemini-2.5-flash",
             "provider": "Google",
             "service": "/compare_docs",
-            "request_id": response.headers["X-Request-ID"],
-            "source": "coopi",
         }
     ]
     assert edit_calls == [("user@example.com", -1)]
@@ -269,7 +269,9 @@ def test_compare_docs_with_zero_ocr_usage_logs_comparison_usage_once(monkeypatch
     )
     monkeypatch.setattr(documents_route, "compare_documents", fake_compare_documents)
     monkeypatch.setattr(
-        documents_route, "log_token_usage", lambda **kwargs: log_calls.append(kwargs)
+        documents_route,
+        "record_token_consumption",
+        lambda **kwargs: log_calls.append(kwargs) or True
     )
     monkeypatch.setattr(
         documents_route,
@@ -307,8 +309,6 @@ def test_compare_docs_with_zero_ocr_usage_logs_comparison_usage_once(monkeypatch
             "model": "gemini-2.5-flash",
             "provider": "Google",
             "service": "/compare_docs",
-            "request_id": response.headers["X-Request-ID"],
-            "source": "coopi",
         }
     ]
     assert edit_calls == [("user@example.com", -1)]
@@ -349,7 +349,9 @@ def test_compare_docs_context_window_error_returns_413_without_accounting(
     )
     monkeypatch.setattr(documents_route, "compare_documents", fake_compare_documents)
     monkeypatch.setattr(
-        documents_route, "log_token_usage", lambda **kwargs: log_calls.append(kwargs)
+        documents_route,
+        "record_token_consumption",
+        lambda **kwargs: log_calls.append(kwargs) or True
     )
     monkeypatch.setattr(
         documents_route,
@@ -408,7 +410,9 @@ def test_compare_docs_extraction_value_error_keeps_existing_400_mapping(
         lambda **kwargs: comparison_calls.append(kwargs),
     )
     monkeypatch.setattr(
-        documents_route, "log_token_usage", lambda **kwargs: log_calls.append(kwargs)
+        documents_route,
+        "record_token_consumption",
+        lambda **kwargs: log_calls.append(kwargs) or True
     )
     monkeypatch.setattr(
         documents_route,
@@ -450,15 +454,14 @@ def test_compare_docs_extraction_value_error_keeps_existing_400_mapping(
     assert edit_calls == []
 
 
-def test_compare_docs_hands_off_log_id_without_exposing_it(monkeypatch):
-    """Usage Duration Slice B3: /compare_docs previously discarded the
-    returned log_id entirely. It must now capture it internally and hand
-    it off via set_usage_log_id(), while the response contract - no
+def test_compare_docs_records_usage_without_exposing_a_row_id(monkeypatch):
+    """The row id is the recording boundary's alone: /compare_docs records
+    consumption and receives only a bool, and the response contract - no
     log_id field - stays exactly as before."""
     app = _make_app()
     _patch_success_dependencies(monkeypatch)
 
-    handoff_calls = []
+    recorded = []
 
     def fake_extract_document_text_with_metadata(doc_input, **kwargs):
         return {
@@ -490,11 +493,10 @@ def test_compare_docs_hands_off_log_id_without_exposing_it(monkeypatch):
         fake_extract_document_text_with_metadata,
     )
     monkeypatch.setattr(documents_route, "compare_documents", fake_compare_documents)
-    monkeypatch.setattr(documents_route, "log_token_usage", lambda **kwargs: 555)
     monkeypatch.setattr(
         documents_route,
-        "set_usage_log_id",
-        lambda log_id: handoff_calls.append(log_id),
+        "record_token_consumption",
+        lambda **kwargs: recorded.append(kwargs) or True,
     )
     monkeypatch.setattr(documents_route, "edit_tokens", lambda *a, **k: None)
 
@@ -515,19 +517,18 @@ def test_compare_docs_hands_off_log_id_without_exposing_it(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert handoff_calls == [555]
+    assert len(recorded) == 1
     assert "log_id" not in response.get_json()
 
 
-def test_compare_docs_usage_write_failure_registers_no_log_id(monkeypatch):
-    """Usage Duration Slice B3 invariant: the handoff only ever follows a
-    successful Usage INSERT. When log_token_usage() raises, /compare_docs
-    keeps its existing behavior (caught, logged, 200 preserved) and
-    set_usage_log_id() must not be called."""
+def test_compare_docs_survives_a_failed_usage_recording(monkeypatch):
+    """Accounting is observation: when recording reports failure, the
+    comparison response stays a 200, the balance is still debited, and no
+    row id surfaces."""
     app = _make_app()
     _patch_success_dependencies(monkeypatch)
 
-    handoff_calls = []
+    edit_calls = []
 
     def fake_extract_document_text_with_metadata(doc_input, **kwargs):
         return {
@@ -549,22 +550,20 @@ def test_compare_docs_usage_write_failure_registers_no_log_id(monkeypatch):
             "token_usage": {"input_tokens": 13, "output_tokens": 6, "total_tokens": 19},
         }
 
-    def raising_log_token_usage(**kwargs):
-        raise RuntimeError("db unavailable")
-
     monkeypatch.setattr(
         documents_route,
         "extract_document_text_with_metadata",
         fake_extract_document_text_with_metadata,
     )
     monkeypatch.setattr(documents_route, "compare_documents", fake_compare_documents)
-    monkeypatch.setattr(documents_route, "log_token_usage", raising_log_token_usage)
+    monkeypatch.setattr(
+        documents_route, "record_token_consumption", lambda **kwargs: False
+    )
     monkeypatch.setattr(
         documents_route,
-        "set_usage_log_id",
-        lambda log_id: handoff_calls.append(log_id),
+        "edit_tokens",
+        lambda user_email, token_delta: edit_calls.append((user_email, token_delta)),
     )
-    monkeypatch.setattr(documents_route, "edit_tokens", lambda *a, **k: None)
 
     data = {
         "prompt": "Compare these documents",
@@ -582,10 +581,9 @@ def test_compare_docs_usage_write_failure_registers_no_log_id(monkeypatch):
         headers={"X-API-KEY": "test-key", "X-USER-EMAIL": "user@example.com"},
     )
 
-    # Existing behavior preserved: the exception is caught inside
-    # compare_docs's own try/except, response stays a valid 200.
     assert response.status_code == 200
-    assert handoff_calls == []
+    assert edit_calls == [("user@example.com", -1)]
+    assert "log_id" not in response.get_json()
 
 
 # ---------------------------------------------------------------------------

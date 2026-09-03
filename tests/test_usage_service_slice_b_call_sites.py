@@ -47,7 +47,7 @@ def _find_log_token_usage_calls():
 def test_every_unmigrated_log_token_usage_call_site_passes_request_id():
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 4
+    assert len(calls) == 3
 
     for filename, call in calls:
         keywords = {kw.arg for kw in call.keywords}
@@ -59,7 +59,7 @@ def test_every_unmigrated_log_token_usage_call_site_passes_request_id():
 def test_every_unmigrated_log_token_usage_call_site_passes_source():
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 4
+    assert len(calls) == 3
 
     for filename, call in calls:
         keywords = {kw.arg for kw in call.keywords}
@@ -95,16 +95,16 @@ def _find_log_token_usage_assignments():
 def test_every_unmigrated_call_site_captures_log_id_locally():
     """Every remaining direct writer call binds the returned id.
 
-    Some previously discarded the return value (/compare_docs,
-    /audioformcompilation); all remaining direct call sites now capture it
-    internally, whether or not it is exposed publicly. Adopters that have
+    Some previously discarded the return value (/audioformcompilation);
+    all remaining direct call sites now capture it internally, whether or
+    not it is exposed publicly. Adopters that have
     moved behind the Usage boundary never see an id at all and are
     deliberately outside this count.
     """
     assignments = _find_log_token_usage_assignments()
     calls = _find_log_token_usage_calls()
 
-    assert len(assignments) == len(calls) == 4
+    assert len(assignments) == len(calls) == 3
 
 
 def test_every_unmigrated_call_site_hands_off_log_id_to_usage_request_state():
@@ -435,6 +435,7 @@ _MIGRATED_TOKEN_ADOPTERS = (
     ("reporting.py", "prompt_handler"),
     ("multimodal.py", "audio_form_compile"),
     ("rag.py", "completion_handler"),
+    ("documents.py", "compare_docs"),
 )
 
 
