@@ -46,7 +46,7 @@ def _find_log_token_usage_calls():
 def test_every_unmigrated_log_token_usage_call_site_passes_request_id():
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 6
+    assert len(calls) == 5
 
     for filename, call in calls:
         keywords = {kw.arg for kw in call.keywords}
@@ -58,7 +58,7 @@ def test_every_unmigrated_log_token_usage_call_site_passes_request_id():
 def test_every_unmigrated_log_token_usage_call_site_passes_source():
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 6
+    assert len(calls) == 5
 
     for filename, call in calls:
         keywords = {kw.arg for kw in call.keywords}
@@ -103,7 +103,7 @@ def test_every_unmigrated_call_site_captures_log_id_locally():
     assignments = _find_log_token_usage_assignments()
     calls = _find_log_token_usage_calls()
 
-    assert len(assignments) == len(calls) == 6
+    assert len(assignments) == len(calls) == 5
 
 
 def test_every_unmigrated_call_site_hands_off_log_id_to_usage_request_state():
@@ -135,7 +135,10 @@ def test_every_unmigrated_call_site_hands_off_log_id_to_usage_request_state():
         )
 
 
-def test_audio_form_compile_logs_usage_with_audioformcompilation_service(monkeypatch):
+def _build_audio_form_app(monkeypatch, token_usage):
+    """Wire an /audioformcompilation app whose only unstubbed Usage step is
+    the boundary - the mirror of :func:`_build_prompt_app` for the second
+    adopter."""
     app = Flask(__name__)
     app.config["MAUI_CONFIG"] = SimpleNamespace(
         audio_form_token_cost="1",
@@ -143,8 +146,6 @@ def test_audio_form_compile_logs_usage_with_audioformcompilation_service(monkeyp
     )
     register_request_context_hooks(app)
     app.register_blueprint(multimodal_route.multimodal_bp)
-
-    log_calls = []
 
     monkeypatch.setattr(multimodal_route, "assert_valid_api_key", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -165,21 +166,15 @@ def test_audio_form_compile_logs_usage_with_audioformcompilation_service(monkeyp
         "audioFormCompilation",
         lambda *a, **k: {
             "content": {"field": "value"},
-            "token_usage": {"input_tokens": 5, "output_tokens": 3},
+            "token_usage": token_usage,
         },
     )
-    def fake_log_token_usage(**kwargs):
-        log_calls.append(kwargs)
-        return 4242
-
-    handoff_calls = []
-    monkeypatch.setattr(multimodal_route, "log_token_usage", fake_log_token_usage)
-    monkeypatch.setattr(
-        multimodal_route, "set_usage_log_id", lambda log_id: handoff_calls.append(log_id)
-    )
     monkeypatch.setattr(multimodal_route, "edit_tokens", lambda *a, **k: None)
+    return app
 
-    response = app.test_client().post(
+
+def _post_audio_form(app):
+    return app.test_client().post(
         "/audioformcompilation",
         json={
             "name": "form-name",
@@ -190,16 +185,98 @@ def test_audio_form_compile_logs_usage_with_audioformcompilation_service(monkeyp
         headers={"X-API-KEY": "test-key", "X-USER-EMAIL": "user@example.com"},
     )
 
+
+def test_audio_form_compile_records_usage_through_the_adoption_boundary(monkeypatch):
+    """/audioformcompilation is the second adopter of the explicit Usage
+    boundary, reusing it unchanged.
+
+    The route supplies consumption facts only. request_id, source, the row
+    id and its registration are all resolved behind the boundary, so this
+    test observes them at the writer the boundary itself calls.
+    """
+    app = _build_audio_form_app(
+        monkeypatch, {"input_tokens": 5, "output_tokens": 3}
+    )
+
+    log_calls = []
+    monkeypatch.setattr(
+        usage_recording,
+        "log_token_usage",
+        lambda **kwargs: (log_calls.append(kwargs), 4242)[1],
+    )
+    handoff_calls = []
+    monkeypatch.setattr(
+        usage_recording, "set_usage_log_id", lambda log_id: handoff_calls.append(log_id)
+    )
+    _stub_boundary_user_lookups(monkeypatch, client="dino")
+
+    response = _post_audio_form(app)
+
     assert response.status_code == 200
-    assert len(log_calls) == 1
-    assert log_calls[0]["service"] == "/audioformcompilation"
-    assert log_calls[0]["request_id"] == response.headers["X-Request-ID"]
-    assert log_calls[0]["source"] == "dino"
-    # Slice B3: the returned id is now captured and handed off request-locally...
-    assert handoff_calls == [4242]
-    # ...but public response exposure is unchanged - /audioformcompilation
-    # never returned log_id before B3 and must not start now.
+    assert response.get_json() == {"field": "value"}
+    # ...and log_id exposure is unchanged: /audioformcompilation never
+    # returned one, and adopting the boundary must not start now.
     assert "log_id" not in response.get_json()
+
+    assert len(log_calls) == 1
+    call = log_calls[0]
+    assert call["user_id"] == 42
+    assert call["provider"] == "test-provider"
+    assert call["model"] == "test-model"
+    assert call["service"] == "/audioformcompilation"
+    assert call["token_input"] == 5
+    assert call["token_output"] == 3
+    # Derived behind the boundary, never supplied by this route.
+    assert call["request_id"] == response.headers["X-Request-ID"]
+    assert call["source"] == "dino"
+    # Row-id registration is the boundary's bookkeeping, still performed.
+    assert handoff_calls == [4242]
+
+
+def test_audio_form_compile_keeps_its_zero_token_guard(monkeypatch):
+    """The >0 guard stays a flow-level rule at the call site: the boundary
+    accepts 0/0, so a recorded call here would prove the guard was lost."""
+    app = _build_audio_form_app(
+        monkeypatch, {"input_tokens": 0, "output_tokens": 0}
+    )
+
+    recorded = []
+    monkeypatch.setattr(
+        usage_recording, "log_token_usage", lambda **kwargs: recorded.append(kwargs)
+    )
+
+    response = _post_audio_form(app)
+
+    assert response.status_code == 200
+    assert recorded == []
+    assert response.get_json() == {"field": "value"}
+
+
+def test_audio_form_compile_response_survives_a_usage_failure(monkeypatch):
+    """Accepted behaviour change, identical in shape to /prompt.txt: an
+    accounting failure used to escape this route as a 500. It is now
+    contained by the boundary, and the route's own token debit - which
+    previously never ran on that path - now proceeds."""
+    app = _build_audio_form_app(
+        monkeypatch, {"input_tokens": 5, "output_tokens": 3}
+    )
+
+    def boom(**kwargs):
+        raise RuntimeError("database is unreachable")
+
+    monkeypatch.setattr(usage_recording, "log_token_usage", boom)
+    _stub_boundary_user_lookups(monkeypatch, client="dino")
+
+    debits = []
+    monkeypatch.setattr(
+        multimodal_route, "edit_tokens", lambda *a: debits.append(a)
+    )
+
+    response = _post_audio_form(app)
+
+    assert response.status_code == 200
+    assert response.get_json() == {"field": "value"}
+    assert debits == [("user@example.com", -1)]
 
 
 def _build_prompt_app(monkeypatch, token_usage):
@@ -343,42 +420,94 @@ def test_prompt_handler_response_survives_a_usage_failure(monkeypatch):
     assert response.get_data(as_text=True) == "reply text"
 
 
-def test_prompt_txt_route_does_not_persist_usage_directly():
-    """Structural invariant for the migrated surface only.
+_DIRECT_USAGE_NAMES = (
+    "log_token_usage",
+    "log_usage_with_resolved_cost",
+    "set_usage_log_id",
+)
 
-    Scoped to routes/reporting.py: the other adopters are intentionally
-    unmigrated and still call the writer directly.
+# The migrated token adopters, as (route file, handler function). Scoped
+# deliberately: the remaining adopters are intentionally unmigrated and
+# still call the writer directly, so a repository-wide prohibition would be
+# wrong today. Add a row here when an adopter migrates.
+_MIGRATED_TOKEN_ADOPTERS = (
+    ("reporting.py", "prompt_handler"),
+    ("multimodal.py", "audio_form_compile"),
+)
+
+
+def _handler_ast(filename, function_name):
+    tree = ast.parse((_ROUTES_DIR / filename).read_text(), filename=filename)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == function_name:
+            return tree, node
+    raise AssertionError(f"{function_name}() not found in routes/{filename}")
+
+
+def test_migrated_token_adopters_do_not_persist_usage_directly():
+    """Structural invariant over every migrated token adopter.
+
+    Scoped to the handler function rather than the file, because
+    routes/multimodal.py still hosts the unmigrated /transcribe flow and
+    must keep its direct writer calls. A migrated handler may name none of
+    the direct Usage persistence operations.
     """
-    source = (_ROUTES_DIR / "reporting.py").read_text()
-    tree = ast.parse(source, filename="reporting.py")
+    for filename, function_name in _MIGRATED_TOKEN_ADOPTERS:
+        _, handler = _handler_ast(filename, function_name)
 
-    called = {
-        node.func.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-    assert "log_token_usage" not in called
-    assert "log_usage_with_resolved_cost" not in called
-    assert "set_usage_log_id" not in called
+        called = {
+            node.func.id
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        } | {
+            node.func.attr
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
 
-    attribute_calls = {
-        node.func.attr
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-    }
-    assert "log_token_usage" not in attribute_calls
-    assert "log_usage_with_resolved_cost" not in attribute_calls
-    assert "set_usage_log_id" not in attribute_calls
+        for name in _DIRECT_USAGE_NAMES:
+            assert name not in called, (
+                f"{function_name}() in routes/{filename} calls {name}() "
+                "directly; it must record Usage through the adoption boundary"
+            )
 
-    imported = {
-        alias.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom)
-        for alias in node.names
+        assert "record_token_consumption" in called, (
+            f"{function_name}() in routes/{filename} no longer records Usage "
+            "through record_token_consumption()"
+        )
+
+
+def test_migrated_token_adopters_import_the_adoption_boundary():
+    """Each migrated adopter's module imports the boundary.
+
+    A module hosting only migrated flows must additionally not import the
+    direct writers at all; one that still hosts an unmigrated flow keeps
+    them, and the call-level invariant above carries the guarantee.
+    """
+    hosts_unmigrated = {
+        filename
+        for filename, _ in _find_log_token_usage_calls()
     }
-    assert "log_token_usage" not in imported
-    assert "set_usage_log_id" not in imported
-    assert "record_token_consumption" in imported
+
+    for filename, _ in _MIGRATED_TOKEN_ADOPTERS:
+        tree = ast.parse((_ROUTES_DIR / filename).read_text(), filename=filename)
+        imported = {
+            alias.name
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+        }
+
+        assert "record_token_consumption" in imported, (
+            f"routes/{filename} no longer imports record_token_consumption"
+        )
+
+        if filename not in hosts_unmigrated:
+            for name in _DIRECT_USAGE_NAMES:
+                assert name not in imported, (
+                    f"routes/{filename} hosts only migrated adopters but "
+                    f"still imports {name}"
+                )
 
 
 def test_completion_handler_logs_usage_with_completion_json_service(monkeypatch):

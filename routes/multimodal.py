@@ -15,6 +15,7 @@ from utils.logging_config import get_request_id
 from utils.operational_event import build_operational_event
 from utils.usage_request_state import set_usage_log_id
 from services.audio_form_service import audioFormCompilation, audioFormPromptBuild
+from utils.usage_recording import record_token_consumption
 from routes.utils import assert_valid_api_key
 
 multimodal_bp = Blueprint("multimodal", __name__)
@@ -396,17 +397,14 @@ def audio_form_compile() -> Union[Response, tuple[Response, int]]:
     token_usage = result["token_usage"]
     user = database_pg.get_user_by_username(user_email)
     if user and (token_usage["input_tokens"] > 0 or token_usage["output_tokens"] > 0):
-        log_id = log_token_usage(
-            user_id=user["id"],
+        record_token_consumption(
+            user_id=int(user["id"]),
+            provider=llm_type,
+            model=model_name,
+            service="/audioformcompilation",
             token_input=token_usage["input_tokens"],
             token_output=token_usage["output_tokens"],
-            model=model_name,
-            provider=llm_type,
-            service="/audioformcompilation",
-            request_id=get_request_id(),
-            source=user.get("client"),
         )
-        set_usage_log_id(log_id)
 
     edit_tokens(user_email, -token_cost)
 
