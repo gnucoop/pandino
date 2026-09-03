@@ -6,11 +6,11 @@ the returned row id for duration linkage.
 
 Adopters have since migrated to the explicit Usage adoption boundary
 (utils.usage_recording) and no longer call the writer directly. The
-structural counts below therefore cover only the two call sites that remain
-unmigrated - /datachat (routes/datachat.py) and /agentchat (routes/rag.py) -
-which keep every per-call obligation. Migrated adopters never see a row id
-at all and are covered by boundary-shaped tests instead, in this module and
-in tests/test_usage_recording.py.
+structural counts below therefore cover only the one call site that remains
+unmigrated - /datachat (routes/datachat.py) - which keeps every per-call
+obligation. Migrated adopters never see a row id at all and are covered by
+boundary-shaped tests instead, in this module and in
+tests/test_usage_recording.py.
 """
 
 import ast
@@ -47,7 +47,7 @@ def _find_log_token_usage_calls():
 def test_every_unmigrated_log_token_usage_call_site_passes_request_id():
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 2
+    assert len(calls) == 1
 
     for filename, call in calls:
         keywords = {kw.arg for kw in call.keywords}
@@ -59,7 +59,7 @@ def test_every_unmigrated_log_token_usage_call_site_passes_request_id():
 def test_every_unmigrated_log_token_usage_call_site_passes_source():
     calls = _find_log_token_usage_calls()
 
-    assert len(calls) == 2
+    assert len(calls) == 1
 
     for filename, call in calls:
         keywords = {kw.arg for kw in call.keywords}
@@ -93,18 +93,17 @@ def _find_log_token_usage_assignments():
 
 
 def test_every_unmigrated_call_site_captures_log_id_locally():
-    """Every remaining direct writer call binds the returned id.
+    """The remaining direct writer call binds the returned id.
 
     Some previously discarded the return value (/audioformcompilation);
-    all remaining direct call sites now capture it internally, whether or
-    not it is exposed publicly. Adopters that have
-    moved behind the Usage boundary never see an id at all and are
-    deliberately outside this count.
+    the last direct call site captures it internally, whether or not it is
+    exposed publicly. Adopters that have moved behind the Usage boundary
+    never see an id at all and are deliberately outside this count.
     """
     assignments = _find_log_token_usage_assignments()
     calls = _find_log_token_usage_calls()
 
-    assert len(assignments) == len(calls) == 2
+    assert len(assignments) == len(calls) == 1
 
 
 def test_every_unmigrated_call_site_hands_off_log_id_to_usage_request_state():
@@ -492,6 +491,7 @@ _MIGRATED_TOKEN_ADOPTERS = (
     ("reporting.py", "prompt_handler"),
     ("multimodal.py", "audio_form_compile"),
     ("rag.py", "completion_handler"),
+    ("rag.py", "agentchat"),
     ("documents.py", "compare_docs"),
 )
 
@@ -747,6 +747,49 @@ def test_completion_handler_reads_log_id_only_inside_the_success_branch():
     assert total_reads == 1, "completion_handler should read the id exactly once"
     assert guarded_reads == total_reads, (
         "get_usage_log_id() in completion_handler must sit inside the "
+        "record_token_consumption() success branch"
+    )
+
+
+def test_agentchat_reads_log_id_only_inside_the_success_branch():
+    """The second adopter in routes/rag.py obeys the same read-back rule.
+
+    /agentchat guards recording on the accounting user being usable, so the
+    guard is a compound condition; what matters is that the read sits inside
+    the branch the recording call itself decides.
+    """
+    _, handler = _handler_ast("rag.py", "agentchat")
+
+    total_reads = sum(
+        1
+        for node in ast.walk(handler)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "get_usage_log_id"
+    )
+
+    guarded_reads = 0
+    for node in ast.walk(handler):
+        if not isinstance(node, ast.If):
+            continue
+        decides_on_recording = any(
+            isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Name)
+            and child.func.id == "record_token_consumption"
+            for child in ast.walk(node.test)
+        )
+        if decides_on_recording:
+            guarded_reads += sum(
+                1
+                for child in ast.walk(node)
+                if isinstance(child, ast.Call)
+                and isinstance(child.func, ast.Name)
+                and child.func.id == "get_usage_log_id"
+            )
+
+    assert total_reads == 1, "agentchat should read the id exactly once"
+    assert guarded_reads == total_reads, (
+        "get_usage_log_id() in agentchat must sit inside the "
         "record_token_consumption() success branch"
     )
 

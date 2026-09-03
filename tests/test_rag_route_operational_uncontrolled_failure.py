@@ -55,8 +55,8 @@ def _patch_route_boundaries(monkeypatch):
     )
     monkeypatch.setattr(rag_route, "choose_emb_model", lambda *a, **k: object())
     monkeypatch.setattr(rag_route, "MauiVectorStore", lambda *a, **k: object())
-    monkeypatch.setattr(rag_route, "log_token_usage", lambda **kwargs: 4444)
-    monkeypatch.setattr(rag_route, "set_usage_log_id", lambda log_id: None)
+    monkeypatch.setattr(rag_route, "record_token_consumption", lambda **kwargs: True)
+    monkeypatch.setattr(rag_route, "get_usage_log_id", lambda: 4444)
     monkeypatch.setattr(rag_route, "edit_tokens", lambda *a, **k: None)
 
 

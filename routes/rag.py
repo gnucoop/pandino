@@ -9,13 +9,12 @@ import infrastructure.database_pg as database_pg
 from infrastructure.database_pg import (
     edit_tokens,
     get_user_by_username,
-    log_token_usage,
 )
 from utils.logging_config import get_request_id
 from utils.operational_event import build_operational_event
 from utils.usage_attribution_state import bind_usage_attribution
 from utils.usage_recording import record_token_consumption
-from utils.usage_request_state import get_usage_log_id, set_usage_log_id
+from utils.usage_request_state import get_usage_log_id
 from infrastructure.ai import choose_emb_model
 from infrastructure.vector_store import MauiVectorStore
 from services.completion_service import complete_chat, CompletionRequest
@@ -267,38 +266,37 @@ def agentchat() -> Response | tuple[Response, int]:
 
         # === DATABASE TOKEN USAGE LOGGING ===
 
+        # The accounting-side user lookup is not a prerequisite of the agent
+        # response: a failure here skips recording and leaves the response
+        # untouched.
         try:
             user = get_user_by_username(r["username"])
-            if not user:
-                raise ValueError(f"User '{r['username']}' not found in DB")
+        except Exception as exc:
+            logger.warning(
+                "event=agentchat_usage_user_lookup_failed error_type=%s",
+                type(exc).__name__,
+            )
+            user = None
 
+        if user:
             user_id = user.get("id")
-            if not isinstance(user_id, int):
-                raise TypeError(f"Invalid user_id: {user_id}")
 
-            # Extract token usage from payload
+            # The serialized runtime reports absent token counts as None.
             token_metrics = payload.get("metrics", {}).get("token_usage", {})
-            token_input = token_metrics.get("input", 0)
-            token_output = token_metrics.get("output", 0)
+            token_input = token_metrics.get("input") or 0
+            token_output = token_metrics.get("output") or 0
 
-            # Use clean model name from earlier normalization
-            model = model_clean
-
-            # Log into PostgreSQL
-            log_id = log_token_usage(
+            if isinstance(user_id, int) and record_token_consumption(
                 user_id=user_id,
+                provider=provider,
+                model=model_clean,
+                service="/agentchat",
                 token_input=token_input,
                 token_output=token_output,
-                model=model,
-                provider=provider,
-                service="/agentchat",
-                request_id=get_request_id(),
-                source=user.get("client"),
-            )
-            set_usage_log_id(log_id)
-
-        except Exception as e:
-            logger.error("event=agentchat_token_usage_log_failed error=%s", e)
+            ):
+                # Preserve the existing response contract without exposing row identity
+                # through the recording API.
+                log_id = get_usage_log_id()
 
         # === TOKEN MANAGEMENT ===
 

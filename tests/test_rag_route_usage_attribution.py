@@ -7,8 +7,9 @@ lifecycle modules it enables are not re-tested here - they run for real in
 the end-to-end tests below, with only the database boundaries patched.
 
 /completion.json and /agentchat are asserted independently, because their
-legacy Usage failure semantics differ: the completion route lets a Usage
-lookup failure reach its blanket handler, while /agentchat swallows it.
+Usage lookup failure semantics differ: the completion route lets a Usage
+lookup failure reach its blanket handler, while /agentchat contains it and
+still answers.
 """
 
 import ast
@@ -119,14 +120,11 @@ def _patch_common(monkeypatch, captured, user=None, lookup=None):
         captured.setdefault("log_token_usage_calls", []).append(kwargs)
         return LEGACY_LOG_ID
 
-    monkeypatch.setattr(rag_route, "log_token_usage", fake_log_token_usage)
     monkeypatch.setattr(rag_route, "edit_tokens", lambda *a, **k: None)
 
-    # /completion.json now records through utils.usage_recording, which binds
-    # the writer and its identity reads by direct name import - patching
-    # rag_route does not reach them, which is exactly the point. /agentchat
-    # is still legacy and keeps using the rag_route seam above; each route
-    # exercises only one of the two, so both report into the same list.
+    # Both routes record through utils.usage_recording, which binds the
+    # writer and its identity reads by direct name import - patching
+    # rag_route does not reach them, which is exactly the point.
     monkeypatch.setattr(usage_recording, "log_token_usage", fake_log_token_usage)
     monkeypatch.setattr(
         usage_recording,
