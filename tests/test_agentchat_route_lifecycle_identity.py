@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from flask import Flask
 
 from routes import rag as rag_route
+from utils import usage_attribution
 from utils.logging_config import register_request_context_hooks
 from utils.usage_request_state import set_usage_log_id
 
@@ -63,6 +64,17 @@ def _patch_success_dependencies(monkeypatch, captured):
         return {"id": 7, "username": username, "client": "dino"}
 
     monkeypatch.setattr(rag_route, "get_user_by_username", fake_get_user_by_username)
+
+    # /agentchat's ambient Usage attribution resolves identity inside the
+    # public boundary, not in the route. Nothing here asserts on attribution,
+    # but the boundary is stubbed so this offline test never reaches a real
+    # database - the individual tests below re-patch only the route-owned
+    # Explicit Usage Recording lookup, which is the one they are about.
+    monkeypatch.setattr(
+        usage_attribution,
+        "get_user_by_username",
+        lambda username: {"id": 7, "username": username, "client": "dino"},
+    )
 
     def fake_record_token_consumption(**kwargs):
         captured.setdefault("record_calls", []).append(kwargs)

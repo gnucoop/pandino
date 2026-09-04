@@ -605,6 +605,15 @@ def test_production_attribution_binding_is_confined_to_the_approved_routes():
     joined it when DC-ADMIN1 ratified a dedicated technical accounting
     identity for /admin/rag-files/upload; that route is the ONLY approved
     admin binder, which the per-file caller assertion below pins.
+
+    routes/rag.py has since LEFT the list. /completion.json and /agentchat
+    adopted the public attribution boundary, so the route no longer names
+    the binding primitive at all - the strictest possible outcome for that
+    file. The guard is therefore not weakened but re-pointed: rag.py is
+    asserted to reference no binder, and to declare attribution through
+    ``attribute_usage_to_user`` at exactly the same two approved routes it
+    used to bind from. routes/ingestion.py and routes/admin.py migrate in
+    later slices and are unchanged here.
     """
     import subprocess
 
@@ -617,36 +626,31 @@ def test_production_attribution_binding_is_confined_to_the_approved_routes():
     )
 
     files = {line.split(":", 1)[0] for line in result.stdout.splitlines() if line}
-    assert files == {"routes/rag.py", "routes/ingestion.py", "routes/admin.py"}
+    assert files == {"routes/ingestion.py", "routes/admin.py"}
 
     with open(os.path.join(REPO_ROOT, "routes", "rag.py")) as handle:
-        tree = ast.parse(handle.read())
+        rag_source = handle.read()
+    rag_tree = ast.parse(rag_source)
 
-    binding_helpers = {
+    # No binder, and no private ambient-attribution helper, anywhere in the
+    # module - not merely absent from the two routes.
+    assert "bind_usage_attribution" not in rag_source
+    assert "_bind_embedding_usage_attribution" not in rag_source
+
+    # Attribution is declared through the public boundary, from exactly the
+    # two approved routes and nowhere else in the module.
+    rag_attributors = {
         node.name
-        for node in ast.walk(tree)
+        for node in ast.walk(rag_tree)
         if isinstance(node, ast.FunctionDef)
         and any(
             isinstance(call.func, ast.Name)
-            and call.func.id == "bind_usage_attribution"
+            and call.func.id == "attribute_usage_to_user"
             for call in ast.walk(node)
             if isinstance(call, ast.Call)
         )
     }
-    assert binding_helpers == {"_bind_embedding_usage_attribution"}
-
-    callers = {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef)
-        and any(
-            isinstance(call.func, ast.Name)
-            and call.func.id in binding_helpers
-            for call in ast.walk(node)
-            if isinstance(call, ast.Call)
-        )
-    }
-    assert callers == {"completion_handler", "agentchat"}
+    assert rag_attributors == {"completion_handler", "agentchat"}
 
     with open(os.path.join(REPO_ROOT, "routes", "ingestion.py")) as handle:
         ingestion_tree = ast.parse(handle.read())

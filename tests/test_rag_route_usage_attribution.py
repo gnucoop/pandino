@@ -20,7 +20,7 @@ from types import SimpleNamespace
 from flask import Flask
 
 from routes import rag as rag_route
-from utils import usage_recording
+from utils import usage_attribution, usage_recording
 from utils.embedding_accounting import (
     COST_PROVIDER_AUTHORITATIVE,
     EmbeddingAccountingContribution,
@@ -112,7 +112,16 @@ def _patch_common(monkeypatch, captured, user=None, lookup=None):
         captured.setdefault("lookups", []).append(username)
         return user
 
-    monkeypatch.setattr(rag_route, "get_user_by_username", lookup or default_lookup)
+    # The two lookups diverged when /completion.json and /agentchat adopted
+    # the public attribution boundary: ambient attribution now resolves
+    # identity inside utils.usage_attribution, while Explicit Usage Recording
+    # still resolves its own in the route. Both targets get the SAME callable,
+    # so the ordered ``captured["lookups"]`` trace still spans the whole
+    # request - attribution first, recording second - and the failure
+    # scenarios below can still single out the attribution attempt.
+    effective_lookup = lookup or default_lookup
+    monkeypatch.setattr(rag_route, "get_user_by_username", effective_lookup)
+    monkeypatch.setattr(usage_attribution, "get_user_by_username", effective_lookup)
     monkeypatch.setattr(rag_route, "choose_emb_model", lambda *a, **k: object())
     monkeypatch.setattr(rag_route, "MauiVectorStore", lambda *a, **k: object())
 
@@ -288,7 +297,7 @@ def test_completion_attribution_lookup_failure_does_not_block_provider(
         monkeypatch, captured, lookup=_one_shot_failing_lookup(captured, user)
     )
 
-    with caplog.at_level(logging.WARNING, logger="routes.rag"):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         response = _post_completion(_make_app())
 
     # Legacy HTTP contract intact, provider flow really reached.
@@ -314,7 +323,7 @@ def test_agentchat_attribution_lookup_failure_does_not_block_provider(
         monkeypatch, captured, lookup=_one_shot_failing_lookup(captured, user)
     )
 
-    with caplog.at_level(logging.WARNING, logger="routes.rag"):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         response = _post_agentchat(_make_app())
 
     assert response.status_code == 200
@@ -338,7 +347,7 @@ def test_attribution_diagnostic_carries_no_identity_or_payload(monkeypatch, capl
         ),
     )
 
-    with caplog.at_level(logging.WARNING, logger="routes.rag"):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         _post_completion(_make_app())
 
     message = _diagnostics(caplog)[0]
@@ -355,7 +364,7 @@ def test_user_not_found_binds_nothing_and_keeps_legacy_behaviour(monkeypatch, ca
 
     _patch_completion(monkeypatch, captured, lookup=lookup)
 
-    with caplog.at_level(logging.WARNING, logger="routes.rag"):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         response = _post_completion(_make_app())
 
     # Legacy behaviour for an unknown user: 200, no LLM Usage row, no log_id.
@@ -374,7 +383,7 @@ def test_invalid_user_id_binds_nothing(monkeypatch, caplog):
         user={"id": "not-an-int", "username": "u", "client": "coopi"},
     )
 
-    with caplog.at_level(logging.WARNING, logger="routes.rag"):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         response = _post_completion(_make_app())
 
     assert response.status_code == 200
