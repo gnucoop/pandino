@@ -30,6 +30,11 @@ from utils.logging_config import (
 
 BASE_ENV = {"DATACHAT_LOG_LEVEL": "INFO"}
 
+#: The timestamp shape UtcIsoFormatter emits: UTC ISO-8601 with an explicit
+#: +00:00 offset. Shared by the root-channel and datachat.runtime assertions
+#: below, because both channels are required to use the same formatter policy.
+_UTC_ISO_OFFSET = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?\+00:00"
+
 
 def _discard(handlers):
     """Close handlers that are about to be dropped.
@@ -275,7 +280,7 @@ def test_timestamp_is_utc_iso8601_with_offset(agent_runs_env):
     output = _capture(agent_runs_env())
     timestamp = output.split(" ", 1)[0]
 
-    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?\+00:00", timestamp), (
+    assert re.fullmatch(_UTC_ISO_OFFSET, timestamp), (
         f"unexpected timestamp: {timestamp!r}"
     )
 
@@ -387,6 +392,59 @@ def test_datachat_runtime_renders_unset_app_id_as_dash(agent_runs_env):
     output = stream.getvalue()
     assert "request_id=-" in output
     assert "app_id=-" in output
+
+
+def test_datachat_runtime_timestamp_is_utc_iso8601_with_offset(agent_runs_env):
+    """The dedicated channel must share root's formatter policy.
+
+    Asserted on a really emitted record, not on the formatter's type: what
+    matters for cross-channel correlation is the rendered timestamp, and a
+    plain logging.Formatter here would render local time with a comma-separated
+    millisecond field instead.
+    """
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        logger = bootstrap_logging()
+
+    stream = io.StringIO()
+    logger.handlers[0].setStream(stream)
+
+    logger.info("chat_start")
+
+    timestamp = stream.getvalue().split(" ", 1)[0]
+    assert re.fullmatch(_UTC_ISO_OFFSET, timestamp), (
+        f"unexpected datachat.runtime timestamp: {timestamp!r}"
+    )
+
+
+def test_datachat_runtime_and_root_render_the_same_record_layout(agent_runs_env):
+    """One authoritative format policy: no local copy of LOG_FORMAT."""
+    with patch.dict(os.environ, agent_runs_env(), clear=True):
+        runtime_logger = bootstrap_logging()
+
+    root_stream = io.StringIO()
+    _marker_handlers()[0].setStream(root_stream)
+    runtime_stream = io.StringIO()
+    runtime_logger.handlers[0].setStream(runtime_stream)
+
+    # Bound to a name rather than called on logging.getLogger(...) directly, so
+    # this probe does not add an A1b-chained violation to the registries in
+    # tests/logging_declared_exceptions.py.
+    root_probe = logging.getLogger("layout.probe")
+
+    tokens = set_request_context(request_id="abc123", app_id="dino")
+    try:
+        root_probe.warning("LAYOUT_MARKER")
+        runtime_logger.warning("LAYOUT_MARKER")
+    finally:
+        reset_request_context(tokens)
+
+    def _shape(line):
+        # Drop the timestamp and the logger name, the only fields that legitimately
+        # differ between the two channels for the same event.
+        fields = line.strip().split(" ")
+        return [fields[1]] + fields[3:]
+
+    assert _shape(root_stream.getvalue()) == _shape(runtime_stream.getvalue())
 
 
 def test_datachat_runtime_repeated_bootstrap_keeps_single_handler_and_filter(
