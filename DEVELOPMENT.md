@@ -149,8 +149,7 @@ pandino/
 ├── utils/
 │   ├── runtime_logging.py      #   datachat.runtime logger (stdout)
 │   ├── agent_logging.py        #   Structured JSON logger → logs/agent_runs.log
-│   ├── agent_serialization.py  #   Smolagents RunResult → JSON payload
-│   └── split_message.py        #   WhatsApp-style message chunking
+│   └── agent_serialization.py  #   Smolagents RunResult → JSON payload
 │
 ├── templates/admin/            # Jinja2 templates for the admin web UI
 │   ├── base.html login.html dashboard.html users.html edit_user.html
