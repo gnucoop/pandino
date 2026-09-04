@@ -606,14 +606,21 @@ def test_production_attribution_binding_is_confined_to_the_approved_routes():
     identity for /admin/rag-files/upload; that route is the ONLY approved
     admin binder, which the per-file caller assertion below pins.
 
-    routes/rag.py has since LEFT the list. /completion.json and /agentchat
-    adopted the public attribution boundary, so the route no longer names
-    the binding primitive at all - the strictest possible outcome for that
-    file. The guard is therefore not weakened but re-pointed: rag.py is
-    asserted to reference no binder, and to declare attribution through
-    ``attribute_usage_to_user`` at exactly the same two approved routes it
-    used to bind from. routes/ingestion.py and routes/admin.py migrate in
-    later slices and are unchanged here.
+    routes/rag.py and routes/ingestion.py have since LEFT the list, as
+    /completion.json, /agentchat and /storeragfile adopted the public
+    attribution boundary; neither module names the binding primitive at all
+    any more - the strictest possible outcome for those files. The guard is
+    therefore not weakened but re-pointed: each is asserted to reference no
+    binder and no private ambient-attribution helper, and to declare
+    attribution through the public boundary at exactly the routes it used
+    to bind from.
+
+    /storeragfile is pinned to all three of its ratified intents, because
+    the risk in that route is not that attribution disappears but that its
+    branches collapse: the legacy fallback and an explicit ``client="dino"``
+    must keep declaring different things. routes/admin.py migrates in a
+    later slice and is unchanged here, so direct binder ownership survives
+    only there.
     """
     import subprocess
 
@@ -626,7 +633,7 @@ def test_production_attribution_binding_is_confined_to_the_approved_routes():
     )
 
     files = {line.split(":", 1)[0] for line in result.stdout.splitlines() if line}
-    assert files == {"routes/ingestion.py", "routes/admin.py"}
+    assert files == {"routes/admin.py"}
 
     with open(os.path.join(REPO_ROOT, "routes", "rag.py")) as handle:
         rag_source = handle.read()
@@ -653,20 +660,33 @@ def test_production_attribution_binding_is_confined_to_the_approved_routes():
     assert rag_attributors == {"completion_handler", "agentchat"}
 
     with open(os.path.join(REPO_ROOT, "routes", "ingestion.py")) as handle:
-        ingestion_tree = ast.parse(handle.read())
+        ingestion_source = handle.read()
+    ingestion_tree = ast.parse(ingestion_source)
 
-    ingestion_binders = {
-        node.name
+    assert "bind_usage_attribution" not in ingestion_source
+    assert "_bind_embedding_usage_attribution" not in ingestion_source
+
+    # Exactly the three public intents /storeragfile's branches require,
+    # declared from the single route-owned decision point.
+    ingestion_intents = {
+        (node.name, call.func.id)
         for node in ast.walk(ingestion_tree)
         if isinstance(node, ast.FunctionDef)
-        and any(
-            isinstance(call.func, ast.Name)
-            and call.func.id == "bind_usage_attribution"
-            for call in ast.walk(node)
-            if isinstance(call, ast.Call)
-        )
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id
+        in {
+            "attribute_usage_to_user",
+            "attribute_usage_to_policy",
+            "declare_usage_unattributed",
+        }
     }
-    assert ingestion_binders == {"_bind_embedding_usage_attribution"}
+    assert ingestion_intents == {
+        ("_attribute_ingestion_request", "attribute_usage_to_user"),
+        ("_attribute_ingestion_request", "attribute_usage_to_policy"),
+        ("_attribute_ingestion_request", "declare_usage_unattributed"),
+    }
 
     with open(os.path.join(REPO_ROOT, "routes", "admin.py")) as handle:
         admin_tree = ast.parse(handle.read())

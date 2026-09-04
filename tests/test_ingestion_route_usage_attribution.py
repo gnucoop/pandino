@@ -25,6 +25,7 @@ import pytest
 from flask import Flask
 
 from routes import ingestion as ingestion_route
+from utils import usage_attribution
 from utils.logging_config import register_request_context_hooks
 from utils.usage_attribution_state import get_usage_attribution
 
@@ -71,7 +72,11 @@ def _patch(monkeypatch, captured, user=None, lookup=None):
             captured.setdefault("lookups", []).append(username)
             return user
 
-    monkeypatch.setattr(ingestion_route, "get_user_by_username", lookup)
+    # The ambient attribution lookup moved with the migration: /storeragfile
+    # no longer resolves an identity itself, so the only owner of this
+    # callable is now utils.usage_attribution. Patching the route module
+    # instead would leave the real lookup live and prove nothing.
+    monkeypatch.setattr(usage_attribution, "get_user_by_username", lookup)
     monkeypatch.setattr(
         ingestion_route, "dino_authenticate", lambda *a, **k: None
     )
@@ -143,7 +148,13 @@ def test_explicit_non_dino_client_binds_the_real_authenticated_user(monkeypatch)
 
 
 def test_legacy_dino_fallback_binds_the_technical_accounting_identity(monkeypatch):
-    """No client field at all: the one path allowed the technical identity."""
+    """No client field at all: the one path allowed the technical identity.
+
+    The route names only USAGE_POLICY_LEGACY_DINO_INGESTION; the
+    provisioned username, its config key and the lookup that resolves it
+    all live inside utils.usage_attribution, which is why the lookup trace
+    below is captured through that module and not through the route.
+    """
     captured = {}
     _patch(
         monkeypatch,
@@ -211,7 +222,15 @@ def test_attribution_is_bound_before_process_rag_file_runs(monkeypatch):
 def test_explicit_dino_binds_nothing_and_never_trusts_its_user_email(
     monkeypatch, caplog
 ):
-    """Explicit Dino is not the legacy fallback and has no usable identity."""
+    """Explicit Dino is not the legacy fallback and has no usable identity.
+
+    The route declares ``declare_usage_unattributed()`` here, whose whole
+    observable contract is negative: nothing bound, no technical-identity
+    lookup, no ambient lookup of the unverified userEmail, and - the
+    property that separates a deliberate absence from every degradation
+    path - no diagnostic at all. Capture is left unfiltered so a record
+    from any logger would surface.
+    """
     captured = {}
     _patch(
         monkeypatch,
@@ -219,7 +238,7 @@ def test_explicit_dino_binds_nothing_and_never_trusts_its_user_email(
         user={"id": REAL_USER_ID, "username": REAL_USER_EMAIL, "client": "coopi"},
     )
 
-    with caplog.at_level(logging.WARNING, logger="routes.ingestion"):
+    with caplog.at_level(logging.WARNING):
         response = _post(_make_app(), client="dino", userEmail=REAL_USER_EMAIL)
 
     assert response.status_code == 200
@@ -240,7 +259,7 @@ def test_legacy_fallback_without_configuration_is_the_off_switch(monkeypatch, ca
     _patch(monkeypatch, captured, user={"id": TECHNICAL_USER_ID, "client": "dino"})
     app = _make_app(_config(dino_legacy_usage_username=None))
 
-    with caplog.at_level(logging.WARNING, logger="routes.ingestion"):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         response = _post(app)
 
     assert response.status_code == 200
@@ -259,7 +278,7 @@ def test_user_not_found_binds_nothing_and_leaves_ingestion_unchanged(
     captured = {}
     _patch(monkeypatch, captured, user=None)
 
-    with caplog.at_level(logging.WARNING, logger="routes.ingestion"):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         response = _post(_make_app(), client="coopi", userEmail=REAL_USER_EMAIL)
 
     assert response.status_code == 200
@@ -279,7 +298,7 @@ def test_invalid_user_id_binds_nothing(monkeypatch, caplog):
         user={"id": "not-an-int", "username": REAL_USER_EMAIL, "client": "coopi"},
     )
 
-    with caplog.at_level(logging.WARNING, logger="routes.ingestion"):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         response = _post(_make_app(), client="coopi", userEmail=REAL_USER_EMAIL)
 
     assert response.status_code == 200
@@ -301,7 +320,7 @@ def test_lookup_failure_binds_nothing_and_never_fails_the_request(
 
     _patch(monkeypatch, captured, lookup=failing_lookup)
 
-    with caplog.at_level(logging.WARNING, logger="routes.ingestion"):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         response = _post(_make_app(), client="coopi", userEmail=REAL_USER_EMAIL)
 
     assert response.status_code == 200
@@ -322,7 +341,7 @@ def test_attribution_diagnostic_carries_no_identity_or_payload(monkeypatch, capl
 
     _patch(monkeypatch, captured, lookup=failing_lookup)
 
-    with caplog.at_level(logging.WARNING, logger="routes.ingestion"):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         _post(_make_app(), client="coopi", userEmail=REAL_USER_EMAIL)
 
     message = _diagnostics(caplog)[0]
@@ -343,7 +362,7 @@ def test_technical_username_never_appears_in_the_fallback_diagnostic(
     captured = {}
     _patch(monkeypatch, captured, user=None)
 
-    with caplog.at_level(logging.WARNING, logger="routes.ingestion"):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         response = _post(_make_app())
 
     assert response.status_code == 200
@@ -443,8 +462,8 @@ def test_processing_failure_status_codes_are_unchanged(monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def test_route_binds_attribution_but_never_persists_usage_itself():
-    """Persistence stays lifecycle-owned; the route only binds."""
+def test_route_declares_attribution_but_never_persists_usage_itself():
+    """Persistence stays lifecycle-owned; the route only declares intent."""
     import os
 
     path = os.path.join(
@@ -454,6 +473,8 @@ def test_route_binds_attribution_but_never_persists_usage_itself():
     with open(path) as handle:
         source = handle.read()
 
-    assert "bind_usage_attribution" in source
+    assert "bind_usage_attribution" not in source
+    assert "_bind_embedding_usage_attribution" not in source
+    assert "attribute_usage_to_policy" in source
     assert "log_resolved_cost_usage_batch" not in source
     assert "register_usage_log_id" not in source
