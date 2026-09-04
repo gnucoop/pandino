@@ -613,23 +613,18 @@ def test_admin_upload_is_the_only_attributing_admin_route():
     guard cannot be satisfied by an incidental early return in a route
     test.
 
-    This replaces the former ``test_admin_upload_flow_binds_no_attribution``
-    - and before that the admin half of
-    ``test_ingestion_and_admin_upload_flows_bind_no_attribution`` - which
-    asserted that routes/admin.py bound nothing at all. DC-ADMIN1 ratified a
-    dedicated technical accounting identity for /admin/rag-files/upload, so
-    that route moved inside the policy boundary exactly as /storeragfile did
-    before it. The guard is narrowed rather than dropped: the admin surface
-    is large, and every OTHER admin route must stay out. Its runtime
-    behaviour lives in tests/test_admin_route_usage_attribution.py.
+    DC-ADMIN1 ratified a dedicated technical accounting identity for
+    /admin/rag-files/upload, which puts that one route inside the policy
+    boundary. The admin surface is large, so the invariant worth pinning is
+    narrow: exactly one admin route declares attribution and every other one
+    stays out. Its runtime behaviour lives in
+    tests/test_admin_route_usage_attribution.py.
 
-    The admin upload has since migrated to the public boundary, so what the
-    module is scanned for is the declared intent rather than the binding
-    primitive; the private module-local binder is now asserted absent. The
-    identity-safety assertions survive unchanged in substance: the
-    configuration attribute naming the provisioned identity moved into
-    utils.usage_attribution, so routes/admin.py must no longer mention it at
-    all - a stronger statement than the former ``in source``.
+    The module is scanned for the declared intent rather than the binding
+    primitive, since mechanics belong to utils.usage_attribution. That
+    ownership is what makes the identity-safety assertions absolute: the
+    configuration attribute naming the provisioned identity lives at the
+    boundary, so routes/admin.py must not mention it at all.
     """
     with open(os.path.join(REPO_ROOT, "routes/admin.py")) as handle:
         source = handle.read()

@@ -72,10 +72,10 @@ def _patch(monkeypatch, captured, user=None, lookup=None):
             captured.setdefault("lookups", []).append(username)
             return user
 
-    # The ambient attribution lookup moved with the migration: /storeragfile
-    # no longer resolves an identity itself, so the only owner of this
-    # callable is now utils.usage_attribution. Patching the route module
-    # instead would leave the real lookup live and prove nothing.
+    # /storeragfile does not resolve an identity itself:
+    # utils.usage_attribution is the sole owner of this callable, so it is
+    # the only honest patch point. Patching the route module instead would
+    # leave the real lookup live and prove nothing.
     monkeypatch.setattr(usage_attribution, "get_user_by_username", lookup)
     monkeypatch.setattr(
         ingestion_route, "dino_authenticate", lambda *a, **k: None
@@ -199,7 +199,14 @@ def test_empty_and_absent_client_both_take_the_legacy_fallback(
 
 
 def test_attribution_is_bound_before_process_rag_file_runs(monkeypatch):
-    """The binding invariant: every contribution is produced inside the call."""
+    """The binding invariant: every contribution is produced inside the call.
+
+    Asserted on observed runtime order, not on source layout: the
+    attribution the fake ``process_rag_file`` can see is the one bound
+    before it ran. The bound value is asserted in full, so a bind that
+    happens in time but carries the wrong identity, service or source
+    fails here too.
+    """
     captured = {}
     _patch(
         monkeypatch,
@@ -211,7 +218,54 @@ def test_attribution_is_bound_before_process_rag_file_runs(monkeypatch):
 
     assert response.status_code == 200
     assert captured["process_called"] is True
-    assert captured["attribution_at_process"] is not None
+
+    attribution = captured["attribution_at_process"]
+    assert attribution is not None
+    assert attribution.user_id == REAL_USER_ID
+    assert attribution.service == "/storeragfile"
+    assert attribution.source == "coopi"
+
+
+def test_attribution_precedes_file_and_url_eligibility(monkeypatch):
+    """/storeragfile attributes on authentication, not on eligibility.
+
+    The route's ratified position is auth -> attribution -> file/url
+    eligibility, which is deliberately NOT the admin upload's order
+    (validation first). Pinning it needs a request that passes
+    authentication and then fails eligibility: attribution is still bound,
+    even though nothing will ever be embedded.
+
+    Read after the response through an ``after_request`` hook, because the
+    request context - and with it the bound attribution - is gone by the
+    time the test client returns.
+    """
+    captured = {}
+    _patch(
+        monkeypatch,
+        captured,
+        user={"id": REAL_USER_ID, "username": REAL_USER_EMAIL, "client": "coopi"},
+    )
+
+    app = _make_app()
+
+    @app.after_request
+    def _capture(response):
+        captured["attribution_at_response"] = get_usage_attribution()
+        return response
+
+    response = _post(
+        app, client="coopi", userEmail=REAL_USER_EMAIL, file=(io.BytesIO(b""), "")
+    )
+
+    assert response.status_code == 400
+    assert response.get_data(as_text=True) == "File not provided"
+    assert captured.get("process_called") is None
+
+    attribution = captured["attribution_at_response"]
+    assert attribution is not None
+    assert attribution.user_id == REAL_USER_ID
+    assert attribution.service == "/storeragfile"
+    assert attribution.source == "coopi"
 
 
 # --------------------------------------------------------------------------

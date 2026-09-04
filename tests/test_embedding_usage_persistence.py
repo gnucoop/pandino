@@ -600,13 +600,11 @@ def test_production_attribution_binding_is_confined_to_the_approved_routes():
     accidental new binder anywhere fails here rather than silently widening
     the policy boundary.
 
-    Every approved adopter has now migrated. routes/rag.py and
-    routes/ingestion.py left the list in earlier slices, and routes/admin.py
-    was the last direct binder: with /admin/rag-files/upload adopting the
-    public boundary, the allowed set is empty. The guard is therefore not
-    weakened but re-pointed - each module is asserted to reference no binder
-    and no private ambient-attribution helper, and to declare attribution
-    through the public boundary at exactly the routes it used to bind from.
+    The allowed set is empty: every approved adopter declares attribution
+    through the public boundary, so no production route owns binding
+    mechanics. Each adopter module is therefore asserted to reference
+    neither the binding primitive nor a private ambient-attribution helper,
+    and to declare attribution from exactly its approved routes.
 
     /storeragfile is pinned to all three of its ratified intents, because
     the risk in that route is not that attribution disappears but that its

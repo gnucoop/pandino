@@ -15,13 +15,13 @@ the one the ratified technical policy provisions. Neither the admin session
 username nor ``config.admin.username`` may ever reach a ``users`` lookup,
 and absent configuration is the off-switch.
 
-Since the migration to the public boundary the route declares only
-``attribute_usage_to_policy(policy=USAGE_POLICY_ADMIN_RAG_INGESTION)``. The
-observable behaviour asserted here is unchanged and deliberately still
-asserted end to end through the route, because it is the route's declared
-intent - not the boundary's internals - that these tests protect: the
-mechanics behind it now live in utils.usage_attribution, which is why the
-lookup patch and the diagnostic logger both name that module.
+The route declares only
+``attribute_usage_to_policy(policy=USAGE_POLICY_ADMIN_RAG_INGESTION)``, and
+the behaviour is deliberately asserted end to end through the route,
+because it is the route's declared intent - not the boundary's internals -
+that these tests protect. The mechanics behind the declaration belong to
+utils.usage_attribution, which is why the lookup patch and the diagnostic
+logger both name that module.
 """
 
 import io
@@ -86,11 +86,10 @@ def _patch(monkeypatch, captured, user=None, lookup=None):
             captured.setdefault("lookups", []).append(username)
             return user
 
-    # The ambient attribution lookup moved with the migration: the admin
-    # upload no longer resolves the technical identity itself, so the only
-    # owner of this callable is now utils.usage_attribution. Patching the
-    # route module instead would leave the real lookup live and prove
-    # nothing.
+    # The admin upload does not resolve the technical identity itself:
+    # utils.usage_attribution is the sole owner of this callable, so it is
+    # the only honest patch point. Patching the route module instead would
+    # leave the real lookup live and prove nothing.
     monkeypatch.setattr(usage_attribution, "get_user_by_username", lookup)
 
     def fake_process_rag_file(*args, **kwargs):
@@ -406,9 +405,9 @@ def test_route_declares_the_technical_policy_and_owns_no_mechanics():
     assert "attribute_usage_to_policy" in source
     assert "USAGE_POLICY_ADMIN_RAG_INGESTION" in source
 
-    # None of the migrated-away mechanics: the binder, the private ambient
-    # helper, the configuration attribute naming the provisioned identity,
-    # and the admin session identity as an attribution key.
+    # None of the mechanics the boundary owns: the binder, a private
+    # ambient helper, the configuration attribute naming the provisioned
+    # identity, and the admin session identity as an attribution key.
     assert "bind_usage_attribution" not in source
     assert "_bind_embedding_usage_attribution" not in source
     assert "admin_rag_usage_username" not in source
