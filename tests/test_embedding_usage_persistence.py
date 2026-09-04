@@ -12,6 +12,7 @@ consumes them (the batch writer, which is the only DB boundary).
 import ast
 import logging
 import os
+import time
 from unittest.mock import patch
 
 import pytest
@@ -440,21 +441,61 @@ def test_sequential_requests_share_no_state():
 
 
 def _order_test_app():
-    """An app wired with the exact production registration order."""
-    from utils.embedding_accounting_lifecycle import register_embedding_accounting_hooks
+    """An app wired through the exact production composition entry point.
+
+    Every hook whose interleaving matters arrives via the composition
+    boundary main.py uses, so these tests observe whatever order that
+    boundary really produces; request context stays explicit here exactly
+    as in bootstrap.
+    """
     from utils.logging_config import register_request_context_hooks
-    from utils.request_duration import register_request_duration_hooks
-    from utils.usage_duration_finalization import (
-        register_usage_duration_finalization_hooks,
-    )
+    from utils.usage_lifecycle import register_usage_lifecycle_hooks
 
     app = Flask(__name__)
     register_request_context_hooks(app)
-    register_usage_duration_finalization_hooks(app)
-    register_embedding_usage_persistence_hooks(app)
-    register_request_duration_hooks(app)
-    register_embedding_accounting_hooks(app)
+    register_usage_lifecycle_hooks(app)
     return app
+
+
+def test_effective_before_request_order_starts_the_timer_before_the_sink_binds():
+    """Prove the real before_request order, not the source order.
+
+    Flask runs ``before_request`` FIFO, so the composition boundary's
+    registration order decides this. The sink bind must fall *outside* the
+    interval ``duration_ms`` measures: the timer starts first, so the
+    accumulator creation and sink swap happen after the clock is already
+    running from a fixed reference. Asserted by tracing the two hooks'
+    real entry points rather than their registration.
+    """
+    order = []
+    app = _order_test_app()
+
+    original_perf_counter = time.perf_counter
+
+    def _tracking_perf_counter():
+        order.append("timer")
+        return original_perf_counter()
+
+    from utils import embedding_accounting_lifecycle as lifecycle_module
+
+    original_get = lifecycle_module.get_embedding_accumulator
+
+    def _tracking_get(*args, **kwargs):
+        order.append("sink")
+        return original_get(*args, **kwargs)
+
+    @app.route("/ping")
+    def ping():
+        return "pong"
+
+    with patch("utils.request_duration.time.perf_counter", _tracking_perf_counter), \
+            patch.object(lifecycle_module, "get_embedding_accumulator", _tracking_get):
+        assert app.test_client().get("/ping").status_code == 200
+
+    # First timer call is the start; the sink bind must follow it.
+    assert order[0] == "timer"
+    assert "sink" in order
+    assert order.index("timer") < order.index("sink")
 
 
 def test_effective_after_request_order_is_duration_then_persistence_then_finalizer():
@@ -560,36 +601,6 @@ def test_teardown_order_keeps_the_accumulator_and_request_id_readable():
 
     assert seen["entries"] == 1
     assert seen["request_id"] != CONTEXT_UNSET
-
-
-def test_main_registers_the_hooks_in_the_required_order():
-    """main.py's registration order is the contract the tests above assume.
-
-    Asserted on the parsed module rather than on a live import, which would
-    require the full runtime config and a database; the execution-order
-    tests above prove what this order actually produces.
-    """
-    with open(os.path.join(REPO_ROOT, "main.py"), encoding="utf-8") as handle:
-        tree = ast.parse(handle.read())
-
-    expected = [
-        "register_request_context_hooks",
-        "register_usage_duration_finalization_hooks",
-        "register_embedding_usage_persistence_hooks",
-        "register_request_duration_hooks",
-        "register_embedding_accounting_hooks",
-        "register_operational_persistence",
-    ]
-
-    called = [
-        node.func.id
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id in set(expected)
-    ]
-
-    assert called == expected
 
 
 def test_production_attribution_binding_is_confined_to_the_approved_routes():

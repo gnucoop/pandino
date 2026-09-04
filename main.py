@@ -5,10 +5,6 @@ import os
 # Logging must be configured before any other runtime effect.
 from utils.logging_config import bootstrap_logging, register_request_context_hooks
 from utils.operational_persistence import register_operational_persistence
-from utils.request_duration import register_request_duration_hooks
-from utils.usage_duration_finalization import (
-    register_usage_duration_finalization_hooks,
-)
 
 DATACHAT_RUNTIME_LOGGER = bootstrap_logging()
 
@@ -28,12 +24,7 @@ import matplotlib  # noqa: E402
 import infrastructure.database_pg as database_pg  # noqa: E402
 import infrastructure.vector_store as vector_store  # noqa: E402
 from config import load_config, AppConfig  # noqa: E402
-from utils.embedding_accounting_lifecycle import (  # noqa: E402
-    register_embedding_accounting_hooks,
-)
-from utils.embedding_usage_persistence import (  # noqa: E402
-    register_embedding_usage_persistence_hooks,
-)
+from utils.usage_lifecycle import register_usage_lifecycle_hooks  # noqa: E402
 from routes.system import system_bp  # noqa: E402
 from routes.auth import auth_bp  # noqa: E402
 from routes.users import users_bp  # noqa: E402
@@ -59,17 +50,10 @@ vector_store.init(config)  # Init vector store layer config
 # Initialize the Flask application
 app = Flask(__name__)
 register_request_context_hooks(app)  # Bind a request_id for every request
-register_usage_duration_finalization_hooks(
+register_usage_lifecycle_hooks(
     app
-)  # Persist Usage duration once B2 finalizes it (must register before B2's hooks: after_request runs LIFO)
-register_embedding_usage_persistence_hooks(
-    app
-)  # Persist embedding consumption as Usage rows (must register after the duration
-#    finalizer and before the request timer: after_request runs LIFO)
-register_request_duration_hooks(app)  # Time every request, once per request
-register_embedding_accounting_hooks(
-    app
-)  # Bind the embedding-accounting sink over a per-request accumulator
+)  # Register the Usage lifecycle hooks, request timer included, in their
+#    required order (must register after the request-context hooks)
 register_operational_persistence(
     app
 )  # Attach the Operational Persistence consumer to root logging

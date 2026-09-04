@@ -230,9 +230,11 @@ def register_embedding_usage_persistence_hooks(app) -> None:
     registered *after* the Usage duration finalizer (whose updates must see
     these row ids) and *before* the request-duration timer (whose finalized
     value those updates need). Teardown is likewise LIFO, so this must be
-    registered after the request-context hooks (whose ``request_id`` is
-    still needed here) and before the embedding-accounting hooks (whose
-    sink unbinding must not precede this read of the accumulator).
+    registered after the request-context hooks, whose ``request_id`` the
+    fallback still needs. The capture sink may already be unbound by then,
+    which costs the fallback nothing: contributions live on the
+    ``flask.g`` accumulator, not behind the sink, so everything captured
+    during the request stays readable here.
 
     ``after_request`` is the primary seam; ``teardown_request`` is a
     fallback for requests where an exception propagated and

@@ -27,18 +27,11 @@ from utils.embedding_accounting import (
     ORIGIN_PROVIDER_REPORTED,
     QUANTITY_UNIT_INPUT_TOKENS,
 )
-from utils.embedding_accounting_lifecycle import register_embedding_accounting_hooks
 from utils.embedding_accounting_sink import get_embedding_accounting_sink
 from utils.embedding_operation_context import OPERATION_QUERY
-from utils.embedding_usage_persistence import (
-    register_embedding_usage_persistence_hooks,
-)
 from utils.logging_config import register_request_context_hooks
-from utils.request_duration import register_request_duration_hooks
 from utils.usage_attribution_state import get_usage_attribution
-from utils.usage_duration_finalization import (
-    register_usage_duration_finalization_hooks,
-)
+from utils.usage_lifecycle import register_usage_lifecycle_hooks
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -80,18 +73,16 @@ def _config():
 def _make_app(full_lifecycle=False):
     """A throwaway app carrying the rag blueprint.
 
-    ``full_lifecycle`` additionally registers the production hook chain, in
-    main.py's order, so the end-to-end tests exercise the real
-    accumulator -> attribution -> persistence -> duration path.
+    ``full_lifecycle`` additionally registers the production hook chain,
+    through main.py's own composition entry point, so the end-to-end tests
+    exercise the real accumulator -> attribution -> persistence -> duration
+    path.
     """
     app = Flask(__name__)
     app.config["MAUI_CONFIG"] = _config()
     register_request_context_hooks(app)
     if full_lifecycle:
-        register_usage_duration_finalization_hooks(app)
-        register_embedding_usage_persistence_hooks(app)
-        register_request_duration_hooks(app)
-        register_embedding_accounting_hooks(app)
+        register_usage_lifecycle_hooks(app)
     app.register_blueprint(rag_route.rag_bp)
     return app
 
