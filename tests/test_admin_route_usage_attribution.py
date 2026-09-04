@@ -11,9 +11,17 @@ established one-attribution-file-per-route-family organisation.
 
 The property that gives this route its own file is the identity boundary:
 the admin session authenticates the *actor*, but the accounting identity is
-selected exclusively by ``admin_rag_usage_username``. Neither the admin
-session username nor ``config.admin.username`` may ever reach a ``users``
-lookup, and absent configuration is the off-switch.
+the one the ratified technical policy provisions. Neither the admin session
+username nor ``config.admin.username`` may ever reach a ``users`` lookup,
+and absent configuration is the off-switch.
+
+Since the migration to the public boundary the route declares only
+``attribute_usage_to_policy(policy=USAGE_POLICY_ADMIN_RAG_INGESTION)``. The
+observable behaviour asserted here is unchanged and deliberately still
+asserted end to end through the route, because it is the route's declared
+intent - not the boundary's internals - that these tests protect: the
+mechanics behind it now live in utils.usage_attribution, which is why the
+lookup patch and the diagnostic logger both name that module.
 """
 
 import io
@@ -23,6 +31,7 @@ from types import SimpleNamespace
 from flask import Flask
 
 from routes import admin as admin_route
+from utils import usage_attribution
 from utils.logging_config import register_request_context_hooks
 from utils.usage_attribution_state import get_usage_attribution
 
@@ -77,7 +86,12 @@ def _patch(monkeypatch, captured, user=None, lookup=None):
             captured.setdefault("lookups", []).append(username)
             return user
 
-    monkeypatch.setattr(admin_route, "get_user_by_username", lookup)
+    # The ambient attribution lookup moved with the migration: the admin
+    # upload no longer resolves the technical identity itself, so the only
+    # owner of this callable is now utils.usage_attribution. Patching the
+    # route module instead would leave the real lookup live and prove
+    # nothing.
+    monkeypatch.setattr(usage_attribution, "get_user_by_username", lookup)
 
     def fake_process_rag_file(*args, **kwargs):
         captured.setdefault("order", []).append("process_rag_file")
@@ -192,7 +206,7 @@ def test_unconfigured_identity_binds_nothing_and_keeps_upload_working(
     _patch(monkeypatch, captured, user={"id": TECHNICAL_USER_ID})
     app = _make_app(_config(admin_rag_usage_username=None))
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         response = _post(app)
 
     assert captured["attribution_at_process"] is None
@@ -211,7 +225,7 @@ def test_user_not_found_binds_nothing_and_upload_continues(monkeypatch, caplog):
     captured = {}
     _patch(monkeypatch, captured, user=None)
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         response = _post(_make_app())
 
     assert captured["attribution_at_process"] is None
@@ -227,7 +241,7 @@ def test_invalid_user_id_binds_nothing_and_upload_continues(monkeypatch, caplog)
     captured = {}
     _patch(monkeypatch, captured, user={"username": TECHNICAL_USERNAME, "id": None})
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         response = _post(_make_app())
 
     assert captured["attribution_at_process"] is None
@@ -250,7 +264,7 @@ def test_lookup_failure_binds_nothing_and_does_not_block_the_upload(
 
     _patch(monkeypatch, captured, lookup=failing_lookup)
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         response = _post(_make_app())
 
     assert captured["attribution_at_process"] is None
@@ -353,7 +367,7 @@ def test_diagnostic_carries_no_identity_or_payload(monkeypatch, caplog):
         },
     )
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
         _post(_make_app())
 
     diagnostics = _diagnostics(caplog)
@@ -371,3 +385,31 @@ def test_diagnostic_carries_no_identity_or_payload(monkeypatch, caplog):
         "not-an-int",
     ):
         assert forbidden not in message
+
+
+# --------------------------------------------------------------------------
+# guards
+# --------------------------------------------------------------------------
+
+
+def test_route_declares_the_technical_policy_and_owns_no_mechanics():
+    """The route names an intent; every mechanism stayed at the boundary."""
+    import os
+
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "routes/admin.py",
+    )
+    with open(path) as handle:
+        source = handle.read()
+
+    assert "attribute_usage_to_policy" in source
+    assert "USAGE_POLICY_ADMIN_RAG_INGESTION" in source
+
+    # None of the migrated-away mechanics: the binder, the private ambient
+    # helper, the configuration attribute naming the provisioned identity,
+    # and the admin session identity as an attribution key.
+    assert "bind_usage_attribution" not in source
+    assert "_bind_embedding_usage_attribution" not in source
+    assert "admin_rag_usage_username" not in source
+    assert "attribute_usage_to_user" not in source

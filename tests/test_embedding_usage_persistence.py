@@ -593,34 +593,29 @@ def test_main_registers_the_hooks_in_the_required_order():
 
 
 def test_production_attribution_binding_is_confined_to_the_approved_routes():
-    """Only /completion.json, /agentchat, /storeragfile and the admin upload.
+    """No production route binds attribution directly any more.
 
-    This guard is exact, not existential: it names every production file
-    allowed to reference the binder, so an accidental new binder anywhere
-    in routes/, services/ or main.py fails here rather than silently
-    widening the policy boundary.
+    This guard is exact, not existential: it asserts that *no* file in
+    routes/, services/ or main.py references the binding primitive, so an
+    accidental new binder anywhere fails here rather than silently widening
+    the policy boundary.
 
-    routes/ingestion.py joined the list when the ratified legacy Dino
-    exception brought /storeragfile inside the boundary. routes/admin.py
-    joined it when DC-ADMIN1 ratified a dedicated technical accounting
-    identity for /admin/rag-files/upload; that route is the ONLY approved
-    admin binder, which the per-file caller assertion below pins.
-
-    routes/rag.py and routes/ingestion.py have since LEFT the list, as
-    /completion.json, /agentchat and /storeragfile adopted the public
-    attribution boundary; neither module names the binding primitive at all
-    any more - the strictest possible outcome for those files. The guard is
-    therefore not weakened but re-pointed: each is asserted to reference no
-    binder and no private ambient-attribution helper, and to declare
-    attribution through the public boundary at exactly the routes it used
-    to bind from.
+    Every approved adopter has now migrated. routes/rag.py and
+    routes/ingestion.py left the list in earlier slices, and routes/admin.py
+    was the last direct binder: with /admin/rag-files/upload adopting the
+    public boundary, the allowed set is empty. The guard is therefore not
+    weakened but re-pointed - each module is asserted to reference no binder
+    and no private ambient-attribution helper, and to declare attribution
+    through the public boundary at exactly the routes it used to bind from.
 
     /storeragfile is pinned to all three of its ratified intents, because
     the risk in that route is not that attribution disappears but that its
     branches collapse: the legacy fallback and an explicit ``client="dino"``
-    must keep declaring different things. routes/admin.py migrates in a
-    later slice and is unchanged here, so direct binder ownership survives
-    only there.
+    must keep declaring different things. routes/admin.py is pinned the
+    other way round - to exactly one attributing function - because the risk
+    there is the opposite one: admin is a large module of operator routes,
+    and /admin/rag-files/upload is the only one approved to declare Usage
+    attribution at all.
     """
     import subprocess
 
@@ -633,7 +628,7 @@ def test_production_attribution_binding_is_confined_to_the_approved_routes():
     )
 
     files = {line.split(":", 1)[0] for line in result.stdout.splitlines() if line}
-    assert files == {"routes/admin.py"}
+    assert files == set()
 
     with open(os.path.join(REPO_ROOT, "routes", "rag.py")) as handle:
         rag_source = handle.read()
@@ -689,30 +684,30 @@ def test_production_attribution_binding_is_confined_to_the_approved_routes():
     }
 
     with open(os.path.join(REPO_ROOT, "routes", "admin.py")) as handle:
-        admin_tree = ast.parse(handle.read())
+        admin_source = handle.read()
+    admin_tree = ast.parse(admin_source)
 
-    admin_binders = {
-        node.name
+    assert "bind_usage_attribution" not in admin_source
+    assert "_bind_embedding_usage_attribution" not in admin_source
+
+    # The technical accounting intent, declared from the single approved
+    # admin route and from nowhere else in the module. Deliberately not a
+    # requirement that other admin routes know about attribution: the
+    # assertion is that exactly one of them does.
+    admin_intents = {
+        (node.name, call.func.id)
         for node in ast.walk(admin_tree)
         if isinstance(node, ast.FunctionDef)
-        and any(
-            isinstance(call.func, ast.Name)
-            and call.func.id == "bind_usage_attribution"
-            for call in ast.walk(node)
-            if isinstance(call, ast.Call)
-        )
+        for call in ast.walk(node)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id
+        in {
+            "attribute_usage_to_user",
+            "attribute_usage_to_policy",
+            "declare_usage_unattributed",
+        }
     }
-    assert admin_binders == {"_bind_embedding_usage_attribution"}
-
-    admin_callers = {
-        node.name
-        for node in ast.walk(admin_tree)
-        if isinstance(node, ast.FunctionDef)
-        and any(
-            isinstance(call.func, ast.Name)
-            and call.func.id in admin_binders
-            for call in ast.walk(node)
-            if isinstance(call, ast.Call)
-        )
+    assert admin_intents == {
+        ("admin_upload_rag_file", "attribute_usage_to_policy"),
     }
-    assert admin_callers == {"admin_upload_rag_file"}

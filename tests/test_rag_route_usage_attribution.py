@@ -607,7 +607,7 @@ def test_unattributed_contribution_writes_no_row(monkeypatch, caplog):
 
 
 def test_admin_upload_is_the_only_attributing_admin_route():
-    """/admin/rag-files/upload is the ONE approved admin binder.
+    """/admin/rag-files/upload is the ONE approved admin attributor.
 
     Asserted statically, on the module owning the admin routes, so the
     guard cannot be satisfied by an incidental early return in a route
@@ -622,6 +622,14 @@ def test_admin_upload_is_the_only_attributing_admin_route():
     before it. The guard is narrowed rather than dropped: the admin surface
     is large, and every OTHER admin route must stay out. Its runtime
     behaviour lives in tests/test_admin_route_usage_attribution.py.
+
+    The admin upload has since migrated to the public boundary, so what the
+    module is scanned for is the declared intent rather than the binding
+    primitive; the private module-local binder is now asserted absent. The
+    identity-safety assertions survive unchanged in substance: the
+    configuration attribute naming the provisioned identity moved into
+    utils.usage_attribution, so routes/admin.py must no longer mention it at
+    all - a stronger statement than the former ``in source``.
     """
     with open(os.path.join(REPO_ROOT, "routes/admin.py")) as handle:
         source = handle.read()
@@ -640,20 +648,26 @@ def test_admin_upload_is_the_only_attributing_admin_route():
             and call.func.id in names
         }
 
-    # A private module-local binder exists, and it is the only function in
-    # routes/admin.py that touches the binding primitive.
-    binders = {
+    INTENTS = {
+        "attribute_usage_to_user",
+        "attribute_usage_to_policy",
+        "declare_usage_unattributed",
+    }
+
+    # No private module-local binder survives, and nothing in the module
+    # touches the binding primitive.
+    assert "bind_usage_attribution" not in source
+    assert "_bind_embedding_usage_attribution" not in source
+    assert not {
         node.name for node in functions if _calls(node, {"bind_usage_attribution"})
     }
-    assert binders == {"_bind_embedding_usage_attribution"}
-    assert all(name.startswith("_") for name in binders)
 
-    # Its only production caller is the upload route itself.
-    callers = {node.name for node in functions if _calls(node, binders)}
-    assert callers == {"admin_upload_rag_file"}
+    # Exactly one function declares attribution, and it is the upload route.
+    attributors = {node.name for node in functions if _calls(node, INTENTS)}
+    assert attributors == {"admin_upload_rag_file"}
 
     # Stated the other way round, over every Flask-routed admin view: no
-    # unrelated admin route reaches attribution, directly or via the helper.
+    # unrelated admin route reaches attribution.
     routed = [
         node
         for node in functions
@@ -665,16 +679,15 @@ def test_admin_upload_is_the_only_attributing_admin_route():
         )
     ]
     assert "admin_upload_rag_file" in {node.name for node in routed}
-    attributing_routes = {
-        node.name
-        for node in routed
-        if _calls(node, binders | {"bind_usage_attribution"})
-    }
+    attributing_routes = {node.name for node in routed if _calls(node, INTENTS)}
     assert attributing_routes == {"admin_upload_rag_file"}
 
-    # The identity is selected only by configuration: no admin credential
-    # and no session value is ever resolved against the users table.
-    assert "admin_rag_usage_username" in source
+    # The intent is the ratified technical policy, never the authenticated
+    # operator: no admin credential and no session value can become a Usage
+    # identity, and the route cannot even name the provisioned username.
+    assert "USAGE_POLICY_ADMIN_RAG_INGESTION" in source
+    assert "attribute_usage_to_user" not in source
+    assert "admin_rag_usage_username" not in source
     assert 'get_user_by_username(session[' not in source
     assert "get_user_by_username(config.admin.username)" not in source
 
