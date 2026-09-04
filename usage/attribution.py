@@ -1,11 +1,11 @@
-# utils/usage_attribution.py
+# usage/attribution.py
 """Public adoption boundary for Usage attribution.
 
 This is the request-scoped surface a Maui flow uses to say *whose*
 provider consumption this request produces. It is a sibling of
-``utils.usage_recording``, which says *what* was consumed, and it is
-layered above the storage-only ``utils.usage_attribution_state``, exactly
-as recording is layered above ``utils.usage_request_state``.
+``usage.recording``, which says *what* was consumed, and it is
+layered above the storage-only ``usage.attribution_state``, exactly
+as recording is layered above ``usage.request_state``.
 
 There are three attribution intents, and a caller declares the one that is
 semantically true for its flow::
@@ -59,7 +59,7 @@ Failure model
 -------------
 Two kinds of failure, deliberately separated, with validation running
 before fail-open containment - the discipline of
-``utils.usage_recording`` and ``utils.operational_event``.
+``usage.recording`` and ``utils.operational_event``.
 
 *Programmer-contract misuse* raises. A blank, whitespace-only or non-``str``
 username raises ``ValueError``; so does a policy value outside the closed
@@ -96,7 +96,7 @@ from flask import current_app, has_request_context, request
 
 from infrastructure.database_pg import get_user_by_username
 from utils.logging_config import get_request_id
-from utils.usage_attribution_state import bind_usage_attribution
+from usage.attribution_state import bind_usage_attribution
 
 __all__ = [
     "attribute_usage_to_user",

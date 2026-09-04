@@ -20,7 +20,7 @@ from types import SimpleNamespace
 from flask import Flask
 
 from routes import multimodal as multimodal_route
-from utils import usage_recording
+import usage.recording as usage_recording
 from utils.logging_config import register_request_context_hooks
 
 

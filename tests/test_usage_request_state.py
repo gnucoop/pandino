@@ -1,10 +1,10 @@
-"""Tests for utils.usage_request_state.
+"""Tests for usage.request_state.
 
 Focused on the module's own concern only: request-local Usage row identity
 storage. Mirrors the harness style of tests/test_request_duration.py.
 """
 
-from utils.usage_request_state import (
+from usage.request_state import (
     _G_LOG_ID_ATTR,
     _G_LOG_IDS_ATTR,
     get_usage_log_id,
@@ -32,7 +32,7 @@ def _make_app():
 
 
 def test_public_api_is_exactly_the_setter_registrar_and_getters():
-    import utils.usage_request_state as module
+    import usage.request_state as module
 
     assert set(module.__all__) == {
         "set_usage_log_id",
@@ -43,7 +43,7 @@ def test_public_api_is_exactly_the_setter_registrar_and_getters():
 
 
 def test_raw_g_attribute_name_is_not_part_of_public_api():
-    import utils.usage_request_state as module
+    import usage.request_state as module
 
     assert "_G_LOG_ID_ATTR" not in module.__all__
     assert "_G_LOG_IDS_ATTR" not in module.__all__

@@ -1,4 +1,4 @@
-# utils/usage_attribution_state.py
+# usage/attribution_state.py
 """Request-local Usage attribution metadata.
 
 Owns exactly one responsibility: hold the *who and where* of the current
@@ -6,7 +6,7 @@ HTTP request - the resolved Maui user id, the service the request hit and
 the client source it came from - so a later accounting step can attribute
 the rows it writes without re-deriving identity.
 
-Deliberately a sibling of ``utils.usage_request_state`` rather than part
+Deliberately a sibling of ``usage.request_state`` rather than part
 of it: that module stores the ids of Usage rows a request created, this
 one stores the metadata a Usage row is written *with*. Keeping them apart
 keeps each a single storage concern.
@@ -29,7 +29,7 @@ __all__ = [
 
 #: Attribute under which the current request's attribution is parked on
 #: ``flask.g``. Private to this module, namespaced like
-#: ``utils.usage_request_state``'s and ``utils.request_duration``'s own
+#: ``usage.request_state``'s and ``utils.request_duration``'s own
 #: ``_maui_*`` g attributes.
 _G_ATTRIBUTION_ATTR = "_maui_usage_attribution"
 
@@ -59,7 +59,7 @@ def bind_usage_attribution(user_id: int, service: str, source: "str | None") -> 
 
     Callers must invoke this only once identity has been honestly
     resolved. Binding is last-write-wins, mirroring
-    ``utils.usage_request_state.set_usage_log_id``: a second call replaces
+    ``usage.request_state.set_usage_log_id``: a second call replaces
     the first rather than raising or being ignored, so a re-bind is a
     correction, not an error.
     """

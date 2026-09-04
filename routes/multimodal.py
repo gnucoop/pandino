@@ -13,7 +13,7 @@ from infrastructure.asr_accounting import resolve_asr_cost
 from infrastructure.database_pg import edit_tokens
 from utils.operational_event import build_operational_event
 from services.audio_form_service import audioFormCompilation, audioFormPromptBuild
-from utils.usage_recording import (
+from usage.recording import (
     record_resolved_consumption,
     record_token_consumption,
 )

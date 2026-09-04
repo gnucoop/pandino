@@ -5,7 +5,7 @@ the canonical ``service`` literal, ``request_id`` and ``source``, and bound
 the returned row id for duration linkage.
 
 Adopters have since migrated to the explicit Usage adoption boundary
-(utils.usage_recording) and no longer call the writer directly. The
+(usage.recording) and no longer call the writer directly. The
 structural counts below therefore cover only the one call site that remains
 unmigrated - /datachat (routes/datachat.py) - which keeps every per-call
 obligation. Migrated adopters never see a row id at all and are covered by
@@ -22,8 +22,8 @@ from flask import Flask
 from routes import multimodal as multimodal_route
 from routes import reporting as reporting_route
 from routes import rag as rag_route
-from utils import usage_recording
-from utils.usage_request_state import set_usage_log_id
+import usage.recording as usage_recording
+from usage.request_state import set_usage_log_id
 from utils.logging_config import register_request_context_hooks
 
 _ROUTES_DIR = Path(__file__).resolve().parent.parent / "routes"
@@ -54,7 +54,7 @@ def test_no_route_adopter_calls_the_token_writer_directly():
     supplied at all.
 
     Deliberately scoped to routes/*.py - the adopters. It is not a
-    repository-wide ban: ``utils.usage_recording`` calls the writer
+    repository-wide ban: ``usage.recording`` calls the writer
     internally by design, and ``infrastructure.database_pg`` owns its
     implementation.
     """
@@ -106,11 +106,11 @@ def test_transcribe_module_no_longer_owns_usage_persistence():
     ):
         assert name not in imported, (
             f"routes/multimodal.py still imports {name!r}; Usage persistence "
-            "belongs behind utils.usage_recording"
+            "belongs behind usage.recording"
         )
         assert name not in called, (
             f"routes/multimodal.py still calls {name!r}; Usage persistence "
-            "belongs behind utils.usage_recording"
+            "belongs behind usage.recording"
         )
 
 

@@ -1,4 +1,4 @@
-"""Tests for utils.embedding_usage_persistence.
+"""Tests for usage.embedding_persistence.
 
 Focused on the module's own concern only: composing the request-scoped
 accumulator, the pure aggregator, the request attribution, the provenance
@@ -18,7 +18,7 @@ from unittest.mock import patch
 import pytest
 from flask import Flask
 
-from utils.embedding_accounting import (
+from usage.embedding_accounting import (
     COST_NO_PROVIDER_BILLING,
     COST_PROVIDER_ABSENT_RESOLVABLE,
     COST_PROVIDER_AUTHORITATIVE,
@@ -26,17 +26,17 @@ from utils.embedding_accounting import (
     ORIGIN_PROVIDER_REPORTED,
     QUANTITY_UNIT_INPUT_TOKENS,
 )
-from utils.embedding_operation_context import OPERATION_DOCUMENT, OPERATION_QUERY
-from utils.embedding_usage_persistence import (
+from usage.embedding_operation_context import OPERATION_DOCUMENT, OPERATION_QUERY
+from usage.embedding_persistence import (
     _G_PERSISTED_ATTR,
     _HOOKS_MARKER,
     register_embedding_usage_persistence_hooks,
 )
-from utils.embedding_usage_state import get_embedding_accumulator
-from utils.usage_attribution_state import bind_usage_attribution
-from utils.usage_request_state import get_usage_log_id, get_usage_log_ids
+from usage.embedding_state import get_embedding_accumulator
+from usage.attribution_state import bind_usage_attribution
+from usage.request_state import get_usage_log_id, get_usage_log_ids
 
-MODULE = "utils.embedding_usage_persistence"
+MODULE = "usage.embedding_persistence"
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -449,7 +449,7 @@ def _order_test_app():
     as in bootstrap.
     """
     from utils.logging_config import register_request_context_hooks
-    from utils.usage_lifecycle import register_usage_lifecycle_hooks
+    from usage.lifecycle import register_usage_lifecycle_hooks
 
     app = Flask(__name__)
     register_request_context_hooks(app)
@@ -476,7 +476,7 @@ def test_effective_before_request_order_starts_the_timer_before_the_sink_binds()
         order.append("timer")
         return original_perf_counter()
 
-    from utils import embedding_accounting_lifecycle as lifecycle_module
+    import usage.embedding_accounting_lifecycle as lifecycle_module
 
     original_get = lifecycle_module.get_embedding_accumulator
 
@@ -531,7 +531,7 @@ def test_effective_after_request_order_is_duration_then_persistence_then_finaliz
         return True
 
     with patch(f"{MODULE}.log_resolved_cost_usage_batch", _writer), patch(
-        "utils.usage_duration_finalization.update_usage_duration", _update
+        "usage.duration_finalization.update_usage_duration", _update
     ):
         response = app.test_client().get("/ping")
 
@@ -545,7 +545,7 @@ def test_effective_after_request_order_is_duration_then_persistence_then_finaliz
 
 def test_embedding_ids_join_the_multi_id_duration_lifecycle():
     """An LLM row set by a route and the embedding rows share one duration."""
-    from utils.usage_request_state import set_usage_log_id
+    from usage.request_state import set_usage_log_id
 
     finalized = []
     app = _order_test_app()
@@ -565,7 +565,7 @@ def test_embedding_ids_join_the_multi_id_duration_lifecycle():
         return True
 
     with patch(f"{MODULE}.log_resolved_cost_usage_batch", lambda entries: [501]), patch(
-        "utils.usage_duration_finalization.update_usage_duration", _update
+        "usage.duration_finalization.update_usage_duration", _update
     ):
         app.test_client().get("/ping")
 

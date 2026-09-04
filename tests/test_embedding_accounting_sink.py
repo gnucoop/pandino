@@ -1,4 +1,4 @@
-"""Tests for utils.embedding_accounting_sink (DC8).
+"""Tests for usage.embedding_accounting_sink (DC8).
 
 Scope: the sink ContextVar only — no-op default, delivery of 0..N
 contributions, token/reset, exception-safe restoration, Flask independence.
@@ -6,7 +6,7 @@ contributions, token/reset, exception-safe restoration, Flask independence.
 
 import pytest
 
-from utils.embedding_accounting_sink import (
+from usage.embedding_accounting_sink import (
     embedding_accounting_sink,
     get_embedding_accounting_sink,
     no_op_sink,
@@ -75,7 +75,7 @@ def test_non_callable_sink_is_rejected():
 
 
 def test_module_does_not_import_flask():
-    import utils.embedding_accounting_sink as module
+    import usage.embedding_accounting_sink as module
 
     source = open(module.__file__).read()
     assert "import flask" not in source

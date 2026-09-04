@@ -15,9 +15,9 @@ from types import SimpleNamespace
 from flask import Flask
 
 from routes import rag as rag_route
-from utils import usage_attribution
+import usage.attribution as usage_attribution
 from utils.logging_config import register_request_context_hooks
-from utils.usage_request_state import set_usage_log_id
+from usage.request_state import set_usage_log_id
 
 DISTINCTIVE_USERNAME = "distinctive-user@example.com"
 RECORDED_LOG_ID = 999

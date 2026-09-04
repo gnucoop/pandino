@@ -1,4 +1,4 @@
-# utils/usage_lifecycle.py
+# usage/lifecycle.py
 """Runtime composition of the Usage subsystem's request-lifecycle hooks.
 
 Owns exactly one responsibility: register, in the single order production
@@ -54,12 +54,12 @@ first and its teardown unwinds last, leaving that id readable while the
 persistence fallback writes.
 """
 
-from utils.embedding_accounting_lifecycle import register_embedding_accounting_hooks
-from utils.embedding_usage_persistence import (
+from usage.embedding_accounting_lifecycle import register_embedding_accounting_hooks
+from usage.embedding_persistence import (
     register_embedding_usage_persistence_hooks,
 )
 from utils.request_duration import register_request_duration_hooks
-from utils.usage_duration_finalization import (
+from usage.duration_finalization import (
     register_usage_duration_finalization_hooks,
 )
 

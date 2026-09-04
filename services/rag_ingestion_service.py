@@ -19,7 +19,7 @@ from infrastructure.vector_store import (
     merge_segments,
     normalize_table_name,
 )
-from utils.embedding_operation_context import OPERATION_DOCUMENT, embedding_operation
+from usage.embedding_operation_context import OPERATION_DOCUMENT, embedding_operation
 
 logger = logging.getLogger(__name__)
 

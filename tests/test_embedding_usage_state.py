@@ -1,4 +1,4 @@
-"""Tests for utils.embedding_usage_state (design §21.3).
+"""Tests for usage.embedding_state (design §21.3).
 
 Scope: the request-scoped accumulator and the DC8 request binding — 0/1/N
 contributions, order, the provider/model invariant reaction, request
@@ -9,17 +9,17 @@ import logging
 
 import pytest
 
-from utils.embedding_accounting import (
+from usage.embedding_accounting import (
     COST_PROVIDER_AUTHORITATIVE,
     ORIGIN_PROVIDER_REPORTED,
     QUANTITY_UNIT_INPUT_TOKENS,
     EmbeddingAccountingContribution,
 )
-from utils.embedding_accounting_sink import (
+from usage.embedding_accounting_sink import (
     get_embedding_accounting_sink,
     no_op_sink,
 )
-from utils.embedding_usage_state import (
+from usage.embedding_state import (
     EmbeddingAccountingAccumulator,
     bind_embedding_accounting,
     get_embedding_accumulator,
@@ -81,7 +81,7 @@ def test_matching_provider_model_is_not_a_violation():
 def test_invariant_violation_is_recorded_and_warned_but_never_raises(caplog):
     acc = EmbeddingAccountingAccumulator()
     acc.add(_contribution())
-    with caplog.at_level(logging.WARNING, logger="utils.embedding_usage_state"):
+    with caplog.at_level(logging.WARNING, logger="usage.embedding_state"):
         acc.add(_contribution(provider="openai", model="text-embedding-3-small"))
 
     assert acc.invariant_violations == 1

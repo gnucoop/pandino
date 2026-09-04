@@ -25,9 +25,9 @@ import pytest
 from flask import Flask
 
 from routes import ingestion as ingestion_route
-from utils import usage_attribution
+import usage.attribution as usage_attribution
 from utils.logging_config import register_request_context_hooks
-from utils.usage_attribution_state import get_usage_attribution
+from usage.attribution_state import get_usage_attribution
 
 TECHNICAL_USERNAME = "__dino_legacy_ingestion__"
 TECHNICAL_USER_ID = 4242
@@ -73,7 +73,7 @@ def _patch(monkeypatch, captured, user=None, lookup=None):
             return user
 
     # /storeragfile does not resolve an identity itself:
-    # utils.usage_attribution is the sole owner of this callable, so it is
+    # usage.attribution is the sole owner of this callable, so it is
     # the only honest patch point. Patching the route module instead would
     # leave the real lookup live and prove nothing.
     monkeypatch.setattr(usage_attribution, "get_user_by_username", lookup)
@@ -152,7 +152,7 @@ def test_legacy_dino_fallback_binds_the_technical_accounting_identity(monkeypatc
 
     The route names only USAGE_POLICY_LEGACY_DINO_INGESTION; the
     provisioned username, its config key and the lookup that resolves it
-    all live inside utils.usage_attribution, which is why the lookup trace
+    all live inside usage.attribution, which is why the lookup trace
     below is captured through that module and not through the route.
     """
     captured = {}
@@ -313,7 +313,7 @@ def test_legacy_fallback_without_configuration_is_the_off_switch(monkeypatch, ca
     _patch(monkeypatch, captured, user={"id": TECHNICAL_USER_ID, "client": "dino"})
     app = _make_app(_config(dino_legacy_usage_username=None))
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         response = _post(app)
 
     assert response.status_code == 200
@@ -332,7 +332,7 @@ def test_user_not_found_binds_nothing_and_leaves_ingestion_unchanged(
     captured = {}
     _patch(monkeypatch, captured, user=None)
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         response = _post(_make_app(), client="coopi", userEmail=REAL_USER_EMAIL)
 
     assert response.status_code == 200
@@ -352,7 +352,7 @@ def test_invalid_user_id_binds_nothing(monkeypatch, caplog):
         user={"id": "not-an-int", "username": REAL_USER_EMAIL, "client": "coopi"},
     )
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         response = _post(_make_app(), client="coopi", userEmail=REAL_USER_EMAIL)
 
     assert response.status_code == 200
@@ -374,7 +374,7 @@ def test_lookup_failure_binds_nothing_and_never_fails_the_request(
 
     _patch(monkeypatch, captured, lookup=failing_lookup)
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         response = _post(_make_app(), client="coopi", userEmail=REAL_USER_EMAIL)
 
     assert response.status_code == 200
@@ -395,7 +395,7 @@ def test_attribution_diagnostic_carries_no_identity_or_payload(monkeypatch, capl
 
     _patch(monkeypatch, captured, lookup=failing_lookup)
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         _post(_make_app(), client="coopi", userEmail=REAL_USER_EMAIL)
 
     message = _diagnostics(caplog)[0]
@@ -416,7 +416,7 @@ def test_technical_username_never_appears_in_the_fallback_diagnostic(
     captured = {}
     _patch(monkeypatch, captured, user=None)
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         response = _post(_make_app())
 
     assert response.status_code == 200

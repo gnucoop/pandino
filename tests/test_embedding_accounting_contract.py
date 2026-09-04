@@ -1,4 +1,4 @@
-"""Tests for utils.embedding_accounting (design §21.1).
+"""Tests for usage.embedding_accounting (design §21.1).
 
 Scope: the normalized contribution contract only — required vs optional
 fields, quantity origin, the three cost states, absence != zero, and the
@@ -9,7 +9,7 @@ import dataclasses
 
 import pytest
 
-from utils.embedding_accounting import (
+from usage.embedding_accounting import (
     COST_NO_PROVIDER_BILLING,
     COST_PROVIDER_ABSENT_RESOLVABLE,
     COST_PROVIDER_AUTHORITATIVE,

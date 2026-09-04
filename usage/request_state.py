@@ -1,4 +1,4 @@
-# utils/usage_request_state.py
+# usage/request_state.py
 """Request-local Usage row identity.
 
 Owns exactly one responsibility: hold the ``log_id`` of every Usage row
@@ -20,7 +20,7 @@ leaving the single slot alone.
 This module does not persist anything, does not measure time, does not
 register Flask hooks, and does not call ``update_usage_duration()``
 (``infrastructure/database_pg.py``). That orchestration lives in
-``utils.usage_duration_finalization``, which combines this identity state
+``usage.duration_finalization``, which combines this identity state
 with ``utils.request_duration``'s duration measurement; wiring it here
 would pull that orchestration into a module deliberately kept to identity
 storage only.

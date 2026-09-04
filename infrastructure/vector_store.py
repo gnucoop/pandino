@@ -10,7 +10,7 @@ from infrastructure.database_pg import table_exists, pgvector_maui_id_exists
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_postgres import PGEngine, PGVectorStore
-from utils.embedding_operation_context import OPERATION_PROBE, embedding_operation
+from usage.embedding_operation_context import OPERATION_PROBE, embedding_operation
 
 PGUSER: Optional[str] = None
 PGPWD: Optional[str] = None

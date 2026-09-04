@@ -1,4 +1,4 @@
-"""Tests for utils.usage_lifecycle.
+"""Tests for usage.lifecycle.
 
 Focused on the module's own concern only: composing the three Usage-owned
 lifecycle registrars, in the one order production supports, and owning
@@ -15,8 +15,8 @@ import os
 
 from flask import Flask
 
-import utils.usage_lifecycle as usage_lifecycle
-from utils.usage_lifecycle import register_usage_lifecycle_hooks
+import usage.lifecycle as usage_lifecycle
+from usage.lifecycle import register_usage_lifecycle_hooks
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -107,7 +107,7 @@ def test_the_boundary_owns_no_external_subsystem_registrar():
     request context is the caller's prerequisite, and Operational
     Persistence registers no request hook at all.
     """
-    _, tree = _parse("utils/usage_lifecycle.py")
+    _, tree = _parse("usage/lifecycle.py")
 
     assert _called_names(tree, EXTERNAL_REGISTRARS) == []
 
@@ -122,7 +122,7 @@ def test_the_boundary_owns_no_external_subsystem_registrar():
 
 def test_the_boundary_registers_no_flask_hook_of_its_own():
     """Delegation only: the child modules own every hook seam."""
-    source, _ = _parse("utils/usage_lifecycle.py")
+    source, _ = _parse("usage/lifecycle.py")
 
     for seam in ("before_request", "after_request", "teardown_request"):
         assert f"app.{seam}" not in source
@@ -130,14 +130,14 @@ def test_the_boundary_registers_no_flask_hook_of_its_own():
 
 def test_the_boundary_adds_no_hook_beyond_its_children():
     """Composed app and hand-wired app must have identical hook counts."""
-    from utils.embedding_accounting_lifecycle import (
+    from usage.embedding_accounting_lifecycle import (
         register_embedding_accounting_hooks,
     )
-    from utils.embedding_usage_persistence import (
+    from usage.embedding_persistence import (
         register_embedding_usage_persistence_hooks,
     )
     from utils.request_duration import register_request_duration_hooks
-    from utils.usage_duration_finalization import (
+    from usage.duration_finalization import (
         register_usage_duration_finalization_hooks,
     )
 
@@ -230,7 +230,7 @@ def test_a_second_composition_call_registers_nothing_twice():
 
 def test_composition_after_a_direct_child_registration_still_registers_once():
     """The mixed case: one child wired directly, then the whole boundary."""
-    from utils.usage_duration_finalization import (
+    from usage.duration_finalization import (
         register_usage_duration_finalization_hooks,
     )
 
@@ -255,7 +255,7 @@ def test_main_composes_usage_through_the_public_boundary():
     Asserted on the parsed module rather than on a live import, which
     would require the full runtime config and a database. Only the
     inter-subsystem prerequisites are pinned here; Usage's internal
-    registration order is owned by utils.usage_lifecycle and is asserted
+    registration order is owned by usage.lifecycle and is asserted
     against that module instead.
     """
     _, tree = _parse("main.py")

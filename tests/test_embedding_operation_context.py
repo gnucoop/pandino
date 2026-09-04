@@ -1,4 +1,4 @@
-"""Tests for utils.embedding_operation_context (design §21.2).
+"""Tests for usage.embedding_operation_context (design §21.2).
 
 Scope: the scoped operation ContextVar only — taxonomy, token/reset,
 exception-safe restoration, sequential scopes, and separation from the
@@ -7,7 +7,7 @@ logging request-id context.
 
 import pytest
 
-from utils.embedding_operation_context import (
+from usage.embedding_operation_context import (
     OPERATION_DOCUMENT,
     OPERATION_KINDS,
     OPERATION_PROBE,
@@ -91,7 +91,7 @@ def test_context_is_separate_from_the_logging_request_id_vars():
 
 
 def test_module_does_not_import_flask():
-    import utils.embedding_operation_context as module
+    import usage.embedding_operation_context as module
 
     source = open(module.__file__).read()
     assert "import flask" not in source

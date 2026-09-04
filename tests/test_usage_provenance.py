@@ -1,4 +1,4 @@
-"""Tests for utils.usage_provenance.
+"""Tests for usage.provenance.
 
 Scope: the persisted cost-origin vocabulary and the pure mapping from the
 capture-time cost state onto it.
@@ -6,21 +6,21 @@ capture-time cost state onto it.
 
 import pytest
 
-from utils.embedding_accounting import (
+from usage.embedding_accounting import (
     COST_NO_PROVIDER_BILLING,
     COST_PROVIDER_ABSENT_RESOLVABLE,
     COST_PROVIDER_AUTHORITATIVE,
     ORIGIN_MAUI_DERIVED,
     ORIGIN_PROVIDER_REPORTED,
 )
-from utils.usage_provenance import (
+from usage.provenance import (
     COST_ORIGIN_MAUI_RESOLVED,
     COST_ORIGIN_NO_PROVIDER_BILLING,
     COST_ORIGIN_PROVIDER_AUTHORITATIVE,
     COST_ORIGINS,
     cost_origin_from_cost_state,
 )
-import utils.usage_provenance as provenance
+import usage.provenance as provenance
 
 
 # --------------------------------------------------------------------------

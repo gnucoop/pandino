@@ -2,14 +2,14 @@
 
 Extracts authoritative accounting metadata from a *native* provider
 embedding response and normalizes it into exactly one
-:class:`~utils.embedding_accounting.EmbeddingAccountingContribution` per
+:class:`~usage.embedding_accounting.EmbeddingAccountingContribution` per
 successful provider accounting response, delivered through the sink
 ContextVar the foundation already publishes.
 
 Currently DeepInfra only: it is the configured default provider and the only
 one with provider-authoritative cost. ``choose_emb_model`` returns every
 other configured provider unwrapped, and their cost semantics are carried by
-their own cost states in :mod:`utils.embedding_accounting`; capturing them is
+their own cost states in :mod:`usage.embedding_accounting`; capturing them is
 outside this module's scope.
 
 Narrow on purpose, in the shape ``infrastructure/asr_accounting.py``
@@ -30,14 +30,14 @@ from typing import Any, List, Optional
 import requests
 from langchain_community.embeddings import DeepInfraEmbeddings
 
-from utils.embedding_accounting import (
+from usage.embedding_accounting import (
     COST_PROVIDER_AUTHORITATIVE,
     ORIGIN_PROVIDER_REPORTED,
     QUANTITY_UNIT_INPUT_TOKENS,
     EmbeddingAccountingContribution,
 )
-from utils.embedding_accounting_sink import get_embedding_accounting_sink
-from utils.embedding_operation_context import get_embedding_operation
+from usage.embedding_accounting_sink import get_embedding_accounting_sink
+from usage.embedding_operation_context import get_embedding_operation
 
 __all__ = [
     "EmbeddingCaptureError",

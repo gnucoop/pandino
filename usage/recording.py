@@ -1,4 +1,4 @@
-# utils/usage_recording.py
+# usage/recording.py
 """Public adoption boundary for recording explicit provider consumption.
 
 This is the surface a Maui flow uses to say *what it consumed*. It is not a
@@ -41,7 +41,7 @@ What this boundary owns, so no adopter has to
   returned. A caller cannot hold one, so it cannot forget to do anything
   with one.
 * **Row-id registration, and therefore duration linkage.** The id is
-  handed to ``utils.usage_request_state.set_usage_log_id``, which both
+  handed to ``usage.request_state.set_usage_log_id``, which both
   registers it for end-of-request duration finalization *and* keeps the
   latest-id compatibility slot current. Registration happens here, so
   ``logs.duration_ms`` does not depend on adopter bookkeeping.
@@ -74,7 +74,7 @@ is observation, so such a failure produces one safe diagnostic and
 because a failure between the INSERT and the commit acknowledgement cannot
 be distinguished from a success, and retrying would risk double-counting
 real money - the same reasoning recorded in
-``utils.embedding_usage_persistence``.
+``usage.embedding_persistence``.
 
 ``token_input=0, token_output=0`` and ``cost=0`` are accepted and record a
 row: a zero quantity is a real observation, not a missing one. Whether a
@@ -99,8 +99,8 @@ from infrastructure.database_pg import (
     log_usage_with_resolved_cost,
 )
 from utils.logging_config import get_request_id
-from utils.usage_attribution_state import get_usage_attribution
-from utils.usage_request_state import set_usage_log_id
+from usage.attribution_state import get_usage_attribution
+from usage.request_state import set_usage_log_id
 
 logger = logging.getLogger(__name__)
 

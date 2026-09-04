@@ -24,7 +24,7 @@ import matplotlib  # noqa: E402
 import infrastructure.database_pg as database_pg  # noqa: E402
 import infrastructure.vector_store as vector_store  # noqa: E402
 from config import load_config, AppConfig  # noqa: E402
-from utils.usage_lifecycle import register_usage_lifecycle_hooks  # noqa: E402
+from usage.lifecycle import register_usage_lifecycle_hooks  # noqa: E402
 from routes.system import system_bp  # noqa: E402
 from routes.auth import auth_bp  # noqa: E402
 from routes.users import users_bp  # noqa: E402

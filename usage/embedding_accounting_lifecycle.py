@@ -1,4 +1,4 @@
-# utils/embedding_accounting_lifecycle.py
+# usage/embedding_accounting_lifecycle.py
 """Request-lifecycle binding of the embedding-accounting sink.
 
 Owns exactly one responsibility: for the lifetime of each HTTP request,
@@ -11,7 +11,7 @@ request-scoped accumulator (which knows *where* it belongs).
 Without this hook the sink stays at its ``no_op_sink`` default:
 provider capture would normalize a contribution correctly and then discard
 it, because nothing in production ever entered
-:func:`utils.embedding_usage_state.bind_embedding_accounting`. That
+:func:`usage.embedding_state.bind_embedding_accounting`. That
 function is a context manager, which cannot span Flask's
 ``before_request``/``teardown_request`` boundary, so this module drives the
 same two primitives it composes -- creating the accumulator and setting the
@@ -24,11 +24,11 @@ own app marker and its own token attribute on ``flask.g``, so a double
 registration cannot bind two sinks or orphan a token.
 """
 
-from utils.embedding_accounting_sink import (
+from usage.embedding_accounting_sink import (
     reset_embedding_accounting_sink,
     set_embedding_accounting_sink,
 )
-from utils.embedding_usage_state import get_embedding_accumulator
+from usage.embedding_state import get_embedding_accumulator
 
 __all__ = ["register_embedding_accounting_hooks"]
 

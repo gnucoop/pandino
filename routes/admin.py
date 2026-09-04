@@ -46,7 +46,7 @@ from infrastructure.database_pg import (
     update_user_tokens,
 )
 from services.rag_ingestion_service import process_rag_file
-from utils.usage_attribution import (
+from usage.attribution import (
     USAGE_POLICY_ADMIN_RAG_INGESTION,
     attribute_usage_to_policy,
 )

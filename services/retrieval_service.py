@@ -17,7 +17,7 @@ from typing import List, Dict, Any
 
 from infrastructure.vector_store import MauiVectorStore
 from infrastructure.ai import choose_emb_model
-from utils.embedding_operation_context import OPERATION_QUERY, embedding_operation
+from usage.embedding_operation_context import OPERATION_QUERY, embedding_operation
 
 logger = logging.getLogger(__name__)
 

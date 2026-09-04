@@ -1,4 +1,4 @@
-# utils/usage_provenance.py
+# usage/provenance.py
 """Usage-facing provenance vocabulary for persisted consumption rows.
 
 Owns the words a persisted Usage row uses to say *where its numbers came
@@ -18,7 +18,7 @@ row exists.
 Pure: no Flask, no database, no I/O, no logging.
 """
 
-from utils.embedding_accounting import (
+from usage.embedding_accounting import (
     COST_NO_PROVIDER_BILLING,
     COST_PROVIDER_ABSENT_RESOLVABLE,
     COST_PROVIDER_AUTHORITATIVE,
@@ -26,7 +26,7 @@ from utils.embedding_accounting import (
     ORIGIN_PROVIDER_REPORTED,
     QUANTITY_ORIGINS,
 )
-from utils.embedding_operation_context import (
+from usage.embedding_operation_context import (
     OPERATION_DOCUMENT,
     OPERATION_KINDS,
     OPERATION_PROBE,

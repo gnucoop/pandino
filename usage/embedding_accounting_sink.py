@@ -1,4 +1,4 @@
-# utils/embedding_accounting_sink.py
+# usage/embedding_accounting_sink.py
 """Context-propagated delivery seam for accounting contributions.
 
 Owns exactly one responsibility: publish an opaque, immutable *sink
@@ -11,7 +11,7 @@ The sink travels *downward*, which is the direction and mutability
 verified as safe across ``PGVectorStore``'s background-loop hop and
 ``langchain_core``'s ``run_in_executor`` fallback. Mutation happens on the
 far side of the call, inside the Flask-aware owner of the accumulator
-(``utils.embedding_usage_state``), so context propagation and
+(``usage.embedding_state``), so context propagation and
 accumulation stay separate primitives.
 
 The default is a no-op, so capture code never branches on "is there a

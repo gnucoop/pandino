@@ -20,7 +20,7 @@ The route declares only
 the behaviour is deliberately asserted end to end through the route,
 because it is the route's declared intent - not the boundary's internals -
 that these tests protect. The mechanics behind the declaration belong to
-utils.usage_attribution, which is why the lookup patch and the diagnostic
+usage.attribution, which is why the lookup patch and the diagnostic
 logger both name that module.
 """
 
@@ -31,9 +31,9 @@ from types import SimpleNamespace
 from flask import Flask
 
 from routes import admin as admin_route
-from utils import usage_attribution
+import usage.attribution as usage_attribution
 from utils.logging_config import register_request_context_hooks
-from utils.usage_attribution_state import get_usage_attribution
+from usage.attribution_state import get_usage_attribution
 
 SERVICE = "/admin/rag-files/upload"
 
@@ -87,7 +87,7 @@ def _patch(monkeypatch, captured, user=None, lookup=None):
             return user
 
     # The admin upload does not resolve the technical identity itself:
-    # utils.usage_attribution is the sole owner of this callable, so it is
+    # usage.attribution is the sole owner of this callable, so it is
     # the only honest patch point. Patching the route module instead would
     # leave the real lookup live and prove nothing.
     monkeypatch.setattr(usage_attribution, "get_user_by_username", lookup)
@@ -205,7 +205,7 @@ def test_unconfigured_identity_binds_nothing_and_keeps_upload_working(
     _patch(monkeypatch, captured, user={"id": TECHNICAL_USER_ID})
     app = _make_app(_config(admin_rag_usage_username=None))
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         response = _post(app)
 
     assert captured["attribution_at_process"] is None
@@ -224,7 +224,7 @@ def test_user_not_found_binds_nothing_and_upload_continues(monkeypatch, caplog):
     captured = {}
     _patch(monkeypatch, captured, user=None)
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         response = _post(_make_app())
 
     assert captured["attribution_at_process"] is None
@@ -240,7 +240,7 @@ def test_invalid_user_id_binds_nothing_and_upload_continues(monkeypatch, caplog)
     captured = {}
     _patch(monkeypatch, captured, user={"username": TECHNICAL_USERNAME, "id": None})
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         response = _post(_make_app())
 
     assert captured["attribution_at_process"] is None
@@ -263,7 +263,7 @@ def test_lookup_failure_binds_nothing_and_does_not_block_the_upload(
 
     _patch(monkeypatch, captured, lookup=failing_lookup)
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         response = _post(_make_app())
 
     assert captured["attribution_at_process"] is None
@@ -366,7 +366,7 @@ def test_diagnostic_carries_no_identity_or_payload(monkeypatch, caplog):
         },
     )
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         _post(_make_app())
 
     diagnostics = _diagnostics(caplog)

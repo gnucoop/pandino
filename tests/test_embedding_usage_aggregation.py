@@ -1,4 +1,4 @@
-"""Tests for utils.embedding_usage_aggregation.
+"""Tests for usage.embedding_aggregation.
 
 Scope: the pure contribution -> aggregate transformation — partition key,
 sum rules, emission order, empty input, and input immutability.
@@ -8,7 +8,7 @@ import dataclasses
 
 import pytest
 
-from utils.embedding_accounting import (
+from usage.embedding_accounting import (
     COST_NO_PROVIDER_BILLING,
     COST_PROVIDER_ABSENT_RESOLVABLE,
     COST_PROVIDER_AUTHORITATIVE,
@@ -17,7 +17,7 @@ from utils.embedding_accounting import (
     QUANTITY_UNIT_INPUT_TOKENS,
     EmbeddingAccountingContribution,
 )
-from utils.embedding_usage_aggregation import (
+from usage.embedding_aggregation import (
     AggregatedEmbeddingUsage,
     aggregate_embedding_contributions,
 )

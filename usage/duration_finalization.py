@@ -1,9 +1,9 @@
-# utils/usage_duration_finalization.py
+# usage/duration_finalization.py
 """Best-effort Usage duration persistence orchestration.
 
 Owns exactly one responsibility: at the ``after_request`` boundary, combine
 the authoritative request duration (``utils.request_duration``) with the
-request-local Usage row identities (``utils.usage_request_state``) to
+request-local Usage row identities (``usage.request_state``) to
 finalize ``logs.duration_ms`` via ``update_usage_duration()``
 (``infrastructure/database_pg.py``), once per registered Usage row.
 
@@ -23,7 +23,7 @@ import logging
 
 from infrastructure.database_pg import update_usage_duration
 from utils.request_duration import get_request_duration_ms
-from utils.usage_request_state import get_usage_log_ids
+from usage.request_state import get_usage_log_ids
 
 logger = logging.getLogger(__name__)
 

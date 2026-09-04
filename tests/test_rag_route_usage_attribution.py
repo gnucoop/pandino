@@ -20,18 +20,19 @@ from types import SimpleNamespace
 from flask import Flask
 
 from routes import rag as rag_route
-from utils import usage_attribution, usage_recording
-from utils.embedding_accounting import (
+import usage.attribution as usage_attribution
+import usage.recording as usage_recording
+from usage.embedding_accounting import (
     COST_PROVIDER_AUTHORITATIVE,
     EmbeddingAccountingContribution,
     ORIGIN_PROVIDER_REPORTED,
     QUANTITY_UNIT_INPUT_TOKENS,
 )
-from utils.embedding_accounting_sink import get_embedding_accounting_sink
-from utils.embedding_operation_context import OPERATION_QUERY
+from usage.embedding_accounting_sink import get_embedding_accounting_sink
+from usage.embedding_operation_context import OPERATION_QUERY
 from utils.logging_config import register_request_context_hooks
-from utils.usage_attribution_state import get_usage_attribution
-from utils.usage_lifecycle import register_usage_lifecycle_hooks
+from usage.attribution_state import get_usage_attribution
+from usage.lifecycle import register_usage_lifecycle_hooks
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -105,7 +106,7 @@ def _patch_common(monkeypatch, captured, user=None, lookup=None):
 
     # The two lookups diverged when /completion.json and /agentchat adopted
     # the public attribution boundary: ambient attribution now resolves
-    # identity inside utils.usage_attribution, while Explicit Usage Recording
+    # identity inside usage.attribution, while Explicit Usage Recording
     # still resolves its own in the route. Both targets get the SAME callable,
     # so the ordered ``captured["lookups"]`` trace still spans the whole
     # request - attribution first, recording second - and the failure
@@ -122,7 +123,7 @@ def _patch_common(monkeypatch, captured, user=None, lookup=None):
 
     monkeypatch.setattr(rag_route, "edit_tokens", lambda *a, **k: None)
 
-    # Both routes record through utils.usage_recording, which binds the
+    # Both routes record through usage.recording, which binds the
     # writer and its identity reads by direct name import - patching
     # rag_route does not reach them, which is exactly the point.
     monkeypatch.setattr(usage_recording, "log_token_usage", fake_log_token_usage)
@@ -288,7 +289,7 @@ def test_completion_attribution_lookup_failure_does_not_block_provider(
         monkeypatch, captured, lookup=_one_shot_failing_lookup(captured, user)
     )
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         response = _post_completion(_make_app())
 
     # Legacy HTTP contract intact, provider flow really reached.
@@ -314,7 +315,7 @@ def test_agentchat_attribution_lookup_failure_does_not_block_provider(
         monkeypatch, captured, lookup=_one_shot_failing_lookup(captured, user)
     )
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         response = _post_agentchat(_make_app())
 
     assert response.status_code == 200
@@ -338,7 +339,7 @@ def test_attribution_diagnostic_carries_no_identity_or_payload(monkeypatch, capl
         ),
     )
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         _post_completion(_make_app())
 
     message = _diagnostics(caplog)[0]
@@ -355,7 +356,7 @@ def test_user_not_found_binds_nothing_and_keeps_legacy_behaviour(monkeypatch, ca
 
     _patch_completion(monkeypatch, captured, lookup=lookup)
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         response = _post_completion(_make_app())
 
     # Legacy behaviour for an unknown user: 200, no LLM Usage row, no log_id.
@@ -374,7 +375,7 @@ def test_invalid_user_id_binds_nothing(monkeypatch, caplog):
         user={"id": "not-an-int", "username": "u", "client": "coopi"},
     )
 
-    with caplog.at_level(logging.WARNING, logger="utils.usage_attribution"):
+    with caplog.at_level(logging.WARNING, logger="usage.attribution"):
         response = _post_completion(_make_app())
 
     assert response.status_code == 200
@@ -459,7 +460,7 @@ def _patch_persistence_boundaries(monkeypatch, captured):
         return [EMBEDDING_LOG_ID + i for i in range(len(entries))]
 
     monkeypatch.setattr(
-        "utils.embedding_usage_persistence.log_resolved_cost_usage_batch", fake_batch
+        "usage.embedding_persistence.log_resolved_cost_usage_batch", fake_batch
     )
 
     def fake_update(log_id, duration_ms):
@@ -467,7 +468,7 @@ def _patch_persistence_boundaries(monkeypatch, captured):
         return True
 
     monkeypatch.setattr(
-        "utils.usage_duration_finalization.update_usage_duration", fake_update
+        "usage.duration_finalization.update_usage_duration", fake_update
     )
 
 
@@ -612,7 +613,7 @@ def test_admin_upload_is_the_only_attributing_admin_route():
     tests/test_admin_route_usage_attribution.py.
 
     The module is scanned for the declared intent rather than the binding
-    primitive, since mechanics belong to utils.usage_attribution. That
+    primitive, since mechanics belong to usage.attribution. That
     ownership is what makes the identity-safety assertions absolute: the
     configuration attribute naming the provisioned identity lives at the
     boundary, so routes/admin.py must not mention it at all.

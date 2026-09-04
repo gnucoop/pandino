@@ -1,4 +1,4 @@
-"""Tests for utils.usage_attribution_state.
+"""Tests for usage.attribution_state.
 
 Focused on the module's own concern only: request-local Usage attribution
 metadata storage. Mirrors the harness style of
@@ -9,7 +9,7 @@ import dataclasses
 
 import pytest
 
-from utils.usage_attribution_state import (
+from usage.attribution_state import (
     _G_ATTRIBUTION_ATTR,
     UsageAttribution,
     bind_usage_attribution,
@@ -35,7 +35,7 @@ def _make_app():
 
 
 def test_public_api_is_exactly_the_type_the_binder_and_the_getter():
-    import utils.usage_attribution_state as module
+    import usage.attribution_state as module
 
     assert set(module.__all__) == {
         "UsageAttribution",
@@ -45,7 +45,7 @@ def test_public_api_is_exactly_the_type_the_binder_and_the_getter():
 
 
 def test_raw_g_attribute_name_is_not_part_of_public_api():
-    import utils.usage_attribution_state as module
+    import usage.attribution_state as module
 
     assert "_G_ATTRIBUTION_ATTR" not in module.__all__
 

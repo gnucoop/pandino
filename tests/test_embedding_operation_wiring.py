@@ -19,19 +19,19 @@ import services.retrieval_service as retrieval_service
 from infrastructure.embedding_capture import DeepInfraAccountingEmbeddings
 from services.completion_service import CompletionRequest, complete_chat
 from services.retrieval_service import retrieve_from_collection
-from utils.embedding_accounting_lifecycle import register_embedding_accounting_hooks
-from utils.embedding_accounting_sink import (
+from usage.embedding_accounting_lifecycle import register_embedding_accounting_hooks
+from usage.embedding_accounting_sink import (
     embedding_accounting_sink,
     get_embedding_accounting_sink,
     no_op_sink,
 )
-from utils.embedding_operation_context import (
+from usage.embedding_operation_context import (
     OPERATION_DOCUMENT,
     OPERATION_PROBE,
     OPERATION_QUERY,
     get_embedding_operation,
 )
-from utils.embedding_usage_state import get_embedding_contributions
+from usage.embedding_state import get_embedding_contributions
 
 MODEL_ID = "BAAI/bge-m3"
 
@@ -296,7 +296,7 @@ def test_agentchat_failed_retrieval_does_not_bleed_into_the_next(monkeypatch):
 
 def test_store_paragraphs_runs_under_document():
     """The ingestion seam as written: scope wraps store_paragraphs only."""
-    from utils.embedding_operation_context import embedding_operation
+    from usage.embedding_operation_context import embedding_operation
 
     store = RecordingStore()
     with embedding_operation(OPERATION_DOCUMENT):
@@ -351,7 +351,7 @@ def test_ingestion_wraps_store_paragraphs_and_not_namespace_preparation():
 
 
 def test_document_scope_restored_after_exception():
-    from utils.embedding_operation_context import embedding_operation
+    from usage.embedding_operation_context import embedding_operation
 
     store = RecordingStore(raises=ValueError("boom"))
     with pytest.raises(ValueError):
@@ -362,7 +362,7 @@ def test_document_scope_restored_after_exception():
 
 def test_document_scope_tolerates_a_no_provider_work_path(collected, monkeypatch):
     """Deduplication may leave nothing to embed: zero contributions is valid."""
-    from utils.embedding_operation_context import embedding_operation
+    from usage.embedding_operation_context import embedding_operation
 
     embeddings, post = deepinfra(monkeypatch, [])
     with embedding_operation(OPERATION_DOCUMENT):
@@ -440,7 +440,7 @@ def test_probe_scope_restored_when_the_provider_probe_fails(monkeypatch):
 
 def test_probe_then_document_produce_distinct_contributions(monkeypatch, collected):
     """The high-value ordering test: one ingestion flow, two operation kinds."""
-    from utils.embedding_operation_context import embedding_operation
+    from usage.embedding_operation_context import embedding_operation
 
     engine = _prepare_namespace(monkeypatch, table_already_exists=False)
     embeddings, post = deepinfra(
@@ -483,7 +483,7 @@ def test_request_binds_a_sink_over_a_fresh_accumulator(monkeypatch):
         embeddings, _ = deepinfra(
             monkeypatch, [FakeResponse(native_payload([[0.1, 0.2]], input_tokens=7))]
         )
-        from utils.embedding_operation_context import embedding_operation
+        from usage.embedding_operation_context import embedding_operation
 
         with embedding_operation(OPERATION_QUERY):
             embeddings.embed_query("a question")
@@ -509,7 +509,7 @@ def test_requests_do_not_share_contributions(monkeypatch):
         embeddings, _ = deepinfra(
             monkeypatch, [FakeResponse(native_payload([[0.1, 0.2]], input_tokens=5))]
         )
-        from utils.embedding_operation_context import embedding_operation
+        from usage.embedding_operation_context import embedding_operation
 
         with embedding_operation(OPERATION_QUERY):
             embeddings.embed_query("a question")
@@ -567,7 +567,7 @@ def test_contribution_survives_a_later_request_failure(monkeypatch):
         embeddings, _ = deepinfra(
             monkeypatch, [FakeResponse(native_payload([[0.1]], input_tokens=9))]
         )
-        from utils.embedding_operation_context import embedding_operation
+        from usage.embedding_operation_context import embedding_operation
 
         with embedding_operation(OPERATION_QUERY):
             embeddings.embed_query("a question")

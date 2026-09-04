@@ -11,9 +11,9 @@ from infrastructure.database_pg import (
     get_user_by_username,
 )
 from utils.operational_event import build_operational_event
-from utils.usage_attribution import attribute_usage_to_user
-from utils.usage_recording import record_token_consumption
-from utils.usage_request_state import get_usage_log_id
+from usage.attribution import attribute_usage_to_user
+from usage.recording import record_token_consumption
+from usage.request_state import get_usage_log_id
 from infrastructure.ai import choose_emb_model
 from infrastructure.vector_store import MauiVectorStore
 from services.completion_service import complete_chat, CompletionRequest

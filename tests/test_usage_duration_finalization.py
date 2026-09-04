@@ -1,8 +1,8 @@
-"""Tests for utils.usage_duration_finalization.
+"""Tests for usage.duration_finalization.
 
 Focused on the module's own concern only: best-effort composition of
 get_request_duration_ms() (utils.request_duration), get_usage_log_ids()
-(utils.usage_request_state), and update_usage_duration()
+(usage.request_state), and update_usage_duration()
 (infrastructure.database_pg) at the after_request boundary. Does not
 re-test any of those three settled modules' own contracts - they are
 monkeypatched here exactly as this module consumes them.
@@ -13,12 +13,12 @@ from unittest.mock import patch
 
 import pytest
 
-from utils.usage_duration_finalization import (
+from usage.duration_finalization import (
     _HOOKS_MARKER,
     register_usage_duration_finalization_hooks,
 )
 
-MODULE = "utils.usage_duration_finalization"
+MODULE = "usage.duration_finalization"
 
 
 def _make_app(duration_ms, log_id, update_result_or_exc=None):
@@ -69,13 +69,13 @@ def _run_with_patches(app, duration_ms, log_id, update_side_effect):
 
 
 def test_public_api_is_exactly_registration_hook():
-    import utils.usage_duration_finalization as module
+    import usage.duration_finalization as module
 
     assert set(module.__all__) == {"register_usage_duration_finalization_hooks"}
 
 
 def test_hooks_marker_is_not_part_of_public_api():
-    import utils.usage_duration_finalization as module
+    import usage.duration_finalization as module
 
     assert "_HOOKS_MARKER" not in module.__all__
 
@@ -339,7 +339,7 @@ def test_every_registered_id_receives_the_same_request_duration(caplog):
 def test_duplicate_ids_are_finalized_once():
     """De-duplication is get_usage_log_ids()' contract; the loop must not
     re-update a row just because it appears twice upstream."""
-    from utils.usage_request_state import (
+    from usage.request_state import (
         register_usage_log_id,
         set_usage_log_id,
     )
@@ -429,7 +429,7 @@ def test_not_found_is_reported_per_id_and_does_not_stop_the_loop(caplog):
 def test_legacy_single_set_usage_log_id_flow_updates_exactly_once():
     """Regression guard: a route that only calls set_usage_log_id() once
     must be finalized exactly as before this module learned about many ids."""
-    from utils.usage_request_state import set_usage_log_id
+    from usage.request_state import set_usage_log_id
 
     app = _make_app(850, None)
 

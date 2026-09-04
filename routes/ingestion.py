@@ -6,7 +6,7 @@ from config import PROVIDER_API_KEY_MAP
 from infrastructure.dino import dino_authenticate
 from infrastructure.external_auth import external_authenticate
 from services.rag_ingestion_service import process_rag_file
-from utils.usage_attribution import (
+from usage.attribution import (
     USAGE_POLICY_LEGACY_DINO_INGESTION,
     attribute_usage_to_policy,
     attribute_usage_to_user,

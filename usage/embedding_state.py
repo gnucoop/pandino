@@ -1,4 +1,4 @@
-# utils/embedding_usage_state.py
+# usage/embedding_state.py
 """Request-scoped accumulation of embedding-accounting contributions.
 
 Owns exactly one responsibility: hold the ordered 0..N contributions
@@ -6,7 +6,7 @@ produced by the current HTTP request, as request-local state on
 ``flask.g``, and validate the request-level provider/model invariant
 across them.
 
-Sibling to — not an extension of — ``utils.usage_request_state``, which is
+Sibling to — not an extension of — ``usage.request_state``, which is
 documented as a single slot because at most one Usage row exists per
 request. Embedding work is 0..N per request and its question ("what was
 consumed") is a different one from that module's ("which row id").
@@ -21,7 +21,7 @@ through the sink callable bound by :func:`bind_embedding_accounting`.
 import logging
 from contextlib import contextmanager
 
-from utils.embedding_accounting_sink import embedding_accounting_sink
+from usage.embedding_accounting_sink import embedding_accounting_sink
 
 __all__ = [
     "EmbeddingAccountingAccumulator",
@@ -32,7 +32,7 @@ __all__ = [
 
 #: Attribute under which the accumulator is parked on ``flask.g``. Private
 #: to this module, namespaced like ``utils.request_duration``'s and
-#: ``utils.usage_request_state``'s own ``_maui_*`` g attributes.
+#: ``usage.request_state``'s own ``_maui_*`` g attributes.
 _G_ACCUMULATOR_ATTR = "_maui_embedding_accumulator"
 
 logger = logging.getLogger(__name__)
@@ -135,7 +135,7 @@ def bind_embedding_accounting():
 
     Requires an active Flask context, like any other ``flask.g`` access.
     The production request path does not go through this context manager: the
-    hooks registered by :mod:`utils.embedding_accounting_lifecycle` drive the
+    hooks registered by :mod:`usage.embedding_accounting_lifecycle` drive the
     same two primitives across ``before_request``/``teardown_request``. This
     is the scoped form, for callers that own their own block.
     """

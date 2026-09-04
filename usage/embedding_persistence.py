@@ -1,4 +1,4 @@
-# utils/embedding_usage_persistence.py
+# usage/embedding_persistence.py
 """Request-lifecycle persistence of embedding consumption as Usage rows.
 
 Owns exactly one responsibility: at the end of each HTTP request, turn the
@@ -9,14 +9,14 @@ duration finalizer treats them like any other Usage row of the request.
 The pipeline is a composition of settled modules, and nothing here
 duplicates what any of them owns::
 
-    accumulator (utils.embedding_usage_state)
-      -> pure aggregation (utils.embedding_usage_aggregation)
-      -> attribution (utils.usage_attribution_state)
-      -> provenance vocabulary (utils.usage_provenance)
+    accumulator (usage.embedding_state)
+      -> pure aggregation (usage.embedding_aggregation)
+      -> attribution (usage.attribution_state)
+      -> provenance vocabulary (usage.provenance)
       -> batch writer (infrastructure.database_pg)
-      -> row-id registration (utils.usage_request_state)
+      -> row-id registration (usage.request_state)
 
-Deliberately *not* an extension of ``utils.embedding_accounting_lifecycle``,
+Deliberately *not* an extension of ``usage.embedding_accounting_lifecycle``,
 whose single responsibility is binding and unbinding the capture sink: that
 module makes collection possible, this one decides what the collection
 means. It knows no route, no service, no provider client and no request
@@ -36,13 +36,13 @@ from infrastructure.database_pg import (
     ResolvedCostUsageEntry,
     log_resolved_cost_usage_batch,
 )
-from utils.embedding_accounting import COST_NO_PROVIDER_BILLING
-from utils.embedding_usage_aggregation import aggregate_embedding_contributions
-from utils.embedding_usage_state import get_embedding_contributions
+from usage.embedding_accounting import COST_NO_PROVIDER_BILLING
+from usage.embedding_aggregation import aggregate_embedding_contributions
+from usage.embedding_state import get_embedding_contributions
 from utils.logging_config import get_request_id
-from utils.usage_attribution_state import get_usage_attribution
-from utils.usage_provenance import cost_origin_from_cost_state
-from utils.usage_request_state import register_usage_log_id
+from usage.attribution_state import get_usage_attribution
+from usage.provenance import cost_origin_from_cost_state
+from usage.request_state import register_usage_log_id
 
 logger = logging.getLogger(__name__)
 

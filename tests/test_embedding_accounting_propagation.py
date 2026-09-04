@@ -28,21 +28,21 @@ import threading
 import pytest
 from langchain_core.runnables.config import run_in_executor
 
-from utils.embedding_accounting import (
+from usage.embedding_accounting import (
     COST_NO_PROVIDER_BILLING,
     ORIGIN_PROVIDER_REPORTED,
     QUANTITY_UNIT_INPUT_TOKENS,
     EmbeddingAccountingContribution,
 )
-from utils.embedding_accounting_sink import get_embedding_accounting_sink
-from utils.embedding_operation_context import (
+from usage.embedding_accounting_sink import get_embedding_accounting_sink
+from usage.embedding_operation_context import (
     OPERATION_DOCUMENT,
     OPERATION_PROBE,
     OPERATION_QUERY,
     embedding_operation,
     get_embedding_operation,
 )
-from utils.embedding_usage_state import (
+from usage.embedding_state import (
     bind_embedding_accounting,
     get_embedding_contributions,
 )
@@ -180,7 +180,7 @@ def test_sequential_operations_across_the_hop_do_not_bleed(background_loop, requ
 
 def test_far_side_set_does_not_leak_back_to_the_caller(background_loop):
     """One-way propagation: the far side cannot mutate the caller's scope."""
-    from utils.embedding_operation_context import set_embedding_operation
+    from usage.embedding_operation_context import set_embedding_operation
 
     async def _rebind():
         set_embedding_operation(OPERATION_DOCUMENT)  # token deliberately dropped
@@ -199,7 +199,7 @@ def test_exception_on_the_far_side_still_restores_caller_scopes(background_loop,
             with bind_embedding_accounting():
                 _run_as_sync(background_loop, _boom())
 
-    from utils.embedding_accounting_sink import no_op_sink
+    from usage.embedding_accounting_sink import no_op_sink
 
     assert get_embedding_operation() is None
     assert get_embedding_accounting_sink() is no_op_sink

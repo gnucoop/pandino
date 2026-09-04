@@ -23,13 +23,13 @@ from infrastructure.embedding_capture import (
     EmbeddingCaptureError,
     extract_deepinfra_contribution,
 )
-from utils.embedding_accounting import (
+from usage.embedding_accounting import (
     COST_PROVIDER_AUTHORITATIVE,
     ORIGIN_PROVIDER_REPORTED,
     QUANTITY_UNIT_INPUT_TOKENS,
 )
-from utils.embedding_accounting_sink import embedding_accounting_sink
-from utils.embedding_operation_context import (
+from usage.embedding_accounting_sink import embedding_accounting_sink
+from usage.embedding_operation_context import (
     OPERATION_DOCUMENT,
     OPERATION_PROBE,
     OPERATION_QUERY,

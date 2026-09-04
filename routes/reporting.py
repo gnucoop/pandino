@@ -7,7 +7,7 @@ from infrastructure.database_pg import (
     edit_tokens,
     get_user_by_username,
 )
-from utils.usage_recording import record_token_consumption
+from usage.recording import record_token_consumption
 import infrastructure.database_pg as database_pg
 from services.prompt_service import reply_to_prompt
 from routes.utils import assert_valid_api_key

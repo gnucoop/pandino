@@ -1,6 +1,6 @@
 """Contract tests for the public Usage attribution boundary.
 
-Covers the public promises of ``utils.usage_attribution``: what an adopter
+Covers the public promises of ``usage.attribution``: what an adopter
 declares, what the boundary derives and hides, how each declared intent
 behaves when the world underneath it fails, and what a diagnostic is
 allowed to say.
@@ -12,15 +12,15 @@ import logging
 import pytest
 from flask import Flask
 
-from utils import usage_attribution
-from utils.usage_attribution import (
+import usage.attribution as usage_attribution
+from usage.attribution import (
     USAGE_POLICY_ADMIN_RAG_INGESTION,
     USAGE_POLICY_LEGACY_DINO_INGESTION,
     attribute_usage_to_policy,
     attribute_usage_to_user,
     declare_usage_unattributed,
 )
-from utils.usage_attribution_state import get_usage_attribution
+from usage.attribution_state import get_usage_attribution
 
 _ROUTE = "/completion.json"
 _REAL_USERNAME = "person@example.com"

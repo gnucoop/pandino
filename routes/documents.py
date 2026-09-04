@@ -6,7 +6,7 @@ from flask import Blueprint, jsonify, request, current_app
 from config import PROVIDER_API_KEY_MAP
 from infrastructure.database_pg import edit_tokens
 from utils.operational_event import build_operational_event
-from utils.usage_recording import record_token_consumption
+from usage.recording import record_token_consumption
 import infrastructure.database_pg as database_pg
 from services.document_comparison_service import (
     CONTEXT_WINDOW_ERROR_MESSAGE,

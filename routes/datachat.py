@@ -14,8 +14,8 @@ from datachat.engine_output_adapter import adapt_engine_output, consume_adapter_
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult
 from utils.logging_config import get_request_id
-from utils.usage_recording import record_token_consumption
-from utils.usage_request_state import get_usage_log_id
+from usage.recording import record_token_consumption
+from usage.request_state import get_usage_log_id
 from config import PROVIDER_API_KEY_MAP
 from routes.utils import assert_valid_api_key
 

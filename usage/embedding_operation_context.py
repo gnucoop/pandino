@@ -1,4 +1,4 @@
-# utils/embedding_operation_context.py
+# usage/embedding_operation_context.py
 """Scoped ambient context naming the current logical embedding operation.
 
 Owns exactly one responsibility: carry an *immutable* value — one of

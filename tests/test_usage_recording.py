@@ -1,7 +1,7 @@
 """Contract tests for the explicit Usage recording boundary.
 
 Covers the public promises of both sibling operations,
-``utils.usage_recording.record_token_consumption`` and
+``usage.recording.record_token_consumption`` and
 ``record_resolved_consumption``: what an adopter must supply, what the
 boundary derives, what it hides, and how each behaves when the world
 underneath it fails.
@@ -13,13 +13,13 @@ import logging
 import pytest
 from flask import Flask
 
-from utils import usage_recording
-from utils.usage_recording import (
+import usage.recording as usage_recording
+from usage.recording import (
     record_resolved_consumption,
     record_token_consumption,
 )
-from utils.usage_attribution_state import bind_usage_attribution
-from utils.usage_request_state import get_usage_log_id, get_usage_log_ids
+from usage.attribution_state import bind_usage_attribution
+from usage.request_state import get_usage_log_id, get_usage_log_ids
 
 
 @pytest.fixture

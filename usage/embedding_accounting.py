@@ -1,4 +1,4 @@
-# utils/embedding_accounting.py
+# usage/embedding_accounting.py
 """Normalized embedding-accounting contribution contract.
 
 One :class:`EmbeddingAccountingContribution` represents exactly one
@@ -15,7 +15,7 @@ nothing about Flask, HTTP endpoints or the Maui request id.
 
 from dataclasses import dataclass
 
-from utils.embedding_operation_context import OPERATION_KINDS
+from usage.embedding_operation_context import OPERATION_KINDS
 
 __all__ = [
     "QUANTITY_UNIT_INPUT_TOKENS",

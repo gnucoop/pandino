@@ -8,7 +8,7 @@ from infrastructure.vector_store import VectorStore
 
 from infrastructure.ai import choose_llm
 from infrastructure.prompt_utils import load_prompt, render_prompt
-from utils.embedding_operation_context import OPERATION_QUERY, embedding_operation
+from usage.embedding_operation_context import OPERATION_QUERY, embedding_operation
 from utils.operational_event import build_operational_event
 
 logger = logging.getLogger(__name__)

@@ -9,7 +9,7 @@ state on ``flask.g`` and exposed through :func:`get_request_duration_ms`.
 
 This module does not persist anything, does not know about Usage
 ``log_id``, and does not call ``update_usage_duration()``
-(``infrastructure/database_pg.py``). ``utils.usage_duration_finalization``
+(``infrastructure/database_pg.py``). ``usage.duration_finalization``
 reads this timer's output and owns that persistence; wiring it here would
 pull Usage-persistence concerns into a module deliberately kept to
 lifecycle timing only.

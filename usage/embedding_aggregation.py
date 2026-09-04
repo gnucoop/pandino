@@ -1,4 +1,4 @@
-# utils/embedding_usage_aggregation.py
+# usage/embedding_aggregation.py
 """Pure aggregation of embedding-accounting contributions.
 
 Collapses the 0..N contributions a single request produced into the
@@ -13,7 +13,7 @@ already enforces.
 
 from dataclasses import dataclass
 
-from utils.embedding_accounting import COST_PROVIDER_AUTHORITATIVE
+from usage.embedding_accounting import COST_PROVIDER_AUTHORITATIVE
 
 __all__ = [
     "AggregatedEmbeddingUsage",
