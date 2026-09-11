@@ -315,6 +315,7 @@ SANCTIONED_PRODUCTION_CALL_SITES = {
     "services/completion_service.py",
     "routes/rag.py",
     "routes/multimodal.py",
+    "services/agentchat_service.py",
 }
 
 
@@ -377,6 +378,7 @@ def test_pilot_modules_are_the_only_sanctioned_production_modules_in_p3():
         "services/completion_service.py",
         "routes/rag.py",
         "routes/multimodal.py",
+        "services/agentchat_service.py",
     }, (
         "After THIRD ADOPTER SLICE T1 the sanctioned set is the three pilot "
         "modules — the /compare_docs route (E1/E5) and the two pilot services "
@@ -384,7 +386,10 @@ def test_pilot_modules_are_the_only_sanctioned_production_modules_in_p3():
         "the /completion.json retrieval and provider facts, plus routes/rag.py, "
         "which owns the terminal completion_uncontrolled_failure fact (Fact E), "
         "plus routes/multimodal.py, which owns the /transcribe request-rejection "
-        "and branch-selection facts (T1). "
+        "and branch-selection facts (T1), "
+        "plus services/agentchat_service.py, which owns the /agentchat "
+        "service-boundary failure class and audit-write-loss facts (FOURTH "
+        "ADOPTER SLICE B3). "
         "Each entry is pinned by exact path; widening this to a "
         "directory prefix would silently sanction every future services/ "
         "call site."
@@ -396,6 +401,15 @@ def test_multimodal_route_is_sanctioned_after_t1():
     rejection and dispatch branch-selection facts to routes/multimodal.py, so
     that module is now an intentional, visible member of the allow-list."""
     assert "routes/multimodal.py" in SANCTIONED_PRODUCTION_CALL_SITES
+
+
+def test_agentchat_service_is_sanctioned_after_b3():
+    """FOURTH ADOPTER SLICE B3 adds the two service-owned /agentchat facts —
+    agentchat_agent_failed (the real exception class, preserved before the
+    RuntimeError wrap erases it) and agentchat_audit_log_failed (loss of the
+    agent_runs audit write) — to services/agentchat_service.py, so that module
+    is now an intentional, visible member of the allow-list."""
+    assert "services/agentchat_service.py" in SANCTIONED_PRODUCTION_CALL_SITES
 
 
 def test_rag_route_is_sanctioned_after_c3():

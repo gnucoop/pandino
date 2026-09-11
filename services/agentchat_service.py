@@ -11,6 +11,7 @@ from infrastructure.retriever_tool import RetrieverTool
 from infrastructure.prompt_utils import load_prompt, render_prompt
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult
+from utils.operational_event import build_operational_event
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +130,15 @@ def run_agentchat(
                 question=user_message,
             )
         except Exception as audit_error:
-            logger.warning("event=agentchat_audit_log_failed error=%s", audit_error)
+            # E5 — the agent_runs audit write was lost. Contained by design:
+            # WARNING, fail-open, and exc_info keeps the exception context on
+            # the runtime stream while the persisted row carries error_type
+            # only.
+            message, extra = build_operational_event(
+                event="agentchat_audit_log_failed",
+                error_type=type(audit_error).__name__,
+            )
+            logger.warning(message, extra=extra, exc_info=True)
 
         return AgentChatServiceResult(
             payload=payload,
@@ -140,4 +149,13 @@ def run_agentchat(
     except RuntimeError:
         raise
     except Exception as e:
+        # E4 — this is the ONLY point at which the real exception class still
+        # exists: the wrap below erases it into a RuntimeError message string
+        # that the route cannot decompose. error_type ONLY: provider/model and
+        # start_time are not bound on every path reaching this handler.
+        message, extra = build_operational_event(
+            event="agentchat_agent_failed",
+            error_type=type(e).__name__,
+        )
+        logger.exception(message, extra=extra)
         raise RuntimeError(f"agentchat_service failed: {e}") from e
