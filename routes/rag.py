@@ -160,11 +160,21 @@ def agentchat() -> Response | tuple[Response, int]:
 
         r = request.get_json()
         if not r:
+            message, extra = build_operational_event(
+                event="agentchat_request_rejected",
+                details={"reason": "no_json"},
+            )
+            logger.warning(message, extra=extra)
             return jsonify({"error": "No JSON data provided"}), 400
 
         required = ["chat", "username"]
         missing = [k for k in required if k not in r]
         if missing:
+            message, extra = build_operational_event(
+                event="agentchat_request_rejected",
+                details={"reason": "missing_required_keys"},
+            )
+            logger.warning(message, extra=extra)
             return (
                 jsonify({"error": f"Missing required keys: {', '.join(missing)}"}),
                 400,
@@ -172,6 +182,11 @@ def agentchat() -> Response | tuple[Response, int]:
 
         api_key = request.headers.get("X-API-KEY")
         if not api_key:
+            message, extra = build_operational_event(
+                event="agentchat_request_rejected",
+                details={"reason": "missing_api_key"},
+            )
+            logger.warning(message, extra=extra)
             return jsonify({"error": "Missing X-API-KEY header"}), 400
 
         # === Validate the provided API key for the given user email ===
@@ -186,6 +201,11 @@ def agentchat() -> Response | tuple[Response, int]:
 
         chat = r["chat"]
         if not isinstance(chat, list) or not chat:
+            message, extra = build_operational_event(
+                event="agentchat_request_rejected",
+                details={"reason": "invalid_chat"},
+            )
+            logger.warning(message, extra=extra)
             return jsonify({"error": "Invalid 'chat': expected non-empty list"}), 400
 
         namespace = r.get("namespace") or config.rag.default_namespace
@@ -201,8 +221,18 @@ def agentchat() -> Response | tuple[Response, int]:
         # === TOKEN CHECK ===
         user_tokens = database_pg.get_user_tokens(r["username"])
         if user_tokens is None:
+            message, extra = build_operational_event(
+                event="agentchat_request_rejected",
+                details={"reason": "token_balance_unavailable"},
+            )
+            logger.warning(message, extra=extra)
             return jsonify({"error": "Could not retrieve user tokens"}), 500
         if token_cost > user_tokens:
+            message, extra = build_operational_event(
+                event="agentchat_request_rejected",
+                details={"reason": "insufficient_tokens"},
+            )
+            logger.warning(message, extra=extra)
             return (
                 jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
                 403,
