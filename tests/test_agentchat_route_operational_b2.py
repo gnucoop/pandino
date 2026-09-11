@@ -385,28 +385,32 @@ def test_unexpected_exception_persists_unhandled_with_real_class(monkeypatch, ca
 
 
 # ---------------------------------------------------------------------------
-# 9. invalid API key — CURRENT behaviour, a KNOWN DEFECT
+# 9. HTTPException pass-through — invalid API key, malformed JSON, 415
 # ---------------------------------------------------------------------------
 
 
-def test_invalid_api_key_currently_surfaces_as_unhandled_500(monkeypatch, caplog):
-    """Pins CURRENT observed behaviour, NOT the desired long-term contract.
+def _assert_no_slice_events(caplog):
+    """No B2 failure record, and none of the other slices' events either."""
+    assert _operational_records(caplog, _B2_EVENT) == [], (
+        f"{_B2_EVENT} must not be emitted for an HTTPException raised inside "
+        "the route: those are already-classified HTTP responses"
+    )
+    _assert_no_other_slice_events(caplog)
 
-    `assert_valid_api_key` calls `abort(403)`, which raises werkzeug's
-    `Forbidden`. Because the whole view body sits inside the route's own
-    `try`, that `Forbidden` is caught by `except Exception` at the terminal
-    boundary, so an invalid API key surfaces as HTTP **500** rather than 403,
-    recorded as `reason=unhandled`, `error_type=Forbidden`.
 
-    This is a KNOWN CURRENT DEFECT, recorded at §4.4 of the technical design
-    and classified FOLLOW-UP CANDIDATE. It is NOT the desired long-term API
-    contract and this test does not endorse it.
+def test_invalid_api_key_propagates_403_without_operational_event(
+    monkeypatch, caplog
+):
+    """An invalid API key surfaces as HTTP 403, Operationally silent.
 
-    The test exists so that this adopter stays faithful to CURRENT control
-    flow, and so that the separate future fix is made VISIBLE: when the 403 is
-    correctly propagated, THIS TEST IS EXPECTED TO FAIL and must be updated
-    together with that fix. Do not treat a failure here as a regression of
-    this adopter.
+    `assert_valid_api_key` calls `abort(403)`, raising werkzeug's `Forbidden`.
+    The route's `except HTTPException: raise` arm lets it reach Flask's
+    default HTML error handling instead of being reclassified by the terminal
+    `except Exception` arm. (Until that arm was added this returned 500 with
+    `reason=unhandled`, `error_type=Forbidden`.)
+
+    Auth failure is intentionally not part of either Operational vocabulary:
+    it is neither a B1 ratified guard nor a B2 uncontrolled failure.
     """
     app = _make_app()
     # The real assert_valid_api_key and the real abort(403) both run; only the
@@ -421,16 +425,61 @@ def test_invalid_api_key_currently_surfaces_as_unhandled_500(monkeypatch, caplog
     with caplog.at_level(logging.INFO):
         response = _post(app)
 
-    # CURRENT behaviour — see the docstring. 403 would be the correct contract.
-    assert response.status_code == 500
-    assert response.get_json() == {"error": "An unexpected error occurred"}
-
-    record = _the_failure_record(caplog)
-    assert record.levelno == logging.ERROR
-    _assert_clean_payload(record, reason="unhandled", error_type="Forbidden")
+    assert response.status_code == 403
+    assert b"Invalid API key" in response.data
+    assert response.headers.get("X-Request-ID")
 
     _assert_legacy_tokens_gone(caplog)
-    _assert_no_other_slice_events(caplog)
+    _assert_no_slice_events(caplog)
+
+
+def test_malformed_json_propagates_400_without_operational_event(
+    monkeypatch, caplog
+):
+    """Malformed JSON reaches `request.get_json()`, which raises BadRequest.
+
+    Same boundary, same class of defect as the 403: the HTTPException arm
+    restores Flask's 400 instead of a reclassified 500.
+    """
+    app = _make_app()
+    _patch_shared_seams(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        response = app.test_client().post(
+            "/agentchat",
+            data="{not valid json",
+            content_type="application/json",
+            headers=_HEADERS,
+        )
+
+    assert response.status_code == 400
+    assert response.headers.get("X-Request-ID")
+
+    _assert_legacy_tokens_gone(caplog)
+    _assert_no_slice_events(caplog)
+
+
+def test_wrong_content_type_propagates_415_without_operational_event(
+    monkeypatch, caplog
+):
+    """A non-JSON Content-Type makes `request.get_json()` raise
+    UnsupportedMediaType, which must surface as 415, not 500."""
+    app = _make_app()
+    _patch_shared_seams(monkeypatch)
+
+    with caplog.at_level(logging.INFO):
+        response = app.test_client().post(
+            "/agentchat",
+            data="chat=hello",
+            content_type="text/plain",
+            headers=_HEADERS,
+        )
+
+    assert response.status_code == 415
+    assert response.headers.get("X-Request-ID")
+
+    _assert_legacy_tokens_gone(caplog)
+    _assert_no_slice_events(caplog)
 
 
 # ---------------------------------------------------------------------------

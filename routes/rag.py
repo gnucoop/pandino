@@ -3,6 +3,7 @@ import os
 from typing import Union, Optional
 
 from flask import Blueprint, Response, current_app, jsonify, request
+from werkzeug.exceptions import HTTPException
 
 import infrastructure.database_pg as database_pg
 from infrastructure.database_pg import (
@@ -304,6 +305,14 @@ def agentchat() -> Response | tuple[Response, int]:
             payload["log_id"] = log_id
 
         return jsonify(payload), 200
+
+    except HTTPException:
+        # Flask/Werkzeug HTTP errors raised inside this route (abort(403) from
+        # assert_valid_api_key, BadRequest/UnsupportedMediaType from
+        # request.get_json()) are already fully classified responses. Let them
+        # propagate to Flask's default handling instead of being reclassified
+        # as uncontrolled failures.
+        raise
 
     except RuntimeError as e:
         # Persist only the classification this boundary actually knows. The
