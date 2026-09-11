@@ -1,6 +1,5 @@
 import logging
 import os
-import traceback
 from typing import Union, Optional
 
 from flask import Blueprint, Response, current_app, jsonify, request
@@ -307,12 +306,26 @@ def agentchat() -> Response | tuple[Response, int]:
         return jsonify(payload), 200
 
     except RuntimeError as e:
-        logger.error("event=agentchat_runtime_error error=%s", str(e))
+        # Persist only the classification this boundary actually knows. The
+        # exception class here is always RuntimeError, so error_type would
+        # carry no diagnostic value. Not exception-aware: the legacy line
+        # carried no traceback, and the obligation is to preserve runtime
+        # depth, not to add it.
+        message, extra = build_operational_event(
+            event="agentchat_uncontrolled_failure",
+            details={"reason": "service_error"},
+        )
+        logger.error(message, extra=extra)
         return jsonify({"error": str(e)}), 500
 
     except Exception as e:
-        logger.error("event=agentchat_unexpected_error error=%s", str(e))
-        logger.error(
-            "event=agentchat_unexpected_error_trace trace=%s", traceback.format_exc()
+        # Exception-aware, because the two legacy lines this replaces did put
+        # a full traceback on stderr. The traceback stays on the runtime
+        # stream; the persisted row carries the exception class only.
+        message, extra = build_operational_event(
+            event="agentchat_uncontrolled_failure",
+            details={"reason": "unhandled"},
+            error_type=type(e).__name__,
         )
+        logger.exception(message, extra=extra)
         return jsonify({"error": "An unexpected error occurred"}), 500
