@@ -212,8 +212,8 @@ cp .env.example .env
 python3 -m infrastructure.database_pg init_db
 #   → must print "Database initialized successfully."; see §5.
 
-# 9. Run the app
-python main.py          # → http://127.0.0.1:5000
+# 9. Run the app (from the repository root, with the virtualenv activated)
+make run-local          # → http://127.0.0.1:5000
 ```
 
 > **Note:** the `load_dotenv()` call in `main.py` reads `.env` automatically, so
@@ -483,14 +483,42 @@ repository provides no command or test that performs that comparison — see
 
 ## 6. Running the Application
 
-### Local development (Flask dev server)
+### Local development
+
+From the repository root, after activating your intended virtualenv:
 
 ```bash
-python main.py      # debug=True, port 5000
+make run-local      # → http://127.0.0.1:5000
 ```
 
-`main.py:83`. Sets `MPLBACKEND=Agg` (headless matplotlib), relaxes pandas display
-limits, and initializes the `datachat.runtime` + `agent_runs` loggers.
+The `run-local` target in the root `Makefile` runs:
+
+```bash
+LOG_LEVEL=INFO gunicorn main:app -k gevent --workers 1 --worker-connections 10 \
+           --timeout 300 --bind 127.0.0.1:5000
+```
+
+`127.0.0.1:5000` is the local address: the server is reachable only from your own
+machine. This is a convenience for starting the app; it is not deployment
+configuration, and it does not change Gunicorn's shutdown behaviour — Ctrl+C still
+behaves as Gunicorn normally does, tracebacks included.
+
+**Why Gunicorn/gevent and `LOG_LEVEL=INFO` locally.** Operational Persistence
+records operational events as they are emitted while the app serves requests, so
+what you see locally is only trustworthy if the app runs the same way it does when
+deployed. The Flask dev server differs on both points that matter here: it does not
+use the gevent worker that carries concurrent, long-running agent calls, and its
+reloader/debug behaviour can restart or duplicate the process underneath a run.
+Running the same single gevent worker as the `Dockerfile` keeps the concurrency
+model identical, and `LOG_LEVEL=INFO` keeps the operational events visible —
+at a coarser level they are filtered out and a check can look clean simply because
+nothing was recorded.
+
+The Flask dev server is still available with `python main.py` (`main.py:83`,
+`debug=True`, port 5000) when you want the reloader and do not need Operational
+Persistence checks. Either entry point sets `MPLBACKEND=Agg` (headless matplotlib),
+relaxes pandas display limits, and initializes the `datachat.runtime` +
+`agent_runs` loggers.
 
 ### Production (Docker / gunicorn)
 
