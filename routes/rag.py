@@ -1,11 +1,19 @@
+import logging
 import os
-import traceback
 from typing import Union, Optional
 
 from flask import Blueprint, Response, current_app, jsonify, request
+from werkzeug.exceptions import HTTPException
 
 import infrastructure.database_pg as database_pg
-from infrastructure.database_pg import edit_tokens, get_user_by_username, log_token_usage
+from infrastructure.database_pg import (
+    edit_tokens,
+    get_user_by_username,
+)
+from utils.operational_event import build_operational_event
+from usage.attribution import attribute_usage_to_user
+from usage.recording import record_token_consumption
+from usage.request_state import get_usage_log_id
 from infrastructure.ai import choose_emb_model
 from infrastructure.vector_store import MauiVectorStore
 from services.completion_service import complete_chat, CompletionRequest
@@ -14,6 +22,8 @@ from config import PROVIDER_API_KEY_MAP
 from routes.utils import assert_valid_api_key
 
 rag_bp = Blueprint("rag", __name__)
+
+logger = logging.getLogger(__name__)
 
 
 @rag_bp.route("/completion.json", methods=["POST"])
@@ -36,6 +46,8 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
             return jsonify({"error": "Missing X-API-KEY header"}), 400
 
         assert_valid_api_key(api_key, r["username"])
+
+        attribute_usage_to_user(username=r["username"])
 
         config = current_app.config["MAUI_CONFIG"]
 
@@ -96,13 +108,18 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
                 token_in = resp["token_usage"]["input_tokens"]
                 token_out = resp["token_usage"]["output_tokens"]
                 if isinstance(user_id, int) and (token_in > 0 or token_out > 0):
-                    log_id = log_token_usage(
+
+                    if record_token_consumption(
                         user_id=user_id,
+                        provider=llm_type,
+                        model=model,
+                        service="/completion.json",
                         token_input=token_in,
                         token_output=token_out,
-                        model=model,
-                        provider=llm_type,
-                    )
+                    ):
+                        # Preserve the existing response contract without exposing row identity
+                        # through the recording API.
+                        log_id = get_usage_log_id()
 
             if resp["vectors"]:
                 for vec in resp["vectors"]:
@@ -120,8 +137,13 @@ def completion_handler() -> Union[Response, tuple[Response, int]]:
 
         return jsonify({"error": "No response from chat completion"}), 500
 
-    except Exception as e:
-        current_app.logger.error(f"Unexpected error in completion_handler: {str(e)}")
+    except Exception as exc:
+        # Persist only the exception type at the terminal failure boundary.
+        message, extra = build_operational_event(
+            event="completion_uncontrolled_failure",
+            error_type=type(exc).__name__,
+        )
+        logger.error(message, extra=extra)
         return jsonify({"error": "An unexpected error occurred"}), 500
 
 
@@ -138,11 +160,21 @@ def agentchat() -> Response | tuple[Response, int]:
 
         r = request.get_json()
         if not r:
+            message, extra = build_operational_event(
+                event="agentchat_request_rejected",
+                details={"reason": "no_json"},
+            )
+            logger.warning(message, extra=extra)
             return jsonify({"error": "No JSON data provided"}), 400
 
         required = ["chat", "username"]
         missing = [k for k in required if k not in r]
         if missing:
+            message, extra = build_operational_event(
+                event="agentchat_request_rejected",
+                details={"reason": "missing_required_keys"},
+            )
+            logger.warning(message, extra=extra)
             return (
                 jsonify({"error": f"Missing required keys: {', '.join(missing)}"}),
                 400,
@@ -150,11 +182,18 @@ def agentchat() -> Response | tuple[Response, int]:
 
         api_key = request.headers.get("X-API-KEY")
         if not api_key:
+            message, extra = build_operational_event(
+                event="agentchat_request_rejected",
+                details={"reason": "missing_api_key"},
+            )
+            logger.warning(message, extra=extra)
             return jsonify({"error": "Missing X-API-KEY header"}), 400
 
         # === Validate the provided API key for the given user email ===
 
         assert_valid_api_key(api_key, r["username"])
+
+        attribute_usage_to_user(username=r["username"])
 
         config = current_app.config["MAUI_CONFIG"]
 
@@ -162,21 +201,38 @@ def agentchat() -> Response | tuple[Response, int]:
 
         chat = r["chat"]
         if not isinstance(chat, list) or not chat:
+            message, extra = build_operational_event(
+                event="agentchat_request_rejected",
+                details={"reason": "invalid_chat"},
+            )
+            logger.warning(message, extra=extra)
             return jsonify({"error": "Invalid 'chat': expected non-empty list"}), 400
 
         namespace = r.get("namespace") or config.rag.default_namespace
         language = r.get("language") or "ITA"
         token_cost = config.completion_token_cost
 
-        current_app.logger.info(
-            f"[agentchat] user={r['username']} ns={namespace} lang={language}"
+        logger.info(
+            "event=agentchat_request_started namespace=%s language=%s",
+            namespace,
+            language,
         )
 
         # === TOKEN CHECK ===
         user_tokens = database_pg.get_user_tokens(r["username"])
         if user_tokens is None:
+            message, extra = build_operational_event(
+                event="agentchat_request_rejected",
+                details={"reason": "token_balance_unavailable"},
+            )
+            logger.warning(message, extra=extra)
             return jsonify({"error": "Could not retrieve user tokens"}), 500
         if token_cost > user_tokens:
+            message, extra = build_operational_event(
+                event="agentchat_request_rejected",
+                details={"reason": "insufficient_tokens"},
+            )
+            logger.warning(message, extra=extra)
             return (
                 jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}),
                 403,
@@ -198,34 +254,37 @@ def agentchat() -> Response | tuple[Response, int]:
 
         # === DATABASE TOKEN USAGE LOGGING ===
 
+        # The accounting-side user lookup is not a prerequisite of the agent
+        # response: a failure here skips recording and leaves the response
+        # untouched.
         try:
             user = get_user_by_username(r["username"])
-            if not user:
-                raise ValueError(f"User '{r['username']}' not found in DB")
+        except Exception as exc:
+            logger.warning(
+                "event=agentchat_usage_user_lookup_failed error_type=%s",
+                type(exc).__name__,
+            )
+            user = None
 
+        if user:
             user_id = user.get("id")
-            if not isinstance(user_id, int):
-                raise TypeError(f"Invalid user_id: {user_id}")
 
-            # Extract token usage from payload
+            # The serialized runtime reports absent token counts as None.
             token_metrics = payload.get("metrics", {}).get("token_usage", {})
-            token_input = token_metrics.get("input", 0)
-            token_output = token_metrics.get("output", 0)
+            token_input = token_metrics.get("input") or 0
+            token_output = token_metrics.get("output") or 0
 
-            # Use clean model name from earlier normalization
-            model = model_clean
-
-            # Log into PostgreSQL
-            log_id = log_token_usage(
+            if isinstance(user_id, int) and record_token_consumption(
                 user_id=user_id,
+                provider=provider,
+                model=model_clean,
+                service="/agentchat",
                 token_input=token_input,
                 token_output=token_output,
-                model=model,
-                provider=provider,
-            )
-
-        except Exception as e:
-            current_app.logger.error(f"[agentchat] Failed to log token usage: {e}")
+            ):
+                # Preserve the existing response contract without exposing row identity
+                # through the recording API.
+                log_id = get_usage_log_id()
 
         # === TOKEN MANAGEMENT ===
 
@@ -233,11 +292,13 @@ def agentchat() -> Response | tuple[Response, int]:
         if answer_text:
             edit_tokens(r["username"], -token_cost)
 
-        current_app.logger.info(
-            f"[agentchat] done user={r['username']} duration={duration_ms}ms "
-            f"tools={len(payload.get('tool_calls', []))} "
-            f"vectors={len(payload.get('vectors', []))} "
-            f"fu={len(payload.get('follow_ups', []))}"
+        logger.info(
+            "event=agentchat_request_completed duration_ms=%s "
+            "tools=%s vectors=%s follow_ups=%s",
+            duration_ms,
+            len(payload.get("tool_calls", [])),
+            len(payload.get("vectors", [])),
+            len(payload.get("follow_ups", [])),
         )
 
         if log_id is not None:
@@ -245,11 +306,35 @@ def agentchat() -> Response | tuple[Response, int]:
 
         return jsonify(payload), 200
 
+    except HTTPException:
+        # Flask/Werkzeug HTTP errors raised inside this route (abort(403) from
+        # assert_valid_api_key, BadRequest/UnsupportedMediaType from
+        # request.get_json()) are already fully classified responses. Let them
+        # propagate to Flask's default handling instead of being reclassified
+        # as uncontrolled failures.
+        raise
+
     except RuntimeError as e:
-        current_app.logger.error(f"[agentchat] Runtime error: {str(e)}")
+        # Persist only the classification this boundary actually knows. The
+        # exception class here is always RuntimeError, so error_type would
+        # carry no diagnostic value. Not exception-aware: the legacy line
+        # carried no traceback, and the obligation is to preserve runtime
+        # depth, not to add it.
+        message, extra = build_operational_event(
+            event="agentchat_uncontrolled_failure",
+            details={"reason": "service_error"},
+        )
+        logger.error(message, extra=extra)
         return jsonify({"error": str(e)}), 500
 
     except Exception as e:
-        current_app.logger.error(f"[agentchat] Unexpected error: {str(e)}")
-        current_app.logger.error(traceback.format_exc())
+        # Exception-aware, because the two legacy lines this replaces did put
+        # a full traceback on stderr. The traceback stays on the runtime
+        # stream; the persisted row carries the exception class only.
+        message, extra = build_operational_event(
+            event="agentchat_uncontrolled_failure",
+            details={"reason": "unhandled"},
+            error_type=type(e).__name__,
+        )
+        logger.exception(message, extra=extra)
         return jsonify({"error": "An unexpected error occurred"}), 500

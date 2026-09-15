@@ -1,9 +1,12 @@
 import json
+import logging
 import os
 from typing import TypedDict
 from flask import Blueprint, jsonify, request, current_app
 from config import PROVIDER_API_KEY_MAP
-from infrastructure.database_pg import edit_tokens, log_token_usage
+from infrastructure.database_pg import edit_tokens
+from utils.operational_event import build_operational_event
+from usage.recording import record_token_consumption
 import infrastructure.database_pg as database_pg
 from services.document_comparison_service import (
     CONTEXT_WINDOW_ERROR_MESSAGE,
@@ -15,6 +18,8 @@ from services.document_text_service import DocumentInput
 from routes.utils import assert_valid_api_key
 
 documents_bp = Blueprint("documents", __name__)
+
+logger = logging.getLogger(__name__)
 
 
 class TokenUsageDict(TypedDict):
@@ -138,6 +143,20 @@ def compare_docs():
             if "content" not in item or not isinstance(item["content"], str):
                 raise ValueError("Each text document must have a string 'content'")
 
+        message, extra = build_operational_event(
+            event="compare_docs_started",
+            provider=llm_type,
+            model=model,
+            details={
+                "file_count": len(files),
+                "text_document_count": len(text_documents),
+                "ocr_configured": bool(ocr_provider and ocr_model),
+                "language_present": language is not None,
+                "additional_context_present": additional_context is not None,
+            },
+        )
+        logger.info(message, extra=extra)
+
         for text_document in text_documents:
             doc_input: DocumentInput = {
                 "content": text_document.get("content"),
@@ -187,37 +206,33 @@ def compare_docs():
         result = service_result["comparison"]
         token_usage = service_result["token_usage"]
 
-        try:
-            user = database_pg.get_user_by_username(user_email)
-            if not user:
-                raise ValueError(f"User '{user_email}' not found in DB")
-
+        user = database_pg.get_user_by_username(user_email)
+        if user:
             user_id = user.get("id")
-            if not isinstance(user_id, int):
-                raise TypeError(f"Invalid user_id: {user_id}")
-
-            # COOPI release: aggregate OCR into the single compare_docs log row
-            # because OCR and comparison share provider/model/cost basis there.
-            # Usage stays separate internally so operation-level logging can
-            # be introduced later if those models diverge.
-            log_token_usage(
-                user_id=user_id,
-                token_input=token_usage.get("input_tokens", 0)
-                + ocr_token_usage["input_tokens"],
-                token_output=token_usage.get("output_tokens", 0)
-                + ocr_token_usage["output_tokens"],
-                model=model,
-                provider=llm_type,
-            )
-
-        except Exception as error:
-            current_app.logger.error(
-                f"[compare_docs] Failed to log token usage: {error}"
-            )
+            if isinstance(user_id, int):
+                # Aggregate OCR and comparison tokens because they share the same
+                # provider, model and cost basis for this Usage record.
+                record_token_consumption(
+                    user_id=user_id,
+                    provider=llm_type,
+                    model=model,
+                    service="/compare_docs",
+                    token_input=token_usage.get("input_tokens", 0)
+                    + ocr_token_usage["input_tokens"],
+                    token_output=token_usage.get("output_tokens", 0)
+                    + ocr_token_usage["output_tokens"],
+                )
 
         edit_tokens(user_email, -token_cost)
 
     except ValueError as error:
+        message, extra = build_operational_event(
+            event="compare_docs_controlled_failure",
+            error_type=type(error).__name__,
+            details={"http_status": 400},
+        )
+        logger.warning(message, extra=extra)
+
         return jsonify({"error": "Invalid request", "details": str(error)}), 400
 
     except DocumentComparisonPayloadTooLargeError:
@@ -232,6 +247,13 @@ def compare_docs():
         )
 
     except NotImplementedError as error:
+        message, extra = build_operational_event(
+            event="compare_docs_controlled_failure",
+            error_type=type(error).__name__,
+            details={"http_status": 415},
+        )
+        logger.warning(message, extra=extra)
+
         return (
             jsonify({"error": "Unsupported document format", "details": str(error)}),
             415,

@@ -1,8 +1,13 @@
 import json
+import logging
+import time
 from typing import TypedDict
 from infrastructure.ai import choose_llm
 from services.document_text_service import NormalizedDocument
 from infrastructure.prompt_utils import load_prompt
+from utils.operational_event import build_operational_event
+
+logger = logging.getLogger(__name__)
 
 
 class ComparisonResult(TypedDict):
@@ -291,14 +296,31 @@ def compare_documents(
     ]
 
     llm = choose_llm(llm_type, model, api_key=api_key)
+    provider_call_started = time.perf_counter()
     try:
         response = llm.invoke(messages)
     except Exception as error:
         if _is_context_window_error(error):
+            message, extra = build_operational_event(
+                event="document_comparison_payload_too_large",
+                provider=llm_type,
+                model=model,
+                duration_ms=round(
+                    (time.perf_counter() - provider_call_started) * 1000
+                ),
+                error_type=type(error).__name__,
+                details={
+                    "document_count": len(documents),
+                    "prompt_chars": len(user_prompt),
+                },
+            )
+            logger.warning(message, extra=extra)
             raise DocumentComparisonPayloadTooLargeError(
                 CONTEXT_WINDOW_ERROR_MESSAGE
             ) from error
         raise
+
+    provider_duration_ms = round((time.perf_counter() - provider_call_started) * 1000)
 
     usage_metadata = getattr(response, "usage_metadata", None) or {}
 
@@ -337,6 +359,21 @@ def compare_documents(
 
     if not isinstance(reasoning, str) or not reasoning.strip():
         raise ValueError("Invalid or missing 'reasoning'")
+
+    message, extra = build_operational_event(
+        event="document_comparison_completed",
+        provider=llm_type,
+        model=model,
+        duration_ms=provider_duration_ms,
+        details={
+            "document_count": len(documents),
+            "prompt_chars": len(user_prompt),
+            "input_tokens": token_usage["input_tokens"],
+            "output_tokens": token_usage["output_tokens"],
+            "total_tokens": token_usage["total_tokens"],
+        },
+    )
+    logger.info(message, extra=extra)
 
     return {
         "comparison": {

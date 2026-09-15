@@ -17,6 +17,9 @@ from typing import List, Dict, Any
 
 from infrastructure.vector_store import MauiVectorStore
 from infrastructure.ai import choose_emb_model
+from usage.embedding_operation_context import OPERATION_QUERY, embedding_operation
+
+logger = logging.getLogger(__name__)
 
 
 def retrieve_from_collection(
@@ -54,8 +57,11 @@ def retrieve_from_collection(
         - "metadata": dict (original stored metadata).
     """
 
-    logging.info(
-        f"[retrieval] Query started. namespace={namespace}, top_k={top_k}, min_sim={min_sim}"
+    logger.info(
+        "event=retrieval_query_started namespace=%s top_k=%s min_sim=%s",
+        namespace,
+        top_k,
+        min_sim,
     )
 
     try:
@@ -66,17 +72,23 @@ def retrieve_from_collection(
         store = MauiVectorStore(embeddings=emb, table_name=namespace)
 
         # === Perform similarity search ===
-        vectors = store.find_similar_vectors(
-            text=question, top_k=top_k, min_similarity=min_sim
-        )
+        # Scoped per call, not per agent run: one /agentchat request drives
+        # 0..N RetrieverTool.forward calls through here, and each must open
+        # and close its own query scope so no retrieval inherits another's.
+        with embedding_operation(OPERATION_QUERY):
+            vectors = store.find_similar_vectors(
+                text=question, top_k=top_k, min_similarity=min_sim
+            )
 
-        logging.info(
-            f"[retrieval] Query completed: {len(vectors)} matches found in '{namespace}'."
+        logger.info(
+            "event=retrieval_query_completed count=%s namespace=%s",
+            len(vectors),
+            namespace,
         )
         return vectors
 
     except Exception as e:
-        logging.exception("[retrieval] Error during vector retrieval")
+        logger.exception("event=retrieval_query_failed")
         raise RuntimeError(
             f"Error retrieving vectors from namespace '{namespace}': {e}"
         ) from e

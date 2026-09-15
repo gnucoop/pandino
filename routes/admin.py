@@ -1,3 +1,4 @@
+import logging
 import os
 from datetime import datetime, timedelta
 from functools import wraps
@@ -34,6 +35,7 @@ from infrastructure.database_pg import (
     get_feedback_stats,
     get_logs_for_admin,
     get_logs_stats,
+    get_operational_events_by_request_id,
     get_prompt_by_id,
     get_recent_activity,
     get_user_by_id,
@@ -44,8 +46,14 @@ from infrastructure.database_pg import (
     update_user_tokens,
 )
 from services.rag_ingestion_service import process_rag_file
+from usage.attribution import (
+    USAGE_POLICY_ADMIN_RAG_INGESTION,
+    attribute_usage_to_policy,
+)
 
 admin_bp = Blueprint("admin", __name__)
+
+logger = logging.getLogger(__name__)
 
 
 def admin_required(f):
@@ -452,6 +460,47 @@ def admin_logs():
         )
 
 
+@admin_bp.route("/admin/logs/<request_id>/operational", methods=["GET"])
+@admin_required
+def admin_operational_timeline(request_id: str):
+    """Render the Operational event timeline correlated to one request_id.
+
+    Read-only drill-down reached from a Usage row. Usage coverage and
+    Operational coverage are intentionally non-symmetric, so a valid
+    request_id legitimately resolves to an empty timeline, and a request_id
+    with no Usage row at all is still a valid correlation key - no Usage
+    lookup is performed here.
+
+    A genuine Operational read failure is contained in this page: it renders
+    the timeline page in its failure state and emits one runtime log. The
+    Usage page is a separate request and stays unaffected, and the failure is
+    never converted into an empty timeline.
+    """
+    request_id = (request_id or "").strip()
+    if not request_id or request_id == "N/A":
+        flash("Invalid request ID", "danger")
+        return redirect(url_for("admin.admin_logs"))
+
+    events = []
+    read_failed = False
+    try:
+        events = get_operational_events_by_request_id(request_id)
+    except Exception as e:
+        read_failed = True
+        logger.exception(
+            "event=admin_operational_timeline_read_failed request_id=%s error_type=%s",
+            request_id,
+            type(e).__name__,
+        )
+
+    return render_template(
+        "admin/operational_timeline.html",
+        request_id=request_id,
+        events=events,
+        read_failed=read_failed,
+    )
+
+
 @admin_bp.route("/admin/feedback")
 @admin_required
 def admin_feedback():
@@ -659,6 +708,16 @@ def admin_upload_rag_file():
     if not file or not namespace:
         flash("File and namespace are required", "danger")
         return redirect(url_for("admin.admin_rag_files"))
+
+    # Declared after validation - a request that cannot embed anything
+    # resolves no identity - and before every line of the ingestion attempt,
+    # so it precedes any provider work that could emit embedding
+    # contributions. The admin session authenticates the operator, which is
+    # not the accounting principal: RAG ingestion has no end user, so the
+    # intent is a technical accounting policy. Which provisioned identity
+    # serves that policy, and the ratified source=None rule, belong to the
+    # Usage boundary.
+    attribute_usage_to_policy(policy=USAGE_POLICY_ADMIN_RAG_INGESTION)
 
     url = file.filename or ""
 

@@ -27,6 +27,7 @@ from datachat.tools.trend_tool import TrendTool
 from datachat.tools.unique_values_tool import UniqueValuesTool
 from llm.litellm_factory import build_litellm_model
 from infrastructure.prompt_utils import load_prompt, render_prompt
+from utils.logging_config import get_request_id
 
 runtime_logger = logging.getLogger("datachat.runtime")
 
@@ -183,10 +184,6 @@ class SmolagentsEngine(DataChatEngine):
     _max_steps: int = field(default=12, init=False, repr=False)
     _instructions: str = field(default="", init=False, repr=False)
 
-    _last_final_answer_check_passed: Optional[bool] = field(default=None, init=False, repr=False)
-    _last_final_kind: Optional[str] = field(default=None, init=False, repr=False)
-    _active_request_id: Optional[str] = field(default=None, init=False, repr=False)
-
     _final_answer_checks_supported: bool = field(default=False, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -194,7 +191,8 @@ class SmolagentsEngine(DataChatEngine):
         self._init_config()
 
         runtime_logger.info(
-            "engine_init engine=smolagents user=%s provider=%s model=%s max_steps=%s",
+            "engine_init request_id=%s engine=smolagents user=%s provider=%s model=%s max_steps=%s",
+            get_request_id(),
             self.user_name,
             self._provider,
             self._configured_model or "missing",
@@ -214,7 +212,8 @@ class SmolagentsEngine(DataChatEngine):
         self._agent = self._build_agent(self._model, self._instructions)
 
         runtime_logger.info(
-            "engine_init_result engine=smolagents user=%s status=%s",
+            "engine_init_result request_id=%s engine=smolagents user=%s status=%s",
+            get_request_id(),
             self.user_name,
             "ok" if self._agent is not None else "error",
         )
@@ -240,7 +239,8 @@ class SmolagentsEngine(DataChatEngine):
         self._model = None
         self._agent = None
         runtime_logger.info(
-            "engine_init_result engine=smolagents user=%s status=error error_code=%s",
+            "engine_init_result request_id=%s engine=smolagents user=%s status=error error_code=%s",
+            get_request_id(),
             self.user_name,
             code,
         )
@@ -339,12 +339,9 @@ class SmolagentsEngine(DataChatEngine):
             )
             payload, passed, final_kind, reason = _coerce_final_payload(candidate)
 
-            self._last_final_answer_check_passed = passed
-            self._last_final_kind = final_kind
-
             runtime_logger.info(
                 "final_answer_check request_id=%s engine=smolagents user=%s passed=%s final_kind=%s reason=%s",
-                self._active_request_id or "n/a",
+                get_request_id(),
                 self.user_name,
                 passed,
                 final_kind or "none",
@@ -356,7 +353,8 @@ class SmolagentsEngine(DataChatEngine):
             agent = CodeAgent(**{**base_kwargs, "final_answer_checks": [_final_answer_contract_check]})
             self._final_answer_checks_supported = True
             runtime_logger.info(
-                "engine_init_guardrail engine=smolagents user=%s final_answer_checks_supported=%s",
+                "engine_init_guardrail request_id=%s engine=smolagents user=%s final_answer_checks_supported=%s",
+                get_request_id(),
                 self.user_name,
                 True,
             )
@@ -364,7 +362,8 @@ class SmolagentsEngine(DataChatEngine):
         except TypeError:
             self._final_answer_checks_supported = False
             runtime_logger.info(
-                "engine_init_guardrail engine=smolagents user=%s final_answer_checks_supported=%s",
+                "engine_init_guardrail request_id=%s engine=smolagents user=%s final_answer_checks_supported=%s",
+                get_request_id(),
                 self.user_name,
                 False,
             )
@@ -376,14 +375,10 @@ class SmolagentsEngine(DataChatEngine):
         html = get_static_bootstrap_html(lang)
         return EngineBootstrapResult(suggested_questions_html=html)
 
-    def chat(self, message: str, request_id: Optional[str] = None) -> Any:
-        self._active_request_id = request_id or "n/a"
-        self._last_final_answer_check_passed = None
-        self._last_final_kind = None
-
+    def chat(self, message: str) -> Any:
         runtime_logger.info(
             "chat_start request_id=%s engine=smolagents user=%s message_len=%s",
-            self._active_request_id,
+            get_request_id(),
             self.user_name,
             len(str(message or "")),
         )
@@ -391,10 +386,9 @@ class SmolagentsEngine(DataChatEngine):
         if self._agent is None:
             runtime_logger.info(
                 "chat_error request_id=%s engine=smolagents user=%s error_code=MISSING_CONFIG",
-                self._active_request_id,
+                get_request_id(),
                 self.user_name,
             )
-            self._active_request_id = None
             return {
                 "kind": "error",
                 "message": (
@@ -414,11 +408,10 @@ class SmolagentsEngine(DataChatEngine):
             self._last_run_duration_ms = None
             runtime_logger.info(
                 "chat_error request_id=%s engine=smolagents user=%s error_code=RUN_FAILED error_message_short=%s",
-                self._active_request_id,
+                get_request_id(),
                 self.user_name,
                 str(e)[:160],
             )
-            self._active_request_id = None
             return {"kind": "error", "message": f"SmolagentsEngine failed to run: {e}", "code": "RUN_FAILED"}
 
         out = getattr(run_result, "output", None)
@@ -436,19 +429,17 @@ class SmolagentsEngine(DataChatEngine):
                 "text": safe_text or f"Nessun output finale valido prodotto dall'agente ({reason}).",
                 "format": "plain",
             }
-            self._last_final_answer_check_passed = False
-            self._last_final_kind = None
+            final_kind = None
 
         runtime_logger.info(
             "chat_end request_id=%s engine=smolagents user=%s duration_ms=%s response_kind=%s final_answer_check_passed=%s final_kind=%s",
-            self._active_request_id,
+            get_request_id(),
             self.user_name,
             self._last_run_duration_ms,
             result_payload.get("kind"),
-            bool(self._last_final_answer_check_passed),
-            self._last_final_kind or "none",
+            bool(passed),
+            final_kind or "none",
         )
-        self._active_request_id = None
         return result_payload
 
     def get_last_trace(self) -> Optional[dict[str, Any]]:
@@ -477,7 +468,8 @@ class SmolagentsEngine(DataChatEngine):
             cleanup_error = str(e)[:160]
 
         runtime_logger.info(
-            "cleanup_result engine=smolagents user=%s plots_dir_removed=%s user_dir_removed=%s cleanup_error=%s",
+            "cleanup_result request_id=%s engine=smolagents user=%s plots_dir_removed=%s user_dir_removed=%s cleanup_error=%s",
+            get_request_id(),
             self.user_name,
             plots_dir_removed,
             user_dir_removed,

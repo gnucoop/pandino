@@ -21,7 +21,10 @@ def build_get_user_by_username_query(username: str) -> Tuple[sql.Composed, Tuple
 
 
 def build_add_user_query(
-    username: str, encrypted_api_key: str, date_valid_until: str
+    username: str,
+    encrypted_api_key: str,
+    date_valid_until: str,
+    client: Optional[str] = None,
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to insert a new user into the 'users' table.
@@ -29,18 +32,21 @@ def build_add_user_query(
     :param username: Unique username of the user.
     :param encrypted_api_key: API key already encrypted as string.
     :param date_valid_until: Expiration date in ISO format.
+    :param client: Authenticated client to persist at creation time, or
+        None when not known (e.g. CLI-created users).
     :return: Tuple with SQL query and parameters.
     """
     query = sql.SQL(
-        "INSERT INTO {table} ({col_username}, {col_api_key}, {col_date}) "
-        "VALUES (%s, %s, %s)"
+        "INSERT INTO {table} ({col_username}, {col_api_key}, {col_date}, {col_client}) "
+        "VALUES (%s, %s, %s, %s)"
     ).format(
         table=sql.Identifier("users"),
         col_username=sql.Identifier("username"),
         col_api_key=sql.Identifier("api_key"),
         col_date=sql.Identifier("date_valid_until"),
+        col_client=sql.Identifier("client"),
     )
-    params = (username, encrypted_api_key, date_valid_until)
+    params = (username, encrypted_api_key, date_valid_until, client)
     return query, params
 
 
@@ -159,6 +165,59 @@ def build_check_table_exists_query(
     )
     params = (table_schema, table_name)
     return query, params
+
+
+def build_check_column_exists_query(
+    table_schema: str,
+    table_name: str,
+    column_name: str,
+) -> Tuple[sql.SQL, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to check whether a column exists on a given table.
+
+    :param table_schema: Schema name.
+    :param table_name: Table name.
+    :param column_name: Column name.
+    :return: Tuple with SQL query and parameters.
+    """
+    query = sql.SQL(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = %s
+          AND table_name = %s
+          AND column_name = %s
+        LIMIT 1
+        """
+    )
+    params = (table_schema, table_name, column_name)
+    return query, params
+
+
+def build_add_column_query(
+    table_schema: str,
+    table_name: str,
+    column_name: str,
+    column_type_sql: sql.SQL,
+) -> Tuple[sql.Composed, Tuple[()]]:
+    """
+    Builds a SQL query to add a new column to an existing table.
+
+    :param table_schema: Schema name.
+    :param table_name: Table name.
+    :param column_name: Name of the column to add.
+    :param column_type_sql: Pre-validated sql.SQL fragment for the column
+        type/definition (e.g. sql.SQL("TEXT")). Callers must resolve this
+        from a fixed allow-list rather than passing a raw string, so this
+        function never builds an unrestricted DDL injection surface.
+    :return: Tuple with SQL query and empty parameter tuple.
+    """
+    query = sql.SQL("ALTER TABLE {table} ADD COLUMN {column} {type}").format(
+        table=sql.Identifier(table_schema, table_name),
+        column=sql.Identifier(column_name),
+        type=column_type_sql,
+    )
+    return query, ()
 
 
 def build_check_pgvector_maui_id_exists_query(
@@ -302,16 +361,17 @@ def build_print_stored_keys_query() -> Tuple[sql.Composed, Tuple[()]]:
 
 def build_validate_api_key_query(username: str) -> Tuple[sql.Composed, Tuple[str]]:
     """
-    Builds a SQL query to retrieve API keys and expiration dates for a given user.
+    Builds a SQL query to retrieve API keys, expiration dates and client for a given user.
 
     :param username: The username to search for.
     :return: Tuple of SQL query and parameters.
     """
     query = sql.SQL(
-        "SELECT {col_key}, {col_date} FROM {table} WHERE {col_user} = %s"
+        "SELECT {col_key}, {col_date}, {col_client} FROM {table} WHERE {col_user} = %s"
     ).format(
         col_key=sql.Identifier("api_key"),
         col_date=sql.Identifier("date_valid_until"),
+        col_client=sql.Identifier("client"),
         table=sql.Identifier("users"),
         col_user=sql.Identifier("username"),
     )
@@ -350,16 +410,27 @@ def build_insert_token_log_query(
     cost: float,
     model: str,
     provider: str,
+    service: str,
+    request_id: str,
+    source: Optional[str],
+    embedding_operation_kind: Optional[str] = None,
+    quantity_origin: Optional[str] = None,
+    cost_origin: Optional[str] = None,
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
     Builds a SQL query to insert a new usage log into the 'logs' table
     and returns the generated log ID.
 
+    The three provenance values are optional and additive: a caller that
+    omits them writes SQL NULL, which is what an LLM or ASR row means. This
+    builder does not validate them; the vocabulary is owned above the
+    database boundary.
+
     :return: Tuple of SQL query and parameters.
     """
     query = sql.SQL(
-        "INSERT INTO {table} ({col_date}, {col_user}, {col_in}, {col_out}, {col_cost}, {col_model}, {col_provider}) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+        "INSERT INTO {table} ({col_date}, {col_user}, {col_in}, {col_out}, {col_cost}, {col_model}, {col_provider}, {col_service}, {col_request_id}, {col_source}, {col_op_kind}, {col_quantity_origin}, {col_cost_origin}) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
         "RETURNING id"
     ).format(
         table=sql.Identifier("logs"),
@@ -370,8 +441,28 @@ def build_insert_token_log_query(
         col_cost=sql.Identifier("cost"),
         col_model=sql.Identifier("model"),
         col_provider=sql.Identifier("provider"),
+        col_service=sql.Identifier("service"),
+        col_request_id=sql.Identifier("request_id"),
+        col_source=sql.Identifier("source"),
+        col_op_kind=sql.Identifier("embedding_operation_kind"),
+        col_quantity_origin=sql.Identifier("quantity_origin"),
+        col_cost_origin=sql.Identifier("cost_origin"),
     )
-    params = (date, user_id, token_input, token_output, cost, model, provider)
+    params = (
+        date,
+        user_id,
+        token_input,
+        token_output,
+        cost,
+        model,
+        provider,
+        service,
+        request_id,
+        source,
+        embedding_operation_kind,
+        quantity_origin,
+        cost_origin,
+    )
     return query, params
 
 
@@ -436,7 +527,8 @@ def build_get_logs_for_admin_query(
     query = sql.SQL(
         """
         SELECT l.id, l.user_id, u.username, l.date, l.token_input,
-               l.token_output, l.cost, l.model, l.provider
+               l.token_output, l.cost, l.model, l.provider, l.service,
+               l.request_id, l.duration_ms, l.source
         FROM {logs} l
         LEFT JOIN {users} u ON l.user_id = u.id
         {where_clause}
@@ -511,6 +603,48 @@ def build_update_user_tokens_query(
         id=sql.Identifier("id"),
     )
     return query, (new_tokens, date_valid_until, user_id)
+
+
+def build_update_usage_duration_query(
+    log_id: int, duration_ms: int
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to update the duration_ms of a logs row.
+
+    :param log_id: ID of the log row to update.
+    :param duration_ms: New duration value, in milliseconds.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL("UPDATE {table} SET {duration_ms} = %s WHERE {id} = %s").format(
+        table=sql.Identifier("logs"),
+        duration_ms=sql.Identifier("duration_ms"),
+        id=sql.Identifier("id"),
+    )
+    return query, (duration_ms, log_id)
+
+
+def build_set_user_client_if_missing_query(
+    username: str, client: str
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to set a user's client only if it is not already set.
+
+    The fill-if-empty invariant is enforced by the WHERE clause itself
+    (client IS NULL), so the row is only updated when no client has been
+    persisted yet - no application-side read/decide/write ownership check.
+
+    :param username: The username of the user to update.
+    :param client: Candidate client value to persist.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "UPDATE {table} SET {client} = %s WHERE {username} = %s AND {client} IS NULL"
+    ).format(
+        table=sql.Identifier("users"),
+        client=sql.Identifier("client"),
+        username=sql.Identifier("username"),
+    )
+    return query, (client, username)
 
 
 def build_get_total_log_stats_query(
@@ -1240,3 +1374,108 @@ def build_get_feedback_model_stats_query(
     )
 
     return query, tuple(params)
+
+
+def build_insert_operational_event_query(
+    event_time: Any,
+    level: str,
+    logger_name: str,
+    event: str,
+    request_id: Optional[str],
+    app_id: Optional[str],
+    provider: Optional[str],
+    model: Optional[str],
+    duration_ms: Optional[int],
+    error_type: Optional[str],
+    details_json: Optional[str],
+    message: Optional[str],
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to insert one Operational event row into the
+    'operational_events' table.
+
+    details_json is passed as TEXT and cast with %s::jsonb; when None,
+    PostgreSQL receives NULL.
+
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "INSERT INTO {table} "
+        "({col_event_time}, {col_level}, {col_logger}, {col_event}, "
+        "{col_request_id}, {col_app_id}, {col_provider}, {col_model}, "
+        "{col_duration_ms}, {col_error_type}, {col_details}, {col_message}) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)"
+    ).format(
+        table=sql.Identifier("operational_events"),
+        col_event_time=sql.Identifier("event_time"),
+        col_level=sql.Identifier("level"),
+        col_logger=sql.Identifier("logger"),
+        col_event=sql.Identifier("event"),
+        col_request_id=sql.Identifier("request_id"),
+        col_app_id=sql.Identifier("app_id"),
+        col_provider=sql.Identifier("provider"),
+        col_model=sql.Identifier("model"),
+        col_duration_ms=sql.Identifier("duration_ms"),
+        col_error_type=sql.Identifier("error_type"),
+        col_details=sql.Identifier("details"),
+        col_message=sql.Identifier("message"),
+    )
+    params = (
+        event_time,
+        level,
+        logger_name,
+        event,
+        request_id,
+        app_id,
+        provider,
+        model,
+        duration_ms,
+        error_type,
+        details_json,
+        message,
+    )
+    return query, params
+
+
+def build_get_operational_events_by_request_id_query(
+    request_id: str,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query selecting the Operational events correlated to one
+    request_id, ordered as a timeline.
+
+    Ordering is (event_time ASC, id ASC): event_time is application-supplied
+    from the emitting LogRecord, and id is the deterministic tie-breaker for
+    events sharing an event_time, not a semantic timeline field. Neither id
+    nor request_id is projected: id only participates in ORDER BY, and
+    request_id is already known to the caller.
+
+    Deliberately unpaginated: the caller reads one request's timeline whole.
+
+    :param request_id: Correlation key to select on.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "SELECT {col_event_time}, {col_level}, {col_logger}, {col_event}, "
+        "{col_app_id}, {col_provider}, {col_model}, {col_duration_ms}, "
+        "{col_error_type}, {col_details}, {col_message} "
+        "FROM {table} "
+        "WHERE {col_request_id} = %s "
+        "ORDER BY {col_event_time} ASC, {col_id} ASC"
+    ).format(
+        table=sql.Identifier("operational_events"),
+        col_id=sql.Identifier("id"),
+        col_event_time=sql.Identifier("event_time"),
+        col_level=sql.Identifier("level"),
+        col_logger=sql.Identifier("logger"),
+        col_event=sql.Identifier("event"),
+        col_request_id=sql.Identifier("request_id"),
+        col_app_id=sql.Identifier("app_id"),
+        col_provider=sql.Identifier("provider"),
+        col_model=sql.Identifier("model"),
+        col_duration_ms=sql.Identifier("duration_ms"),
+        col_error_type=sql.Identifier("error_type"),
+        col_details=sql.Identifier("details"),
+        col_message=sql.Identifier("message"),
+    )
+    return query, (request_id,)

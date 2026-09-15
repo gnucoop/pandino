@@ -19,6 +19,9 @@ from infrastructure.vector_store import (
     merge_segments,
     normalize_table_name,
 )
+from usage.embedding_operation_context import OPERATION_DOCUMENT, embedding_operation
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -175,7 +178,12 @@ def process_rag_file(
     )
 
     store = MauiVectorStore(embeddings, namespace)
-    store.store_paragraphs(paragraphs)
+    # Only the document-producing call is scoped. ensure_pgvector_namespace_ready
+    # above owns its own probe scope, so the two stay distinguishable. This
+    # scope may legitimately produce no contribution at all: store_paragraphs
+    # embeds nothing when deduplication leaves no new chunks.
+    with embedding_operation(OPERATION_DOCUMENT):
+        store.store_paragraphs(paragraphs)
 
     chunk_count = len(paragraphs)
 
@@ -188,8 +196,8 @@ def process_rag_file(
     )
 
     if not tracking_ok:
-        logging.warning(
-            "RAG file tracking failed for file_id=%s, namespace=%s",
+        logger.warning(
+            "event=rag_file_tracking_failed file_id=%s namespace=%s",
             file_id,
             normalized_namespace,
         )

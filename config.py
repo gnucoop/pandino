@@ -85,6 +85,12 @@ class ModelConfig:
     # configured), not an operational fallback.
     asr_base_url: Optional[str] = None
 
+    # Governed Mistral ASR per-minute rate (USD), for Maui-side cost
+    # resolution. Optional[float] = None means unconfigured, not a price of
+    # zero: resolving a Mistral ASR cost without this set must fail
+    # explicitly rather than silently produce cost = 0.
+    asr_mistral_price_per_minute_usd: Optional[float] = None
+
 
 @dataclass(frozen=True)
 class ApiKeysConfig:
@@ -151,6 +157,22 @@ class AppConfig:
     prompt_token_cost: int
     audio_form_token_cost: int
     compare_docs_token_cost: int
+
+    # Technical accounting identity used only by the legacy Dino fallback of
+    # /storeragfile. Optional[str] = None means "no technical identity
+    # configured" — the off-switch: absent configuration leaves existing
+    # ingestion behaviour unchanged. The production username is a deployment
+    # choice, never an implicit application fallback.
+    dino_legacy_usage_username: Optional[str] = None
+
+    # Technical accounting identity used only by POST /admin/rag-files/upload
+    # embedding Usage attribution. Optional[str] = None means "no technical
+    # identity configured" — the off-switch: absent configuration leaves
+    # existing admin ingestion behaviour unchanged. This is an accounting
+    # identity, not an admin credential: AdminConfig holds login credentials
+    # and deliberately says nothing about the users table. The production
+    # username is a deployment choice, never an implicit application fallback.
+    admin_rag_usage_username: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +255,11 @@ def load_config() -> AppConfig:
         compare_docs_model=os.environ.get("COMPARE_DOCS_MODEL", "google/gemma-3-4b-it"),
         compare_docs_provider=os.environ.get("COMPARE_DOCS_PROVIDER", "Google"),
         asr_base_url=os.environ.get("ASR_BASE_URL") or None,
+        asr_mistral_price_per_minute_usd=(
+            float(os.environ["ASR_MISTRAL_PRICE_PER_MINUTE_USD"])
+            if os.environ.get("ASR_MISTRAL_PRICE_PER_MINUTE_USD")
+            else None
+        ),
     )
 
     api_keys = ApiKeysConfig(
@@ -283,4 +310,7 @@ def load_config() -> AppConfig:
         prompt_token_cost=int(os.environ.get("PROMPT_TOKEN_COST", "1")),
         audio_form_token_cost=int(os.environ.get("AUDIO_FORM_TOKEN_COST", "1")),
         compare_docs_token_cost=int(os.environ.get("COMPARE_DOCS_TOKEN_COST", "1")),
+        dino_legacy_usage_username=os.environ.get("DINO_LEGACY_USAGE_USERNAME")
+        or None,
+        admin_rag_usage_username=os.environ.get("ADMIN_RAG_USAGE_USERNAME") or None,
     )
