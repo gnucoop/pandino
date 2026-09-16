@@ -7,7 +7,9 @@ Import this module freely — it has no side effects at import time.
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -131,6 +133,59 @@ class DatachatConfig:
     log_level: str
 
 
+@dataclass(frozen=True)
+class DatachatSqlConfig:
+    """
+    Read-only SQL datasource exposed to the Datachat agent.
+
+    Disabled unless DATACHAT_SQL_ENABLED is truthy. This is always a dedicated
+    database described by the DATACHAT_DB_* variables: it never falls back to
+    the application database, which is reached through its own tools.
+    """
+
+    enabled: bool
+
+    user: str
+    password: str
+    host: str
+    db: str
+    port: str
+    schema: str
+
+    max_rows: int
+    max_columns: int
+    max_cell_chars: int
+    statement_timeout_ms: int
+
+    allowed_tables: tuple[str, ...]
+    denied_tables: tuple[str, ...]
+    include_views: bool
+
+    # Schema snapshot: reflected once per process and rendered into the agent's
+    # system prompt. Read only when `enabled` is true.
+    schema_ttl_s: int
+    schema_max_chars: int
+    schema_include_fks: bool
+
+    # Repair identifier case in agent-authored SQL before it is validated and
+    # run. PostgreSQL folds unquoted names to lowercase, which fails against a
+    # mixed-case schema.
+    quote_identifiers: bool
+
+    # Value profiling: a bounded sample of each relation, rendered into the
+    # snapshot as example values so the agent can see how a column is actually
+    # written instead of guessing its format.
+    schema_profile_values: bool
+    schema_profile_sample_rows: int
+    schema_profile_max_values: int
+    schema_profile_max_value_chars: int
+
+    pool_size: int
+    pool_max_overflow: int
+    pool_timeout_s: int
+    pool_recycle_s: int
+
+
 # ---------------------------------------------------------------------------
 # Top-level config
 # ---------------------------------------------------------------------------
@@ -147,6 +202,7 @@ class AppConfig:
     api_keys: ApiKeysConfig
     rag: RagConfig
     datachat: DatachatConfig
+    datachat_sql: DatachatSqlConfig
 
     auth_gateway_url: str
     stripe_key: Optional[str]
@@ -176,6 +232,130 @@ class AppConfig:
 
 
 # ---------------------------------------------------------------------------
+# Loader helpers
+# ---------------------------------------------------------------------------
+
+_TRUTHY = {"1", "true", "yes", "on"}
+
+# The schema name is interpolated into the libpq `options` connection string,
+# which cannot take bind parameters — so it must be a plain SQL identifier.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
+
+
+def _env_flag(name: str, default: str = "false") -> bool:
+    """Read a boolean environment variable."""
+    return os.environ.get(name, default).strip().lower() in _TRUTHY
+
+
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    """Read an integer environment variable, clamped to [minimum, maximum]."""
+    raw = os.environ.get(name)
+    try:
+        value = int(raw) if raw is not None and raw.strip() else default
+    except ValueError:
+        value = default
+    return max(minimum, min(value, maximum))
+
+
+def _env_table_set(name: str, default: str = "") -> tuple[str, ...]:
+    """Read a comma-separated table list into a sorted, lowercased tuple."""
+    raw = os.environ.get(name)
+    if raw is None:
+        raw = default
+    return tuple(sorted({part.strip().lower() for part in raw.split(",") if part.strip()}))
+
+
+def _load_datachat_sql_config(*, force_disabled: bool = False) -> DatachatSqlConfig:
+    """
+    Build the Datachat SQL datasource config.
+
+    When disabled, connection fields are left empty and never read. When
+    enabled, the DATACHAT_DB_* connection variables are mandatory: this
+    datasource is always a dedicated database, never the application one.
+
+    :param force_disabled: Build the disabled configuration whatever the
+                           environment says. Used by load_config() to turn the
+                           SQL feature off after a misconfiguration instead of
+                           taking the whole application down with it.
+
+    Raises:
+        ValueError: if the datasource is enabled and connection variables are
+                    missing, or if the schema is not a plain SQL identifier.
+    """
+    enabled = False if force_disabled else _env_flag("DATACHAT_SQL_ENABLED")
+
+    connection = {
+        "DATACHAT_DB_HOST": os.environ.get("DATACHAT_DB_HOST"),
+        "DATACHAT_DB_NAME": os.environ.get("DATACHAT_DB_NAME"),
+        "DATACHAT_DB_USER": os.environ.get("DATACHAT_DB_USER"),
+        "DATACHAT_DB_PASSWORD": os.environ.get("DATACHAT_DB_PASSWORD"),
+    }
+
+    if enabled:
+        missing = [k for k, v in connection.items() if not v]
+        if missing:
+            raise ValueError(
+                "DATACHAT_SQL_ENABLED is set but the following required "
+                "variables are not set: " + ", ".join(missing)
+            )
+
+    schema = os.environ.get("DATACHAT_DB_SCHEMA", "public").strip() or "public"
+    if enabled and not _IDENTIFIER_RE.match(schema):
+        raise ValueError(
+            f"DATACHAT_DB_SCHEMA must be a plain SQL identifier, got: {schema!r}"
+        )
+
+    return DatachatSqlConfig(
+        enabled=enabled,
+        user=connection["DATACHAT_DB_USER"] or "",
+        password=connection["DATACHAT_DB_PASSWORD"] or "",
+        host=connection["DATACHAT_DB_HOST"] or "",
+        db=connection["DATACHAT_DB_NAME"] or "",
+        port=os.environ.get("DATACHAT_DB_PORT", "5432"),
+        schema=schema,
+        max_rows=_env_int("DATACHAT_SQL_MAX_ROWS", 200, minimum=1, maximum=1000),
+        max_columns=_env_int("DATACHAT_SQL_MAX_COLUMNS", 25, minimum=1, maximum=100),
+        max_cell_chars=_env_int(
+            "DATACHAT_SQL_MAX_CELL_CHARS", 300, minimum=0, maximum=2000
+        ),
+        statement_timeout_ms=_env_int(
+            "DATACHAT_SQL_STATEMENT_TIMEOUT_MS", 10000, minimum=1000, maximum=60000
+        ),
+        allowed_tables=_env_table_set("DATACHAT_SQL_ALLOWED_TABLES"),
+        denied_tables=_env_table_set("DATACHAT_SQL_DENIED_TABLES"),
+        include_views=_env_flag("DATACHAT_SQL_INCLUDE_VIEWS", "true"),
+        schema_ttl_s=_env_int(
+            "DATACHAT_SQL_SCHEMA_TTL_S", 3600, minimum=0, maximum=86400
+        ),
+        schema_max_chars=_env_int(
+            "DATACHAT_SQL_SCHEMA_MAX_CHARS", 40000, minimum=500, maximum=200000
+        ),
+        schema_include_fks=_env_flag("DATACHAT_SQL_SCHEMA_INCLUDE_FKS", "true"),
+        quote_identifiers=_env_flag("DATACHAT_SQL_QUOTE_IDENTIFIERS", "true"),
+        schema_profile_values=_env_flag("DATACHAT_SQL_SCHEMA_PROFILE_VALUES", "true"),
+        schema_profile_sample_rows=_env_int(
+            "DATACHAT_SQL_SCHEMA_PROFILE_SAMPLE_ROWS", 50, minimum=1, maximum=1000
+        ),
+        schema_profile_max_values=_env_int(
+            "DATACHAT_SQL_SCHEMA_PROFILE_MAX_VALUES", 3, minimum=1, maximum=20
+        ),
+        schema_profile_max_value_chars=_env_int(
+            "DATACHAT_SQL_SCHEMA_PROFILE_MAX_VALUE_CHARS", 32, minimum=4, maximum=200
+        ),
+        pool_size=_env_int("DATACHAT_SQL_POOL_SIZE", 2, minimum=1, maximum=20),
+        pool_max_overflow=_env_int(
+            "DATACHAT_SQL_POOL_MAX_OVERFLOW", 3, minimum=0, maximum=20
+        ),
+        pool_timeout_s=_env_int(
+            "DATACHAT_SQL_POOL_TIMEOUT_S", 5, minimum=1, maximum=120
+        ),
+        pool_recycle_s=_env_int(
+            "DATACHAT_SQL_POOL_RECYCLE_S", 1800, minimum=60, maximum=86400
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Loader
 # ---------------------------------------------------------------------------
 
@@ -187,6 +367,10 @@ def load_config() -> AppConfig:
     Required variables (no default):
         ENCRYPTION_KEY, PGUSER, PGPWD, PGHOST, PGDB,
         ADMIN_USERNAME, ADMIN_PASSWORD_HASH
+
+    Required only when DATACHAT_SQL_ENABLED is truthy:
+        DATACHAT_DB_HOST, DATACHAT_DB_NAME, DATACHAT_DB_USER,
+        DATACHAT_DB_PASSWORD
 
     All other variables fall back to sensible defaults matching .env.example.
 
@@ -293,6 +477,20 @@ def load_config() -> AppConfig:
         log_level=os.environ.get("DATACHAT_LOG_LEVEL", "INFO"),
     )
 
+    # A misconfigured SQL datasource disables itself; it does not stop the
+    # application from booting. The CSV DataChat path, and every other feature,
+    # work without it, and failing here would take them all down over a feature
+    # that is off by default.
+    try:
+        datachat_sql = _load_datachat_sql_config()
+    except ValueError as e:
+        logging.error(
+            "[config] DATACHAT SQL datasource is misconfigured and has been "
+            "disabled: %s",
+            e,
+        )
+        datachat_sql = _load_datachat_sql_config(force_disabled=True)
+
     return AppConfig(
         encryption_key=required["ENCRYPTION_KEY"],  # type: ignore[arg-type]
         database=database,
@@ -301,6 +499,7 @@ def load_config() -> AppConfig:
         api_keys=api_keys,
         rag=rag,
         datachat=datachat,
+        datachat_sql=datachat_sql,
         auth_gateway_url=os.environ.get(
             "AUTH_GATEWAY_URL", "http://localhost:3000/validate"
         ),

@@ -21,6 +21,7 @@ import pandas as pd  # noqa: E402
 import matplotlib  # noqa: E402
 
 # === Local modules ===
+import datachat.sql_datasource as sql_datasource  # noqa: E402
 import infrastructure.database_pg as database_pg  # noqa: E402
 import infrastructure.vector_store as vector_store  # noqa: E402
 from config import load_config, AppConfig  # noqa: E402
@@ -45,6 +46,8 @@ config: AppConfig = (
 database_pg.init(config)  # Init database layer config
 
 vector_store.init(config)  # Init vector store layer config
+
+sql_datasource.init(config)  # Init datachat SQL datasource config (no DB I/O)
 
 
 # Initialize the Flask application
