@@ -796,7 +796,11 @@ paths:
     post:
       tags: [DataChat]
       summary: Start a DataChat session
-      description: Uploads a CSV and initialises an in-memory analysis agent for the API key.
+      description: >-
+        Uploads a CSV and initialises an in-memory analysis agent for the API key.
+        The file may be omitted only when the SQL datasource is enabled
+        (DATACHAT_SQL_ENABLED), in which case the agent answers from the database
+        instead of a dataframe; without it the request is rejected with 400.
       parameters:
         - $ref: '#/components/parameters/UserEmailHeader'
         - $ref: '#/components/parameters/UserNameHeader'
@@ -806,12 +810,12 @@ paths:
           multipart/form-data:
             schema:
               type: object
-              required: [file]
               properties:
                 file:
                   type: string
                   format: binary
-                  description: CSV dataset.
+                  description: >-
+                    CSV dataset. Required unless the SQL datasource is enabled.
                 model_name:
                   type: string
                 llm_type:
