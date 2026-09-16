@@ -11,6 +11,7 @@ import pandas as pd
 import matplotlib
 
 # === Local modules ===
+import datachat.sql_datasource as sql_datasource
 import infrastructure.database_pg as database_pg
 import infrastructure.vector_store as vector_store
 from utils.agent_logging import setup_agent_logger
@@ -36,6 +37,8 @@ config: AppConfig = (
 database_pg.init(config)  # Init database layer config
 
 vector_store.init(config)  # Init vector store layer config
+
+sql_datasource.init(config)  # Init datachat SQL datasource config (no DB I/O)
 
 
 # Initialize the Flask application
