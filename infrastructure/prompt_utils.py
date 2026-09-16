@@ -43,12 +43,25 @@ def render_prompt(template: str, **kwargs) -> str:
         template = "Hello {name}, today is {day}"
         render_prompt(template, name="Gustavo", day="Thursday")
 
+    Only the placeholders named in `kwargs` are substituted. Every other brace in
+    the template is literal and is passed through untouched, so a prompt may
+    contain JSON examples such as {"kind":"text"} without being mangled.
+
+    Not supported, because no prompt uses them: format specs and conversions
+    ({x:>10}, {x!r}). Those are treated as literal text.
+
     :param template: The prompt template containing placeholders in {curly braces}.
     :param kwargs: Key-value pairs for substitution.
     :return: The rendered prompt string with placeholders replaced.
     """
+    # Escape everything, then re-open only the placeholders we were given a
+    # value for. What is left escaped is literal and survives .format().
+    escaped = template.replace("{", "{{").replace("}", "}}")
+    for key in kwargs:
+        escaped = escaped.replace("{{" + key + "}}", "{" + key + "}")
+
     try:
-        return template.format(**kwargs)
+        return escaped.format(**kwargs)
     except KeyError as e:
         missing_key = e.args[0]
         logger.warning(
