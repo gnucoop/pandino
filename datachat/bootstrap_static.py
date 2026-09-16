@@ -12,7 +12,7 @@ _LANG_TO_TEMPLATE_KEY: Final[dict[str, str]] = {
 _BOOTSTRAP_TEMPLATES: Final[dict[str, str]] = {
     "it": (
         "<h2>Benvenuto in Chat with your data</h2>"
-        "<p>Qui puoi interrogare il tuo file in linguaggio naturale e ottenere risposte utili, tabelle e grafici.</p>"
+        "<p>Qui puoi interrogare i tuoi dati in linguaggio naturale e ottenere risposte utili, tabelle e grafici.</p>"
         "<h3>Cosa puoi fare</h3>"
         "<ul>"
         "<li>Contare record, filtrare righe e confrontare gruppi.</li>"
@@ -35,7 +35,7 @@ _BOOTSTRAP_TEMPLATES: Final[dict[str, str]] = {
     ),
     "en": (
         "<h2>Welcome to Chat with your data</h2>"
-        "<p>You can explore your file in natural language and get useful answers, tables, and charts.</p>"
+        "<p>You can explore your data in natural language and get useful answers, tables, and charts.</p>"
         "<h3>What you can do</h3>"
         "<ul>"
         "<li>Count records, filter rows, and compare groups.</li>"
@@ -58,7 +58,7 @@ _BOOTSTRAP_TEMPLATES: Final[dict[str, str]] = {
     ),
     "fr": (
         "<h2>Bienvenue dans Chat with your data</h2>"
-        "<p>Vous pouvez explorer votre fichier en langage naturel et obtenir des réponses utiles, des tableaux et des graphiques.</p>"
+        "<p>Vous pouvez explorer vos données en langage naturel et obtenir des réponses utiles, des tableaux et des graphiques.</p>"
         "<h3>Ce que vous pouvez faire</h3>"
         "<ul>"
         "<li>Compter les lignes, filtrer les données et comparer des groupes.</li>"
@@ -81,7 +81,7 @@ _BOOTSTRAP_TEMPLATES: Final[dict[str, str]] = {
     ),
     "es": (
         "<h2>Bienvenido a Chat with your data</h2>"
-        "<p>Aqui puedes explorar tu archivo en lenguaje natural y obtener respuestas utiles, tablas y graficos.</p>"
+        "<p>Aqui puedes explorar tus datos en lenguaje natural y obtener respuestas utiles, tablas y graficos.</p>"
         "<h3>Que puedes hacer</h3>"
         "<ul>"
         "<li>Contar registros, filtrar filas y comparar grupos.</li>"

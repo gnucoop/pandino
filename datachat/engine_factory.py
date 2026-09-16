@@ -13,7 +13,7 @@ def create_engine(
     api_key: str,
     user_name: str,
     llm: Any,
-    data: pd.DataFrame,
+    data: pd.DataFrame|None,
     open_charts: bool = False,
 ) -> DataChatEngine:
     normalized = (engine_type or "").lower().strip()
