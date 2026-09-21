@@ -4,12 +4,15 @@ import sys
 from cryptography.fernet import Fernet, InvalidToken
 import os
 import base64
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Optional, Tuple, Dict, Any
+from enum import Enum
+from typing import Optional, Tuple, Dict, Any, List
 import logging
 import pandas as pd
+from dotenv import load_dotenv
 
-from config import AppConfig
+from config import AppConfig, load_config
 from infrastructure.database_methods import (
     build_get_user_by_username_query,
     build_add_user_query,
@@ -25,6 +28,8 @@ from infrastructure.database_methods import (
     build_get_total_tokens_query,
     build_get_logs_for_admin_query,
     build_update_user_tokens_query,
+    build_update_usage_duration_query,
+    build_set_user_client_if_missing_query,
     build_get_total_log_stats_query,
     build_get_daily_log_stats_query,
     build_get_top_users_by_token_usage_query,
@@ -51,12 +56,18 @@ from infrastructure.database_methods import (
     build_get_total_users_count_query,
     build_check_pgvector_maui_id_exists_query,
     build_check_table_exists_query,
+    build_check_column_exists_query,
+    build_add_column_query,
     build_insert_rag_file_query,
     build_get_all_rag_files_query,
     build_get_rag_file_for_delete_query,
     build_delete_rag_file_query,
     build_delete_pgvector_by_file_id_query,
+    build_insert_operational_event_query,
+    build_get_operational_events_by_request_id_query,
 )
+
+logger = logging.getLogger(__name__)
 
 KEY: Optional[bytes] = None
 PGUSER: Optional[str] = None
@@ -117,7 +128,8 @@ def init_db():
             api_key TEXT NOT NULL UNIQUE,
             date_valid_until TEXT NOT NULL DEFAULT '2024-12-31',
             tokens INT NOT NULL DEFAULT 0
-            CONSTRAINT tokens_nonnegative check (tokens >= 0)
+            CONSTRAINT tokens_nonnegative check (tokens >= 0),
+            client TEXT
         );
         CREATE TABLE IF NOT EXISTS logs (
             id SERIAL PRIMARY KEY,
@@ -127,7 +139,14 @@ def init_db():
             token_output INTEGER NOT NULL,
             cost REAL NOT NULL,
             model TEXT NOT NULL,
-            provider TEXT NOT NULL
+            provider TEXT NOT NULL,
+            service TEXT,
+            request_id TEXT,
+            duration_ms INTEGER,
+            source TEXT,
+            embedding_operation_kind TEXT,
+            quantity_origin TEXT,
+            cost_origin TEXT
         );
         CREATE TABLE IF NOT EXISTS costs (
             id SERIAL PRIMARY KEY,
@@ -162,6 +181,21 @@ def init_db():
             language TEXT,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+        CREATE TABLE IF NOT EXISTS operational_events (
+            id BIGSERIAL PRIMARY KEY,
+            event_time TIMESTAMPTZ NOT NULL,
+            level TEXT NOT NULL,
+            logger TEXT NOT NULL,
+            event TEXT NOT NULL,
+            request_id TEXT,
+            app_id TEXT,
+            provider TEXT,
+            model TEXT,
+            duration_ms INTEGER,
+            error_type TEXT,
+            details JSONB,
+            message TEXT
+        );
     """
     # Execute the SQL script
     try:
@@ -187,7 +221,10 @@ def extend_expiration_date():
 
 
 def add_user(
-    username: str, api_key: str, date_valid_until: Optional[str] = None
+    username: str,
+    api_key: str,
+    date_valid_until: Optional[str] = None,
+    client: Optional[str] = None,
 ) -> Optional[str]:
     """
     Adds a new user to the 'users' table with an encrypted API key and optional expiration date.
@@ -195,12 +232,13 @@ def add_user(
     :param username: Unique username of the user.
     :param api_key: API key to be stored (will be encrypted before insertion).
     :param date_valid_until: Optional expiration date (ISO format). If not provided, 1 year is added.
+    :param client: Authenticated client to persist at creation time, or None when not known.
     :return: None if success, or an error message string if an exception occurs.
     """
     if date_valid_until is None:
         date_valid_until = extend_expiration_date()
 
-    logging.info(f"Adding user: {username} with expiration: {date_valid_until}")
+    logger.info("event=user_add_started username=%s expires=%s", username, date_valid_until)
 
     conn = connect()
     cursor = conn.cursor()
@@ -208,16 +246,16 @@ def add_user(
 
     try:
         query, params = build_add_user_query(
-            username, encrypted_api_key, date_valid_until
+            username, encrypted_api_key, date_valid_until, client
         )
         cursor.execute(query, params)
         conn.commit()
         return None
     except psycopg.IntegrityError as e:
-        logging.warning(f"IntegrityError while adding user {username}: {str(e)}")
+        logger.warning("event=user_add_conflict username=%s error=%s", username, str(e))
         return f"Error adding new user: {e}"
     except Exception as e:
-        logging.exception("Unexpected error in add_user")
+        logger.exception("event=user_add_failed")
         return f"Error adding new user: {e}"
     finally:
         conn.close()
@@ -230,7 +268,7 @@ def remove_user(username: str) -> Optional[str]:
     :param username: The username of the user to be removed.
     :return: None if success, or an error message string if an exception occurs.
     """
-    logging.info(f"Attempting to remove user: {username}")
+    logger.info("event=user_remove_started username=%s", username)
 
     conn = connect()
     cursor = conn.cursor()
@@ -241,10 +279,10 @@ def remove_user(username: str) -> Optional[str]:
         conn.commit()
         return None
     except psycopg.IntegrityError as e:
-        logging.warning(f"IntegrityError while deleting user {username}: {str(e)}")
+        logger.warning("event=user_remove_conflict username=%s error=%s", username, str(e))
         return f"Error deleting user: {e}"
     except Exception as e:
-        logging.exception("Unexpected error in remove_user")
+        logger.exception("event=user_remove_failed")
         return f"Error deleting user: {e}"
     finally:
         conn.close()
@@ -259,7 +297,7 @@ def edit_tokens(username: str, tokens_quantity: int) -> tuple[bool, str]:
     :return: Tuple (True, message) on success, or (False, error message) on failure.
     """
     date_valid_until = extend_expiration_date()
-    logging.info(f"Editing tokens for user={username}, amount={tokens_quantity}")
+    logger.info("event=user_tokens_edit_started username=%s amount=%s", username, tokens_quantity)
 
     conn = connect()
     cursor = conn.cursor()
@@ -272,27 +310,39 @@ def edit_tokens(username: str, tokens_quantity: int) -> tuple[bool, str]:
         conn.commit()
         return True, "Tokens edited successfully"
     except psycopg.IntegrityError as e:
-        logging.warning(f"IntegrityError while editing tokens for {username}: {str(e)}")
+        logger.warning("event=user_tokens_edit_conflict username=%s error=%s", username, str(e))
         return False, "Error while editing tokens"
     except Exception as e:
-        logging.exception("Unexpected error in edit_tokens")
+        logger.exception("event=user_tokens_edit_failed")
         return False, "Error while editing tokens"
     finally:
         conn.close()
 
 
-def list_users():
+#: Upper bound applied by the ``list_users`` CLI command. The paginated
+#: ``build_list_users_query`` requires an explicit limit; this is the CLI's
+#: sensible default, generous enough to list every user on a customer
+#: instance in one call.
+CLI_LIST_USERS_LIMIT = 1000
+
+
+def list_users(limit: int = CLI_LIST_USERS_LIMIT):
     """
     Retrieves and displays a list of users from the database,
-    including decrypted API keys, expiration dates, and token balances.
+    including expiration dates and token balances. API keys are decrypted
+    only to report whether decryption succeeds; the key itself is never
+    printed.
 
+    :param limit: Maximum number of users to retrieve. Defaults to
+        :data:`CLI_LIST_USERS_LIMIT`, since ``build_list_users_query`` is
+        paginated and requires an explicit bound.
     :return: None. Prints user information to the console.
     """
     conn = connect()
     cursor = conn.cursor()
 
     try:
-        query, params = build_list_users_query()
+        query, params = build_list_users_query(limit)
         cursor.execute(query, params)
         users = cursor.fetchall()
     finally:
@@ -304,7 +354,7 @@ def list_users():
             try:
                 decrypted_api_key = get_cipher_suite().decrypt(api_key).decode()
                 print(
-                    f"ID: {id}, Username: {user}, ApiKey: {decrypted_api_key}, Date Valid Until: {date_valid_until}, Tokens: {tokens}"
+                    f"ID: {id}, Username: {user}, Date Valid Until: {date_valid_until}, Tokens: {tokens}"
                 )
             except InvalidToken:
                 print(
@@ -321,7 +371,7 @@ def get_user_by_username(user_name: str) -> Optional[dict[str, str | int]]:
     :param user_name: The username or email of the user to retrieve.
     :return: A dictionary containing user fields if found, or None if not found.
     """
-    logging.info(f"Looking up user by username: {user_name}")
+    logger.info("event=user_lookup_started username=%s", user_name)
 
     conn = connect()
     cursor = conn.cursor()
@@ -338,7 +388,7 @@ def get_user_by_username(user_name: str) -> Optional[dict[str, str | int]]:
         try:
             decrypted_key = get_cipher_suite().decrypt(user[2]).decode("utf-8")
         except Exception as e:
-            logging.error(f"Failed to decrypt API key for user {user_name}: {str(e)}")
+            logger.error("event=user_lookup_key_decrypt_failed username=%s error=%s", user_name, str(e))
             decrypted_key = "DECRYPTION_FAILED"
 
         user_data = {
@@ -347,11 +397,12 @@ def get_user_by_username(user_name: str) -> Optional[dict[str, str | int]]:
             "api_key": decrypted_key,
             "date_valid_until": user[3],
             "tokens": user[4],
+            "client": user[5],
         }
-        logging.info(f"User found: {user_data}")
+        logger.info("event=user_lookup_success username=%s", user_name)
         return user_data
 
-    logging.warning(f"No user found for username: {user_name}")
+    logger.warning("event=user_lookup_not_found username=%s", user_name)
     return None
 
 
@@ -362,27 +413,29 @@ def get_user_tokens(user_name: str) -> Optional[int]:
     :param user_name: The username of the user.
     :return: Number of tokens if user exists and the value is an int, otherwise None.
     """
-    logging.info(f"Retrieving token count for user: {user_name}")
+    logger.info("event=user_tokens_lookup_started username=%s", user_name)
 
     user = get_user_by_username(user_name)
     if user is None:
-        logging.warning(f"User not found: {user_name}")
+        logger.warning("event=user_tokens_lookup_not_found username=%s", user_name)
         return None
 
     token_value = user["tokens"]
     return token_value if isinstance(token_value, int) else None
 
 
-def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
+def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str, Optional[str]]:
     """
     Validates whether the provided API key matches the user's stored (encrypted) key
     and is still within the valid date range.
 
     :param api_key: The plain API key provided by the user.
     :param user_email: The username/email associated with the key.
-    :return: Tuple (True, "match") if valid, otherwise (False, reason).
+    :return: Tuple (True, "match", client) if valid, otherwise (False, reason, None).
+        ``client`` is the persisted ``users.client`` for the matched row, or
+        ``None`` when it is NULL. Never populated on a failed match.
     """
-    logging.info(f"Validating API key for user: {user_email}")
+    logger.info("event=api_key_validate_started username=%s", user_email)
 
     conn = connect()
     cursor = conn.cursor()
@@ -395,12 +448,12 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
         conn.close()
 
     if not encrypted_keys:
-        return False, "No matching API key found"
+        return False, "No matching API key found", None
 
     current_date = datetime.now().date()
     found_expired = False
 
-    for encrypted_key, date_valid_until in encrypted_keys:
+    for encrypted_key, date_valid_until, client in encrypted_keys:
         try:
             expiration = datetime.strptime(date_valid_until, "%Y-%m-%d").date()
         except Exception:
@@ -408,8 +461,10 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
         try:
             expiration = datetime.strptime(date_valid_until, "%Y-%m-%d %H:%M:%S").date()
         except Exception as e:
-            logging.error(
-                f"Invalid date format in DB for user {user_email}: {date_valid_until}"
+            logger.error(
+                "event=api_key_validate_date_invalid username=%s date=%s",
+                user_email,
+                date_valid_until,
             )
             continue
 
@@ -420,16 +475,16 @@ def validate_api_key(api_key: str, user_email: str) -> Tuple[bool, str]:
         try:
             decrypted_key = get_cipher_suite().decrypt(encrypted_key).decode().strip()
             if decrypted_key == api_key.strip():
-                return True, "API key match found"
+                return True, "API key match found", client
         except InvalidToken:
             continue
         except Exception:
             continue
 
     if found_expired:
-        return False, "API key expired"
+        return False, "API key expired", None
 
-    return False, "No matching API key found"
+    return False, "No matching API key found", None
 
 
 def print_stored_keys() -> None:
@@ -453,12 +508,62 @@ def print_stored_keys() -> None:
 
     print("Stored API keys:")
     for username, encrypted_key in users:
-        print(f"Username: {username}, Encrypted key: {encrypted_key}")
+        print(f"Username: {username}, Key stored: yes")
         try:
-            decrypted_key = get_cipher_suite().decrypt(encrypted_key).decode()
-            print(f"  Decrypted key: {decrypted_key}")
+            get_cipher_suite().decrypt(encrypted_key).decode()
+            print("  Decrypted key: available")
         except Exception as e:
             print(f"  Error decrypting key: {str(e)}")
+
+
+def _insert_resolved_cost_usage_log(
+    cursor,
+    date_str: str,
+    user_id: int,
+    token_input: int,
+    token_output: int,
+    cost: float,
+    model: str,
+    provider: str,
+    service: str,
+    request_id: str,
+    source: Optional[str],
+    embedding_operation_kind: Optional[str] = None,
+    quantity_origin: Optional[str] = None,
+    cost_origin: Optional[str] = None,
+) -> int:
+    """
+    Fixed-intent Usage persistence primitive: inserts a 'logs' row for a
+    monetary cost the caller has already resolved, and returns the new id.
+
+    Provider-blind, pricing-blind, Flask-blind: it does not look up costs,
+    calculate token pricing, or infer any accounting attribution field. The
+    caller (e.g. log_token_usage()) owns the connection/transaction and has
+    already resolved every value passed in, including the optional
+    provenance values, which default to NULL.
+    """
+    insert_query, insert_params = build_insert_token_log_query(
+        date_str,
+        user_id,
+        token_input,
+        token_output,
+        cost,
+        model,
+        provider,
+        service,
+        request_id,
+        source,
+        embedding_operation_kind=embedding_operation_kind,
+        quantity_origin=quantity_origin,
+        cost_origin=cost_origin,
+    )
+    cursor.execute(insert_query, insert_params)
+
+    log_id_row = cursor.fetchone()
+    if not log_id_row:
+        raise RuntimeError("Failed to retrieve log_id after insert")
+
+    return log_id_row[0]
 
 
 def log_token_usage(
@@ -467,6 +572,9 @@ def log_token_usage(
     token_output: int,
     model: str,
     provider: str,
+    service: str,
+    request_id: str,
+    source: Optional[str],
 ) -> int:
     """
     Logs token usage for a user by calculating the cost based on input and output tokens,
@@ -477,46 +585,189 @@ def log_token_usage(
     :param token_output: Number of output tokens generated.
     :param model: The model used for token processing.
     :param provider: The provider of the model.
+    :param service: The HTTP endpoint that produced this usage.
+    :param request_id: The canonical HTTP request id of the request that produced this usage.
+    :param source: The persisted client ecosystem of the user that produced this usage, or None.
     :return: The ID of the inserted log record.
     """
     conn = connect()
-    cursor = conn.cursor()
-    now = datetime.now()
-    date_str = now.strftime("%Y-%m-%d %H:%M:%S")
-    current_date = now.strftime("%Y-%m-%d")
+    try:
+        cursor = conn.cursor()
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d %H:%M:%S")
+        current_date = now.strftime("%Y-%m-%d")
 
-    # SELECT cost
-    cost_query, cost_params = build_get_token_cost_query(provider, model, current_date)
-    cursor.execute(cost_query, cost_params)
-    cost_row = cursor.fetchone()
-    if not cost_row:
-        raise ValueError(f"Cost not found for provider: {provider} and model: {model}")
+        # SELECT cost
+        cost_query, cost_params = build_get_token_cost_query(provider, model, current_date)
+        cursor.execute(cost_query, cost_params)
+        cost_row = cursor.fetchone()
+        if not cost_row:
+            raise ValueError(f"Cost not found for provider: {provider} and model: {model}")
 
-    token_input_cost, token_output_cost = cost_row
-    cost = (token_input * token_input_cost) + (token_output * token_output_cost)
+        token_input_cost, token_output_cost = cost_row
+        cost = (token_input * token_input_cost) + (token_output * token_output_cost)
 
-    # INSERT log (RETURNING id)
-    insert_query, insert_params = build_insert_token_log_query(
-        date_str,
-        user_id,
-        token_input,
-        token_output,
-        cost,
-        model,
-        provider,
-    )
-    cursor.execute(insert_query, insert_params)
+        log_id = _insert_resolved_cost_usage_log(
+            cursor,
+            date_str,
+            user_id,
+            token_input,
+            token_output,
+            cost,
+            model,
+            provider,
+            service,
+            request_id,
+            source,
+        )
 
-    log_id_row = cursor.fetchone()
-    if not log_id_row:
-        raise RuntimeError("Failed to retrieve log_id after insert")
+        conn.commit()
+        return log_id
+    finally:
+        conn.close()
 
-    log_id = log_id_row[0]
 
-    conn.commit()
-    conn.close()
+def log_usage_with_resolved_cost(
+    user_id: int,
+    cost: float,
+    model: str,
+    provider: str,
+    service: str,
+    request_id: str,
+    source: Optional[str],
+    token_input: int = 0,
+    token_output: int = 0,
+    embedding_operation_kind: Optional[str] = None,
+    quantity_origin: Optional[str] = None,
+    cost_origin: Optional[str] = None,
+) -> int:
+    """
+    Persists a Usage log row for a monetary cost the caller has already
+    resolved, bypassing the token-pricing lookup used by log_token_usage().
 
-    return log_id
+    Used in production by the /transcribe ASR route. token_input and
+    token_output default to 0, the established compatibility convention for
+    non-token Usage rows. The three provenance values are optional and
+    default to NULL, so a caller that has none writes rows identical to
+    before.
+
+    :param user_id: The ID of the user whose usage is being logged.
+    :param cost: The already-resolved monetary cost to persist.
+    :param model: The model used.
+    :param provider: The provider of the model.
+    :param service: The HTTP endpoint that produced this usage.
+    :param request_id: The canonical HTTP request id of the request that produced this usage.
+    :param source: The persisted client ecosystem of the user that produced this usage, or None.
+    :param token_input: Compatibility placeholder for non-token Usage; defaults to 0.
+    :param token_output: Compatibility placeholder for non-token Usage; defaults to 0.
+    :param embedding_operation_kind: Embedding operation this row records, or None.
+    :param quantity_origin: Where the persisted quantity came from, or None.
+    :param cost_origin: Where the persisted cost came from, or None.
+    :return: The ID of the inserted log record.
+    """
+    conn = connect()
+    try:
+        cursor = conn.cursor()
+        now = datetime.now()
+        date_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
+        log_id = _insert_resolved_cost_usage_log(
+            cursor,
+            date_str,
+            user_id,
+            token_input,
+            token_output,
+            cost,
+            model,
+            provider,
+            service,
+            request_id,
+            source,
+            embedding_operation_kind=embedding_operation_kind,
+            quantity_origin=quantity_origin,
+            cost_origin=cost_origin,
+        )
+
+        conn.commit()
+        return log_id
+    finally:
+        conn.close()
+
+
+@dataclass(frozen=True)
+class ResolvedCostUsageEntry:
+    """One already-resolved Usage row for log_resolved_cost_usage_batch().
+
+    Deliberately generic Usage infrastructure: nothing here is
+    embedding-shaped, and every value is expected to have been resolved and
+    validated above the database boundary.
+    """
+
+    user_id: int
+    cost: float
+    model: str
+    provider: str
+    service: str
+    request_id: str
+    source: Optional[str]
+    token_input: int = 0
+    token_output: int = 0
+    embedding_operation_kind: Optional[str] = None
+    quantity_origin: Optional[str] = None
+    cost_origin: Optional[str] = None
+
+
+def log_resolved_cost_usage_batch(entries) -> List[int]:
+    """
+    Persists 0..N already-resolved Usage rows in a single transaction and
+    returns their new ids in input order.
+
+    All rows commit together or none do: on any failure the transaction is
+    rolled back and the exception is re-raised, so a caller never leaves a
+    knowably partial accounting record behind. An empty batch is a no-op
+    that opens no connection.
+
+    :param entries: Sequence of ResolvedCostUsageEntry records to insert.
+    :return: The IDs of the inserted log records, in input order.
+    """
+    entries = list(entries)
+    if not entries:
+        return []
+
+    conn = connect()
+    try:
+        cursor = conn.cursor()
+        date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        log_ids: List[int] = []
+        try:
+            for entry in entries:
+                log_ids.append(
+                    _insert_resolved_cost_usage_log(
+                        cursor,
+                        date_str,
+                        entry.user_id,
+                        entry.token_input,
+                        entry.token_output,
+                        entry.cost,
+                        entry.model,
+                        entry.provider,
+                        entry.service,
+                        entry.request_id,
+                        entry.source,
+                        embedding_operation_kind=entry.embedding_operation_kind,
+                        quantity_origin=entry.quantity_origin,
+                        cost_origin=entry.cost_origin,
+                    )
+                )
+        except Exception:
+            conn.rollback()
+            raise
+
+        conn.commit()
+        return log_ids
+    finally:
+        conn.close()
 
 
 def insert_rag_file(
@@ -552,7 +803,7 @@ def insert_rag_file(
         return True
     except Exception:
         conn.rollback()
-        logging.exception("Error inserting rag file")
+        logger.exception("event=rag_file_insert_failed")
         return False
     finally:
         conn.close()
@@ -612,7 +863,7 @@ def delete_rag_file(file_id: str, namespace: str) -> dict:
     # it here, because vector_store imports this module.
     table_name = namespace.strip().lower().replace("-", "_")
 
-    logging.info(f"Attempting to delete rag file: id={file_id} namespace={table_name}")
+    logger.info("event=rag_file_delete_started file_id=%s namespace=%s", file_id, table_name)
 
     conn = connect()
     cursor = conn.cursor()
@@ -654,7 +905,7 @@ def delete_rag_file(file_id: str, namespace: str) -> dict:
         return {"row_deleted": row_deleted, "chunks_deleted": chunks_deleted}
     except Exception:
         conn.rollback()
-        logging.exception("Error deleting rag file")
+        logger.exception("event=rag_file_delete_failed")
         raise
     finally:
         conn.close()
@@ -669,10 +920,345 @@ def table_exists(table_schema: str, table_name: str) -> bool:
         cursor.execute(query, params)
         return cursor.fetchone() is not None
     except Exception as e:
-        logging.exception("Error checking table existence")
+        logger.exception("event=table_exists_check_failed")
         return False
     finally:
         conn.close()
+
+
+def column_exists(table_schema: str, table_name: str, column_name: str) -> bool:
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_check_column_exists_query(table_schema, table_name, column_name)
+        cursor.execute(query, params)
+        return cursor.fetchone() is not None
+    except Exception:
+        logger.exception("event=column_exists_check_failed")
+        return False
+    finally:
+        conn.close()
+
+
+class SchemaChangeResult(Enum):
+    """Outcome of a safe additive schema change, distinguishing a no-op
+    from an applied change from a failure the caller must not treat as
+    success."""
+
+    CHANGED = "changed"
+    UNCHANGED = "unchanged"
+    FAILED = "failed"
+
+
+# Fixed allow-list of column type/definition fragments. add_column_if_missing()
+# only accepts a key from this map, never a raw type string, so it cannot be
+# used as an unrestricted DDL injection surface.
+_ALLOWED_COLUMN_TYPES: Dict[str, sql.SQL] = {
+    "TEXT": sql.SQL("TEXT"),
+    "INTEGER": sql.SQL("INTEGER"),
+}
+
+
+def _column_exists_strict(cursor, table_schema: str, table_name: str, column_name: str) -> bool:
+    """
+    Strict column-existence check for use inside schema-mutation control flow.
+
+    Unlike column_exists(), this does not catch exceptions: a failed
+    inspection must propagate to the caller instead of being collapsed into
+    "column absent", because that ambiguity is exactly what would let a
+    failed inspection incorrectly authorize an ALTER TABLE.
+    """
+    query, params = build_check_column_exists_query(table_schema, table_name, column_name)
+    cursor.execute(query, params)
+    return cursor.fetchone() is not None
+
+
+def add_column_if_missing(
+    table_schema: str, table_name: str, column_name: str, column_type: str
+) -> SchemaChangeResult:
+    """
+    Adds a column to an existing table, only when its absence has been
+    positively established. Fails closed: if the pre-DDL inspection cannot
+    establish that the column is absent, no ALTER TABLE is executed.
+
+    :param table_schema: Schema name.
+    :param table_name: Table name.
+    :param column_name: Name of the column to add.
+    :param column_type: Key into the fixed allow-list of supported column
+        type/definition fragments (see _ALLOWED_COLUMN_TYPES).
+    :return: SchemaChangeResult.UNCHANGED if the column already existed,
+        CHANGED if it was added and verified, FAILED if inspection, DDL, or
+        post-DDL verification did not succeed.
+    """
+    if column_type not in _ALLOWED_COLUMN_TYPES:
+        raise ValueError(f"Unsupported column type: {column_type}")
+
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        try:
+            already_exists = _column_exists_strict(cursor, table_schema, table_name, column_name)
+        except Exception:
+            logger.exception(
+                "event=add_column_if_missing_inspection_failed table=%s column=%s",
+                table_name,
+                column_name,
+            )
+            return SchemaChangeResult.FAILED
+
+        if already_exists:
+            return SchemaChangeResult.UNCHANGED
+
+        try:
+            query, params = build_add_column_query(
+                table_schema, table_name, column_name, _ALLOWED_COLUMN_TYPES[column_type]
+            )
+            cursor.execute(query, params)
+        except Exception:
+            conn.rollback()
+            logger.exception(
+                "event=add_column_if_missing_ddl_failed table=%s column=%s",
+                table_name,
+                column_name,
+            )
+            return SchemaChangeResult.FAILED
+
+        try:
+            added = _column_exists_strict(cursor, table_schema, table_name, column_name)
+        except Exception:
+            conn.rollback()
+            logger.exception(
+                "event=add_column_if_missing_verification_failed table=%s column=%s",
+                table_name,
+                column_name,
+            )
+            return SchemaChangeResult.FAILED
+
+        if not added:
+            conn.rollback()
+            logger.error(
+                "event=add_column_if_missing_verification_mismatch table=%s column=%s",
+                table_name,
+                column_name,
+            )
+            return SchemaChangeResult.FAILED
+
+        conn.commit()
+        return SchemaChangeResult.CHANGED
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def add_usage_service_column() -> None:
+    """
+    Governed, application-owned schema operation for the first Usage Service
+    schema evolution: adds the nullable 'service' column to the existing
+    'logs' table if it is not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / logs / service / TEXT. This is the only sanctioned
+    way to reach add_column_if_missing() for this change; it does not accept
+    schema/table/column/type parameters, so it cannot be used to mutate an
+    arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "logs", "service", "TEXT")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("logs.service added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("logs.service already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add logs.service column.")
+
+
+def add_usage_request_id_column() -> None:
+    """
+    Governed, application-owned schema operation for the Usage request_id
+    schema evolution: adds the nullable 'request_id' column to the existing
+    'logs' table if it is not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / logs / request_id / TEXT. This is the only
+    sanctioned way to reach add_column_if_missing() for this change; it does
+    not accept schema/table/column/type parameters, so it cannot be used to
+    mutate an arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "logs", "request_id", "TEXT")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("logs.request_id added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("logs.request_id already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add logs.request_id column.")
+
+
+def add_usage_duration_ms_column() -> None:
+    """
+    Governed, application-owned schema operation for the Usage duration_ms
+    schema evolution: adds the nullable 'duration_ms' column to the existing
+    'logs' table if it is not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / logs / duration_ms / INTEGER. This is the only
+    sanctioned way to reach add_column_if_missing() for this change; it does
+    not accept schema/table/column/type parameters, so it cannot be used to
+    mutate an arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "logs", "duration_ms", "INTEGER")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("logs.duration_ms added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("logs.duration_ms already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add logs.duration_ms column.")
+
+
+def add_user_client_column() -> None:
+    """
+    Governed, application-owned schema operation for the Source client
+    schema foundation: adds the nullable 'client' column to the existing
+    'users' table if it is not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / users / client / TEXT. This is the only
+    sanctioned way to reach add_column_if_missing() for this change; it does
+    not accept schema/table/column/type parameters, so it cannot be used to
+    mutate an arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "users", "client", "TEXT")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("users.client added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("users.client already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add users.client column.")
+
+
+def add_usage_source_column() -> None:
+    """
+    Governed, application-owned schema operation for the Usage source
+    schema foundation: adds the nullable 'source' column to the existing
+    'logs' table if it is not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / logs / source / TEXT. This is the only
+    sanctioned way to reach add_column_if_missing() for this change; it does
+    not accept schema/table/column/type parameters, so it cannot be used to
+    mutate an arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "logs", "source", "TEXT")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("logs.source added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("logs.source already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add logs.source column.")
+
+
+def add_usage_embedding_operation_kind_column() -> None:
+    """
+    Governed, application-owned schema operation for the Embedding Usage
+    persistence provenance foundation: adds the nullable
+    'embedding_operation_kind' column to the existing 'logs' table if it is
+    not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / logs / embedding_operation_kind / TEXT. This is the
+    only sanctioned way to reach add_column_if_missing() for this change; it
+    does not accept schema/table/column/type parameters, so it cannot be used
+    to mutate an arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "logs", "embedding_operation_kind", "TEXT")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("logs.embedding_operation_kind added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("logs.embedding_operation_kind already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add logs.embedding_operation_kind column.")
+
+
+def add_usage_quantity_origin_column() -> None:
+    """
+    Governed, application-owned schema operation for the Embedding Usage
+    persistence provenance foundation: adds the nullable 'quantity_origin'
+    column to the existing 'logs' table if it is not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / logs / quantity_origin / TEXT. This is the only
+    sanctioned way to reach add_column_if_missing() for this change; it does
+    not accept schema/table/column/type parameters, so it cannot be used to
+    mutate an arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "logs", "quantity_origin", "TEXT")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("logs.quantity_origin added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("logs.quantity_origin already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add logs.quantity_origin column.")
+
+
+def add_usage_cost_origin_column() -> None:
+    """
+    Governed, application-owned schema operation for the Embedding Usage
+    persistence provenance foundation: adds the nullable 'cost_origin'
+    column to the existing 'logs' table if it is not already present.
+
+    Fixed intent (schema, table, column, type are not caller-controlled):
+    current Maui schema / logs / cost_origin / TEXT. This is the only
+    sanctioned way to reach add_column_if_missing() for this change; it does
+    not accept schema/table/column/type parameters, so it cannot be used to
+    mutate an arbitrary table or column.
+
+    :raises RuntimeError: if the schema change was not committed (FAILED),
+        so a failure is visible as a process failure rather than a silent
+        success.
+    """
+    result = add_column_if_missing(schema, "logs", "cost_origin", "TEXT")
+
+    if result == SchemaChangeResult.CHANGED:
+        print("logs.cost_origin added.")
+    elif result == SchemaChangeResult.UNCHANGED:
+        print("logs.cost_origin already present, no change needed.")
+    else:
+        raise RuntimeError("Failed to add logs.cost_origin column.")
 
 
 def pgvector_maui_id_exists(table_name: str, maui_id: str) -> bool:
@@ -684,7 +1270,7 @@ def pgvector_maui_id_exists(table_name: str, maui_id: str) -> bool:
         cursor.execute(query, params)
         return cursor.fetchone() is not None
     except Exception as e:
-        logging.exception("Error checking maui_id existence")
+        logger.exception("event=pgvector_maui_id_check_failed")
         return False
     finally:
         conn.close()
@@ -698,7 +1284,7 @@ def get_prompt_from_db(title: str, version: Optional[int] = None) -> Optional[st
     :param version: Optional specific version to retrieve. If None, retrieves the most recent version.
     :return: The prompt message as a string, or None if not found.
     """
-    logging.info(f"Retrieving prompt from DB: title='{title}', version={version}")
+    logger.info("event=prompt_lookup_started title=%s version=%s", title, version)
 
     conn = connect()
     cursor = conn.cursor()
@@ -711,12 +1297,14 @@ def get_prompt_from_db(title: str, version: Optional[int] = None) -> Optional[st
         if result:
             return result[0]  # message
         else:
-            logging.warning(
-                f"No prompt found in DB for title='{title}', version={version}"
+            logger.warning(
+                "event=prompt_lookup_not_found title=%s version=%s",
+                title,
+                version,
             )
             return None
     except Exception as e:
-        logging.exception(f"Error retrieving prompt from DB: {str(e)}")
+        logger.exception("event=prompt_lookup_failed error=%s", str(e))
         return None
     finally:
         conn.close()
@@ -957,6 +1545,10 @@ def get_logs_for_admin(page=1, limit=50, start_date=None, end_date=None, search=
             cost,
             model,
             provider,
+            service,
+            request_id,
+            duration_ms,
+            source,
         ) in logs_raw:
             # Formatta la data
             if date and hasattr(date, "strftime"):
@@ -975,6 +1567,10 @@ def get_logs_for_admin(page=1, limit=50, start_date=None, end_date=None, search=
                     "cost": cost or 0,
                     "model": model or "N/A",
                     "provider": provider or "N/A",
+                    "service": service or "N/A",
+                    "request_id": request_id or "N/A",
+                    "duration_ms": duration_ms if duration_ms is not None else "N/A",
+                    "source": source or "N/A",
                 }
             )
 
@@ -1009,6 +1605,65 @@ def update_user_tokens(user_id, new_tokens):
         query, params = build_update_user_tokens_query(
             user_id, new_tokens, one_year_from_today
         )
+        cursor.execute(query, params)
+        conn.commit()
+
+        if cursor.rowcount > 0:
+            return True
+        else:
+            return False
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def set_user_client_if_missing(username: str, client: str) -> bool:
+    """
+    Persist a candidate client for an existing user, only if users.client
+    is currently NULL (fill-if-empty). The invariant is enforced by the
+    UPDATE's WHERE clause itself, not by a prior SELECT: a row whose
+    client is already set is left unchanged, and unknown usernames do not
+    create a row (this is not an upsert).
+
+    :param username: The username of the user to update.
+    :param client: Candidate client value to persist.
+    :return: True if the row was updated (client was NULL and is now set),
+        False if no row was updated (unknown username, or client already set).
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_set_user_client_if_missing_query(username, client)
+        cursor.execute(query, params)
+        conn.commit()
+
+        if cursor.rowcount > 0:
+            return True
+        else:
+            return False
+    except Exception as e:
+        conn.rollback()
+        raise e
+    finally:
+        conn.close()
+
+
+def update_usage_duration(log_id: int, duration_ms: int) -> bool:
+    """
+    Update the duration_ms field for a specific logs row.
+
+    :param log_id: ID of the log row to update.
+    :param duration_ms: New duration value, in milliseconds.
+    :return: True if a row was updated, False if no row matched log_id.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_update_usage_duration_query(log_id, duration_ms)
         cursor.execute(query, params)
         conn.commit()
 
@@ -1217,7 +1872,7 @@ def add_cost(
         conn.commit()
         return None
     except Exception as e:
-        logging.exception("Unexpected error in add_cost")
+        logger.exception("event=cost_add_failed")
         return f"Error adding new cost: {e}"
     finally:
         conn.close()
@@ -1261,7 +1916,7 @@ def update_cost(
         conn.commit()
         return None
     except Exception as e:
-        logging.exception("Unexpected error in update_cost")
+        logger.exception("event=cost_update_failed")
         return f"Error updating cost: {e}"
     finally:
         conn.close()
@@ -1283,7 +1938,7 @@ def delete_cost(cost_id: int) -> Optional[str]:
         conn.commit()
         return None
     except Exception as e:
-        logging.exception("Unexpected error in delete_cost")
+        logger.exception("event=cost_delete_failed")
         return f"Error deleting cost: {e}"
     finally:
         conn.close()
@@ -1387,7 +2042,7 @@ def add_prompt(title: str, version: int, message: str) -> Optional[str]:
     :param message: Message of the prompt.
     :return: None if success, or an error message string if an exception occurs.
     """
-    logging.info(f"Adding prompt: {title}")
+    logger.info("event=prompt_add_started title=%s", title)
 
     conn = connect()
     cursor = conn.cursor()
@@ -1398,10 +2053,10 @@ def add_prompt(title: str, version: int, message: str) -> Optional[str]:
         conn.commit()
         return None
     except psycopg.IntegrityError as e:
-        logging.warning(f"IntegrityError while adding prompt {title}: {str(e)}")
+        logger.warning("event=prompt_add_conflict title=%s error=%s", title, str(e))
         return f"Error adding new prompt: {e}"
     except Exception as e:
-        logging.exception("Unexpected error in add_prompt")
+        logger.exception("event=prompt_add_failed")
         return f"Error adding new prompt: {e}"
     finally:
         conn.close()
@@ -1443,7 +2098,7 @@ def delete_prompt(prompt_id: int) -> bool:
     :param prompt_id: The ID of the prompt to be removed.
     :return: True if deletion was successful, False otherwise.
     """
-    logging.info(f"Attempting to remove prompt: {prompt_id}")
+    logger.info("event=prompt_delete_started prompt_id=%s", prompt_id)
 
     conn = connect()
     cursor = conn.cursor()
@@ -1454,7 +2109,7 @@ def delete_prompt(prompt_id: int) -> bool:
         conn.commit()
         return cursor.rowcount > 0
     except Exception as e:
-        logging.exception(f"Unexpected error in delete_prompt: {e}")
+        logger.exception("event=prompt_delete_failed error=%s", e)
         return False
     finally:
         conn.close()
@@ -1546,7 +2201,7 @@ def get_feedback_for_admin(
             "total_count": total_count,
         }
     except Exception as e:
-        logging.exception(f"Error retrieving feedback: {e}")
+        logger.exception("event=feedback_admin_lookup_failed error=%s", e)
         return {"feedbacks": [], "page": 1, "total_pages": 1, "total_count": 0}
     finally:
         conn.close()
@@ -1607,17 +2262,182 @@ def get_feedback_stats(
 
         return stats
     except Exception as e:
-        logging.exception(f"Error retrieving feedback stats: {e}")
+        logger.exception("event=feedback_stats_lookup_failed error=%s", e)
         return stats
     finally:
         conn.close()
+
+
+def _insert_operational_event(
+    cursor,
+    event_time,
+    level,
+    logger_name,
+    event,
+    request_id,
+    app_id,
+    provider,
+    model,
+    duration_ms,
+    error_type,
+    details_json,
+    message,
+) -> None:
+    """
+    Fixed-intent Operational event persistence primitive: inserts one
+    'operational_events' row.
+
+    Flask-blind, application-type-blind, logging-free: it receives an
+    existing cursor, executes exactly one INSERT and raises on failure.
+    The caller owns the connection/transaction.
+    """
+    query, params = build_insert_operational_event_query(
+        event_time,
+        level,
+        logger_name,
+        event,
+        request_id,
+        app_id,
+        provider,
+        model,
+        duration_ms,
+        error_type,
+        details_json,
+        message,
+    )
+    cursor.execute(query, params)
+
+
+def insert_operational_event(
+    event_time,
+    level,
+    logger_name,
+    event,
+    request_id,
+    app_id,
+    provider,
+    model,
+    duration_ms,
+    error_type,
+    details_json,
+    message,
+) -> None:
+    """
+    Persists one Operational event row.
+
+    Opens its own connection, inserts via _insert_operational_event(),
+    commits once on success, and closes the connection in a finally block.
+    Logging-free; raises on failure without catching.
+    """
+    conn = connect()
+    try:
+        cursor = conn.cursor()
+        _insert_operational_event(
+            cursor,
+            event_time,
+            level,
+            logger_name,
+            event,
+            request_id,
+            app_id,
+            provider,
+            model,
+            duration_ms,
+            error_type,
+            details_json,
+            message,
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _format_operational_event_time(event_time) -> str:
+    """Format one Operational event_time for display, to the millisecond.
+
+    Millisecond precision (not the second precision used elsewhere in the
+    admin panel) is deliberate: a single flow routinely emits several
+    Operational events inside the same wall-clock second, which is why id
+    exists as the ordering tie-breaker. Showing milliseconds keeps the
+    (event_time, id) timeline order intelligible without displaying id.
+    """
+    if event_time and hasattr(event_time, "strftime"):
+        return event_time.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    return str(event_time) if event_time else "N/A"
+
+
+def get_operational_events_by_request_id(request_id: str) -> list:
+    """
+    Retrieves the Operational events correlated to one request_id, ordered
+    as a timeline (event_time ASC, id ASC).
+
+    The caller is responsible for supplying a valid, non-empty request_id.
+    A valid request_id with no correlated events returns []; that is a
+    legitimate outcome, not an error, because Usage coverage and Operational
+    coverage are intentionally non-symmetric.
+
+    Query/connection failures propagate to the caller and are never
+    converted into an empty result. SQL NULLs are preserved as None: this
+    reader introduces no display sentinels, performs no Usage lookup, and
+    infers nothing about whether Operational events were expected.
+
+    details is passed through unchanged as the native value psycopg returns
+    for JSONB (dict, or None for SQL NULL). Serialization and payload
+    bounding remain owned by the Operational emission contract.
+
+    :param request_id: Correlation key to select on.
+    :return: List of dictionaries, one per Operational event.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_get_operational_events_by_request_id_query(
+            request_id
+        )
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    events = []
+    for (
+        event_time,
+        level,
+        logger_name,
+        event,
+        app_id,
+        provider,
+        model,
+        duration_ms,
+        error_type,
+        details,
+        message,
+    ) in rows:
+        events.append(
+            {
+                "event_time": _format_operational_event_time(event_time),
+                "level": level,
+                "logger": logger_name,
+                "event": event,
+                "app_id": app_id,
+                "provider": provider,
+                "model": model,
+                "duration_ms": duration_ms,
+                "error_type": error_type,
+                "details": details,
+                "message": message,
+            }
+        )
+
+    return events
 
 
 def print_help():
     print("Usage: python database-pg.py <command>")
     print("Commands:")
     print("  init_db                     Initialize the database")
-    print("  add_user <username> <api_key> <date_valid_until>  Add a new user")
+    print("  add_user <username> <api_key>  Add a new user")
     print("  remove_user <username> Removes an existing user")
     print("  get_user_by_username <user_name> Retrieve a user by its username/mail")
     print(
@@ -1625,29 +2445,89 @@ def print_help():
     )
     print("  list_users                  List all users")
     print("  print_keys                  Print all stored API keys")
+    print("  add_usage_service_column    Add the nullable logs.service column if missing")
+    print("  add_usage_request_id_column Add the nullable logs.request_id column if missing")
+    print("  add_usage_duration_ms_column Add the nullable logs.duration_ms column if missing")
+    print("  add_user_client_column      Add the nullable users.client column if missing")
+    print("  add_usage_source_column     Add the nullable logs.source column if missing")
+    print(
+        "  add_usage_embedding_operation_kind_column Add the nullable logs.embedding_operation_kind column if missing"
+    )
+    print("  add_usage_quantity_origin_column Add the nullable logs.quantity_origin column if missing")
+    print("  add_usage_cost_origin_column Add the nullable logs.cost_origin column if missing")
+
+
+def _resolve_cli_command(argv: list[str]):
+    """
+    Validate argv against the known CLI commands and their expected argument
+    counts, without executing anything.
+
+    :return: A zero-argument callable that runs the selected command when
+        invoked, or None if argv does not match any known command with the
+        right argument count (help should be shown, no DB init required).
+    """
+    if len(argv) <= 1:
+        return None
+
+    command = argv[1]
+
+    if command == "init_db":
+        return init_db
+    if command == "add_user" and len(argv) == 4:
+        username, api_key = argv[2], argv[3]
+        return lambda: add_user(username, api_key)
+    if command == "remove_user" and len(argv) == 3:
+        username = argv[2]
+        return lambda: remove_user(username)
+    if command == "get_user_by_username" and len(argv) == 3:
+        user_name = argv[2]
+        return lambda: get_user_by_username(user_name)
+    if command == "edit_tokens" and len(argv) == 4:
+        username, tokens_quantity = argv[2], int(argv[3])
+        return lambda: edit_tokens(username, tokens_quantity)
+    if command == "list_users":
+        return list_users
+    if command == "print_keys":
+        return print_stored_keys
+    if command == "add_usage_service_column" and len(argv) == 2:
+        return add_usage_service_column
+    if command == "add_usage_request_id_column" and len(argv) == 2:
+        return add_usage_request_id_column
+    if command == "add_usage_duration_ms_column" and len(argv) == 2:
+        return add_usage_duration_ms_column
+    if command == "add_user_client_column" and len(argv) == 2:
+        return add_user_client_column
+    if command == "add_usage_source_column" and len(argv) == 2:
+        return add_usage_source_column
+    if command == "add_usage_embedding_operation_kind_column" and len(argv) == 2:
+        return add_usage_embedding_operation_kind_column
+    if command == "add_usage_quantity_origin_column" and len(argv) == 2:
+        return add_usage_quantity_origin_column
+    if command == "add_usage_cost_origin_column" and len(argv) == 2:
+        return add_usage_cost_origin_column
+
+    return None
+
+
+def run_cli(argv: list[str]) -> None:
+    """
+    CLI entry point for direct script invocation.
+
+    Validates the requested command and its argument count first; only a
+    syntactically valid, known DB command triggers .env loading,
+    configuration loading and database_pg initialization. Help and invalid
+    invocations never touch load_dotenv()/load_config()/init(), so they
+    don't require DB credentials or ENCRYPTION_KEY to be set.
+    """
+    command = _resolve_cli_command(argv)
+    if command is None:
+        print_help()
+        return
+
+    load_dotenv()
+    init(load_config())
+    command()
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        if sys.argv[1] == "init_db":
-            init_db()
-        elif sys.argv[1] == "add_user" and len(sys.argv) == 4:
-            username, api_key = sys.argv[2], sys.argv[3]
-            add_user(username, api_key)
-        elif sys.argv[1] == "remove_user" and len(sys.argv) == 3:
-            username = sys.argv[2]
-            remove_user(username)
-        elif sys.argv[1] == "get_user_by_username" and len(sys.argv) == 3:
-            user_name = sys.argv[2]
-            get_user_by_username(user_name)
-        elif sys.argv[1] == "edit_tokens" and len(sys.argv) == 4:
-            username, tokens_quantity = sys.argv[2], int(sys.argv[3])
-            edit_tokens(username, tokens_quantity)
-        elif sys.argv[1] == "list_users":
-            list_users()
-        elif sys.argv[1] == "print_keys":
-            print_stored_keys()
-        else:
-            print_help()
-    else:
-        print_help()
+    run_cli(sys.argv)

@@ -61,3 +61,65 @@ def test_load_config_defaults():
     assert cfg.datachat.engine == "smolagents"
     assert cfg.datachat.max_steps == 12
     assert cfg.auth_gateway_url == "http://localhost:3000/validate"
+    assert cfg.models.asr_mistral_price_per_minute_usd is None
+
+
+def test_load_config_asr_mistral_price_per_minute_parsed_as_float():
+    env = {**REQUIRED_ENV, "ASR_MISTRAL_PRICE_PER_MINUTE_USD": "0.003"}
+    with patch.dict("os.environ", env, clear=True):
+        cfg = load_config()
+
+    assert cfg.models.asr_mistral_price_per_minute_usd == pytest.approx(0.003)
+
+
+def test_load_config_asr_mistral_price_per_minute_invalid_raises():
+    env = {**REQUIRED_ENV, "ASR_MISTRAL_PRICE_PER_MINUTE_USD": "not-a-number"}
+    with patch.dict("os.environ", env, clear=True):
+        with pytest.raises(ValueError):
+            load_config()
+
+
+def test_load_config_dino_legacy_usage_username_absent_is_none():
+    with patch.dict("os.environ", REQUIRED_ENV, clear=True):
+        cfg = load_config()
+
+    assert cfg.dino_legacy_usage_username is None
+
+
+def test_load_config_dino_legacy_usage_username_empty_is_none():
+    env = {**REQUIRED_ENV, "DINO_LEGACY_USAGE_USERNAME": ""}
+    with patch.dict("os.environ", env, clear=True):
+        cfg = load_config()
+
+    assert cfg.dino_legacy_usage_username is None
+
+
+def test_load_config_dino_legacy_usage_username_preserved_exactly():
+    env = {**REQUIRED_ENV, "DINO_LEGACY_USAGE_USERNAME": "__dino_legacy_ingestion__"}
+    with patch.dict("os.environ", env, clear=True):
+        cfg = load_config()
+
+    assert cfg.dino_legacy_usage_username == "__dino_legacy_ingestion__"
+
+
+def test_load_config_admin_rag_usage_username_absent_is_none():
+    with patch.dict("os.environ", REQUIRED_ENV, clear=True):
+        cfg = load_config()
+
+    assert cfg.admin_rag_usage_username is None
+
+
+def test_load_config_admin_rag_usage_username_empty_is_none():
+    env = {**REQUIRED_ENV, "ADMIN_RAG_USAGE_USERNAME": ""}
+    with patch.dict("os.environ", env, clear=True):
+        cfg = load_config()
+
+    assert cfg.admin_rag_usage_username is None
+
+
+def test_load_config_admin_rag_usage_username_preserved_exactly():
+    env = {**REQUIRED_ENV, "ADMIN_RAG_USAGE_USERNAME": "__admin_rag_ingestion__"}
+    with patch.dict("os.environ", env, clear=True):
+        cfg = load_config()
+
+    assert cfg.admin_rag_usage_username == "__admin_rag_ingestion__"

@@ -1,6 +1,6 @@
 {% extends "admin/base.html" %}
 
-{% block title %}Logs - Admin Panel{% endblock %}
+{% block title %}Usage - Admin Panel{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
@@ -24,7 +24,7 @@
     <div class="col-md-3">
         <div class="card text-white bg-primary">
             <div class="card-body">
-                <h6 class="card-title text-uppercase">Total Requests</h6>
+                <h6 class="card-title text-uppercase">Usage Records</h6>
                 <h2 class="mb-0">{{ stats.total_requests if stats else 0 }}</h2>
             </div>
         </div>
@@ -95,7 +95,7 @@
     <div class="card-header bg-white">
         <div class="row align-items-center">
             <div class="col-md-6">
-                <h5 class="mb-0"><i class="fas fa-list me-2"></i>Recent Logs</h5>
+                <h5 class="mb-0"><i class="fas fa-list me-2"></i>Recent Usage</h5>
             </div>
             <div class="col-md-6">
                 <form method="GET" action="{{ url_for('admin.admin_logs') }}" class="input-group">
@@ -117,6 +117,10 @@
                         <th>ID</th>
                         <th>User</th>
                         <th>Date</th>
+                        <th>Service</th>
+                        <th>Source</th>
+                        <th>Request ID</th>
+                        <th>Duration</th>
                         <th>Input Tokens</th>
                         <th>Output Tokens</th>
                         <th>Total Tokens</th>
@@ -133,6 +137,18 @@
                             <span class="badge bg-secondary">{{ log.username }}</span>
                         </td>
                         <td class="small">{{ log.date }}</td>
+                        <td><span class="badge bg-secondary">{{ log.service }}</span></td>
+                        <td><span class="badge bg-secondary">{{ log.source }}</span></td>
+                        <td>{% if log.request_id != "N/A" %}<a href="{{ url_for('admin.admin_operational_timeline', request_id=log.request_id) }}"><code>{{ log.request_id }}</code></a>{% else %}<code>N/A</code>{% endif %}</td>
+                        <td class="text-end">
+                            {% if log.duration_ms == "N/A" %}
+                            N/A
+                            {% elif log.duration_ms < 1000 %}
+                            {{ log.duration_ms }} ms
+                            {% else %}
+                            {{ "%.1f"|format(log.duration_ms / 1000) }} s
+                            {% endif %}
+                        </td>
                         <td class="text-end">{{ "{:,}".format(log.token_input|int) }}</td>
                         <td class="text-end">{{ "{:,}".format(log.token_output|int) }}</td>
                         <td class="text-end"><strong>{{ "{:,}".format((log.token_input + log.token_output)|int)

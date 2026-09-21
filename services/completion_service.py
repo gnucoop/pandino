@@ -1,5 +1,6 @@
 import logging
 import textwrap
+import time
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
@@ -7,6 +8,10 @@ from infrastructure.vector_store import VectorStore
 
 from infrastructure.ai import choose_llm
 from infrastructure.prompt_utils import load_prompt, render_prompt
+from usage.embedding_operation_context import OPERATION_QUERY, embedding_operation
+from utils.operational_event import build_operational_event
+
+logger = logging.getLogger(__name__)
 
 
 class TokenUsage(TypedDict):
@@ -99,18 +104,45 @@ def complete_chat(
     if not question:
         raise RuntimeError("No question found in chat history.")
 
-    logging.info(f"Starting chat completion with llm_type: {llm_type}, model: {model}")
-    logging.info(f"Processing question: {question}")
+    logger.info("event=completion_started llm_type=%s model=%s", llm_type, model)
+    logger.info("event=completion_question_received")
 
     vectors: list[dict[str, Any]] = []
 
     try:
-        vectors = store.find_similar_vectors(
-            text=question, top_k=top_k, min_similarity=min_sim
-        )
-        logging.info(f"Found {len(vectors)} relevant paragraphs")
+        # The scope covers the retrieval call and nothing else: it names the
+        # embedding this question produces, and must not still be in effect
+        # when the LLM below runs. Restoration is the context manager's, on
+        # both the success and the exception path.
+        with embedding_operation(OPERATION_QUERY):
+            vectors = store.find_similar_vectors(
+                text=question, top_k=top_k, min_similarity=min_sim
+            )
     except Exception as e:
+        # Only the exception class name is persisted: str(e) may embed
+        # the query or vector-store connection detail.
+        message, extra = build_operational_event(
+            event="completion_retrieval_failed",
+            error_type=type(e).__name__,
+        )
+        logger.warning(message, extra=extra)
         raise RuntimeError(f"Vector retrieval failed: {str(e)}")
+
+    # Emitted for every successful retrieval, including vector_count=0,
+    # and therefore before the no-context early return below: degraded-success
+    # reconstruction depends on this record existing. This is the authoritative
+    # structured emission at this seam and replaces the former runtime
+    # completion_retrieval_result log, so one real fact yields one LogRecord.
+    message, extra = build_operational_event(
+        event="completion_retrieval_completed",
+        details={
+            "vector_count": len(vectors),
+            "top_k": top_k,
+            "min_sim": min_sim,
+            "info_present": bool(req.info),
+        },
+    )
+    logger.info(message, extra=extra)
 
     if not req.info and not vectors:
         return {
@@ -209,7 +241,35 @@ def complete_chat(
 
     try:
         llm = choose_llm(llm_type, model, api_key=api_key)
-        resp = llm.invoke(messages)
+
+        # Duration boundary: the timer brackets llm.invoke() and
+        # nothing else. choose_llm(), response parsing and the is_no_info
+        # classifier stay outside it, so duration_ms keeps meaning "how long
+        # did the provider take" rather than drifting with payload shape.
+        provider_call_started = time.perf_counter()
+        try:
+            resp = llm.invoke(messages)
+            provider_duration_ms = round(
+                (time.perf_counter() - provider_call_started) * 1000
+            )
+        except Exception as e:
+            # Emitted only once the provider attempt has actually
+            # started: a choose_llm() failure never reaches here. One record
+            # serves both consumers — stderr keeps the traceback, the
+            # Operational snapshot keeps only the bounded fields. This
+            # replaces the former runtime completion_failed line.
+            message, extra = build_operational_event(
+                event="completion_provider_failed",
+                provider=llm_type,
+                model=model,
+                duration_ms=round(
+                    (time.perf_counter() - provider_call_started) * 1000
+                ),
+                error_type=type(e).__name__,
+            )
+            logger.exception(message, extra=extra)
+            raise
+
         answer = resp.content
 
         token_usage = getattr(resp, "response_metadata", {}).get("token_usage", {})
@@ -228,6 +288,18 @@ def complete_chat(
             phrase.lower() in answer_text.lower() for phrase in no_info_phrases
         )
 
+        # Carries the final classifier verdict, which is why it is
+        # emitted after parsing rather than at the timer stop. No token counts
+        # (Usage owns those) and no answer content.
+        message, extra = build_operational_event(
+            event="completion_provider_completed",
+            provider=llm_type,
+            model=model,
+            duration_ms=provider_duration_ms,
+            details={"is_no_info": is_no_info},
+        )
+        logger.info(message, extra=extra)
+
         return {
             "answer": answer_text,
             "vectors": vectors,
@@ -236,5 +308,4 @@ def complete_chat(
         }
 
     except Exception as e:
-        logging.exception("Error in chat completion")
         raise RuntimeError(f"Chat completion failed: {str(e)}")

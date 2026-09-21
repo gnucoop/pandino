@@ -6,6 +6,8 @@ from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
 
+logger = logging.getLogger(__name__)
+
 
 def _to_json_scalar(value: Any) -> Any:
     if value is None:
@@ -121,9 +123,9 @@ class MissingValuesTool(Tool):
 
             rows = replace_nan(rows)
 
-            logging.info("[datachat][missing_values_tool] cols=%s", len(rows))
+            logger.info("event=tool_call_result cols=%s", len(rows))
             return {"kind": "table", "data": rows}
 
         except Exception as e:
-            logging.exception("[datachat][missing_values_tool] failed")
+            logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

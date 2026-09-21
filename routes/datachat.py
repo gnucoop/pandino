@@ -1,5 +1,4 @@
 import os
-import secrets
 import time
 import logging
 from typing import Any, Optional
@@ -8,16 +7,21 @@ from flask import Blueprint, Response, jsonify, request, current_app
 
 from infrastructure.agent_manager import getAgent, createAgent, deleteAgent
 from infrastructure.ai import choose_llm
-from infrastructure.database_pg import edit_tokens, log_token_usage, get_user_by_username, get_user_tokens
+from infrastructure.database_pg import edit_tokens, get_user_by_username, get_user_tokens
 from datachat.dataset_loader import load_csv_to_dataframe
 from datachat.output_normalizer import normalize_datachat_response
 from datachat.engine_output_adapter import adapt_engine_output, consume_adapter_fallback_used
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult
+from utils.logging_config import get_request_id
+from usage.recording import record_token_consumption
+from usage.request_state import get_usage_log_id
 from config import PROVIDER_API_KEY_MAP
 from routes.utils import assert_valid_api_key
 
 datachat_bp = Blueprint("datachat", __name__)
+
+logger = logging.getLogger(__name__)
 
 
 @datachat_bp.route("/enddatachat", methods=["POST"])
@@ -119,8 +123,9 @@ def startChat() -> Response | tuple[Response, int]:
         agentResponse: dict[str, Any] = {"Agent active": "active"}
 
         # Language-aware prompt generation
-        logging.info(
-            f"Invoking startdatachat engine bootstrap with language={lang}, user={user_email}"
+        logger.info(
+            "event=datachat_engine_bootstrap_started language=%s",
+            lang,
         )
 
         bootstrap = engine.bootstrap(lang)
@@ -143,7 +148,7 @@ def dataChat() -> Response | tuple[Response, int]:
     config = current_app.config["MAUI_CONFIG"]
     _logger = current_app.config["DATACHAT_RUNTIME_LOGGER"]
 
-    request_id = secrets.token_hex(4)
+    request_id = get_request_id()
     request_started = time.time()
 
     api_key = request.headers.get("X-API-KEY")
@@ -237,7 +242,7 @@ def dataChat() -> Response | tuple[Response, int]:
     # Perform the chat operation and get the response and explanation
     chat_started = time.time()
 
-    response = engine.chat(chat, request_id=request_id)
+    response = engine.chat(chat)
 
     response_kind = response.get("kind") if isinstance(response, dict) else None
 
@@ -258,7 +263,7 @@ def dataChat() -> Response | tuple[Response, int]:
         try:
             trace = engine.get_last_trace()  # type: ignore[attr-defined]
         except Exception as e:
-            current_app.logger.warning(f"[datachat] Failed to read engine trace: {e}")
+            logger.warning("event=datachat_trace_read_failed error=%s", e)
 
     trace_payload: Optional[dict[str, Any]] = None
     if isinstance(trace, dict) and trace.get("run_result") is not None:
@@ -267,7 +272,7 @@ def dataChat() -> Response | tuple[Response, int]:
             if isinstance(trace_payload.get("metrics"), dict):
                 trace_payload["metrics"]["duration_ms"] = trace.get("duration_ms")
         except Exception as e:
-            current_app.logger.error(f"[datachat] Failed to serialize trace: {e}")
+            logger.error("event=datachat_trace_serialize_failed error=%s", e)
 
     if trace_payload is not None:
         try:
@@ -280,37 +285,50 @@ def dataChat() -> Response | tuple[Response, int]:
                 extra={
                     "channel": "datachat",
                     "response_kind": response_kind,
-                    "request_id": request_id,
                 },
             )
             structured_log_ok = True
         except Exception as e:
-            current_app.logger.error(f"[datachat] Structured logging failed: {e}")
+            logger.error("event=datachat_structured_log_failed error=%s", e)
 
+        # === DATABASE TOKEN USAGE LOGGING ===
+
+        # The accounting-side user lookup is not a prerequisite of the
+        # DataChat response: a failure here skips recording and leaves the
+        # response, the engine state and the token debit untouched. Only the
+        # exception type is named, never the username or the message.
         try:
             user = get_user_by_username(user_email)
-            if not user:
-                raise ValueError(f"User '{user_email}' not found in DB")
+        except Exception as exc:
+            logger.warning(
+                "event=datachat_usage_user_lookup_failed error_type=%s",
+                type(exc).__name__,
+            )
+            user = None
 
+        if user:
             user_id = user.get("id")
-            if not isinstance(user_id, int):
-                raise TypeError(f"Invalid user_id: {user_id}")
 
+            # The serialized runtime reports absent token counts as None; a
+            # zero pair is a real observation and is recorded as one.
             token_metrics = trace_payload.get("metrics", {}).get("token_usage", {})
             token_input = token_metrics.get("input") or 0
             token_output = token_metrics.get("output") or 0
 
-            log_id = log_token_usage(
-                user_id=user_id,
-                token_input=token_input,
-                token_output=token_output,
-                model=config.models.datachat_model,
-                provider=config.models.datachat_provider,
-            )
-            db_log_ok = True
-            current_app.logger.info(f"[datachat] token usage logged log_id={log_id}")
-        except Exception as e:
-            current_app.logger.error(f"[datachat] Failed to log token usage: {e}")
+            if isinstance(user_id, int):
+                db_log_ok = record_token_consumption(
+                    user_id=user_id,
+                    provider=config.models.datachat_provider,
+                    model=config.models.datachat_model,
+                    service="/datachat",
+                    token_input=token_input,
+                    token_output=token_output,
+                )
+
+                if db_log_ok:
+                    # Preserve the existing response contract without exposing
+                    # row identity through the recording API.
+                    log_id = get_usage_log_id()
 
     _logger.info(
         "datachat_trace_status request_id=%s user=%s engine=%s trace_present=%s structured_log_ok=%s db_log_ok=%s log_id=%s",

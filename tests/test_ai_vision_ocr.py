@@ -6,6 +6,7 @@ Vision calls, database lookups, or network access.
 """
 
 import base64
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -199,6 +200,46 @@ def test_extract_text_from_image_rejects_empty_image_bytes(monkeypatch):
 
     with pytest.raises(ValueError, match="image_bytes must not be empty"):
         ai.extract_text_from_image(b"", "Deepinfra", "model")
+
+
+def test_describe_image_logs_start_event_without_url_content(monkeypatch, caplog):
+    """image_description_started must carry provider/model but never the url,
+    since url can be a base64 data URL containing the full uploaded image."""
+    captured = {}
+
+    class FakeLlm:
+        def invoke(self, messages):
+            captured["messages"] = messages
+            return SimpleNamespace(content="a short description")
+
+    monkeypatch.setattr(ai, "choose_llm", lambda *args, **kwargs: FakeLlm())
+    monkeypatch.setattr(ai, "load_prompt", lambda *args, **kwargs: "describe prompt")
+
+    data_url = "data:image/png;base64," + base64.b64encode(b"fake image").decode(
+        "ascii"
+    )
+
+    with caplog.at_level(logging.INFO, logger="infrastructure.ai"):
+        result = ai.describe_image(data_url, "OpenAI", "gpt-4o-mini")
+
+    assert result == "a short description"
+
+    # url is still used to build the provider payload.
+    assert captured["messages"][0]["content"][1] == {
+        "type": "image_url",
+        "image_url": {"url": data_url},
+    }
+
+    start_records = [
+        r for r in caplog.records if "event=image_description_started" in r.message
+    ]
+    assert len(start_records) == 1
+    start_message = start_records[0].message
+
+    assert data_url not in start_message
+    assert "base64" not in start_message
+    assert "provider=OpenAI" in start_message
+    assert "model=gpt-4o-mini" in start_message
 
 
 def test_extract_text_from_image_rejects_empty_mime_type(monkeypatch):

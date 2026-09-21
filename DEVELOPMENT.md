@@ -149,8 +149,7 @@ pandino/
 ├── utils/
 │   ├── runtime_logging.py      #   datachat.runtime logger (stdout)
 │   ├── agent_logging.py        #   Structured JSON logger → logs/agent_runs.log
-│   ├── agent_serialization.py  #   Smolagents RunResult → JSON payload
-│   └── split_message.py        #   WhatsApp-style message chunking
+│   └── agent_serialization.py  #   Smolagents RunResult → JSON payload
 │
 ├── templates/admin/            # Jinja2 templates for the admin web UI
 │   ├── base.html login.html dashboard.html users.html edit_user.html
@@ -209,12 +208,12 @@ cp .env.example .env
 #   → fill in ENCRYPTION_KEY, PGUSER/PGPWD/PGHOST/PGDB, ADMIN_*,
 #     ADMIN_PASSWORD_HASH, and at least one provider API key.
 
-# 8. Initialize the relational schema
-python -c "import infrastructure.database_pg as db; from config import load_config; \
-           db.init(load_config()); db.init_db()"
+# 8. Initialize the relational schema (from the repository root)
+python3 -m infrastructure.database_pg init_db
+#   → must print "Database initialized successfully."; see §5.
 
-# 9. Run the app
-python main.py          # → http://127.0.0.1:5000
+# 9. Run the app (from the repository root, with the virtualenv activated)
+make run-local          # → http://127.0.0.1:5000
 ```
 
 > **Note:** the `load_dotenv()` call in `main.py` reads `.env` automatically, so
@@ -324,32 +323,202 @@ string-formatting SQL inside `database_pg.py`.
 
 ### Database CLI
 
-`database_pg.py` is also runnable as a script for user management:
+`database_pg.py` is also runnable as a CLI, for user management and for the
+governed additive schema changes.
+
+#### Supported invocation
+
+Run it **as a module, from the repository root**:
 
 ```bash
-python infrastructure/database_pg.py init_db
-python infrastructure/database_pg.py add_user <username> <api_key>
-python infrastructure/database_pg.py remove_user <username>
-python infrastructure/database_pg.py edit_tokens <username> <quantity>
-python infrastructure/database_pg.py list_users
-python infrastructure/database_pg.py print_keys
+python3 -m infrastructure.database_pg <command>
 ```
 
-> ⚠️ `init()` must run before any DB function. The script wires this up via
-> `load_config()` for you.
+Use whichever interpreter the target instance is meant to run — the venv's
+`python`, `python3`, or the container's interpreter; `python3` above is only a
+placeholder for it. What matters is the **module form** and the **working
+directory**.
+
+`infrastructure/database_pg.py` imports top-level packages (`from config import
+…`, `from infrastructure.database_methods import …`, `database_pg.py:15-16`).
+Invoking it by file path puts `infrastructure/` on `sys.path` instead of the
+repository root, so the import fails immediately with
+`ModuleNotFoundError: No module named 'config'`. The module form is therefore the
+only supported invocation.
+
+#### Commands
+
+Exactly these commands are accepted, per `_resolve_cli_command()`
+(`database_pg.py:2448`) and `print_help()` (`database_pg.py:2424`):
+
+| Command                                     | Arguments               | Purpose                                          |
+| ------------------------------------------- | ----------------------- | ------------------------------------------------ |
+| `init_db`                                   | –                       | Create any missing tables (see below)            |
+| `add_user`                                  | `<username> <api_key>`  | Create a user                                    |
+| `remove_user`                               | `<username>`            | Delete a user                                    |
+| `get_user_by_username`                      | `<username>`            | Print one user                                   |
+| `edit_tokens`                               | `<username> <quantity>` | Add/remove tokens                                |
+| `list_users`                                | –                       | List all users                                   |
+| `print_keys`                                | –                       | Print stored API keys                            |
+| `add_usage_service_column`                  | –                       | Add `logs.service` if missing                    |
+| `add_usage_request_id_column`               | –                       | Add `logs.request_id` if missing                 |
+| `add_usage_duration_ms_column`              | –                       | Add `logs.duration_ms` if missing                |
+| `add_user_client_column`                    | –                       | Add `users.client` if missing                    |
+| `add_usage_source_column`                   | –                       | Add `logs.source` if missing                     |
+| `add_usage_embedding_operation_kind_column` | –                       | Add `logs.embedding_operation_kind` if missing   |
+| `add_usage_quantity_origin_column`          | –                       | Add `logs.quantity_origin` if missing            |
+| `add_usage_cost_origin_column`              | –                       | Add `logs.cost_origin` if missing                |
+
+> ⚠️ `init()` must run before any DB function. `run_cli()` wires this up via
+> `load_dotenv()` + `load_config()` for you — but only for a command it
+> recognises with the right argument count.
+
+#### Read the output: a zero exit status is not success
+
+Two current behaviours make the printed output, not the exit status, the signal:
+
+- **An unrecognised command, or the wrong number of arguments, prints the help
+  text and returns normally** — exit status `0`, nothing done, no database
+  contacted (`run_cli()`, `database_pg.py:2500`; pinned by
+  `tests/test_database_cli.py::test_unknown_command_shows_help_without_initializing`
+  and `…::test_invalid_argument_count_shows_help_without_initializing`). A
+  mistyped migration name is a silent no-op that looks like a success.
+- **`init_db` catches every exception, rolls back and prints it** rather than
+  re-raising (`database_pg.py:201-211`), so it exits `0` even when it did
+  nothing. Confirm it printed `Database initialized successfully.` and not
+  `An error occurred: …`.
+
+The `add_*_column` commands are the exception: each raises `RuntimeError` when
+the change was not committed (`database_pg.py:1043-1249`), so a genuine failure
+there *does* surface as a non-zero exit.
+
+### Initializing a new database
+
+On a database with none of these tables, `init_db` creates the full
+repository-defined schema in one go — `users`, `logs`, `costs`, `prompts`,
+`feedback`, `rag_files` and `operational_events` (`init_db()`,
+`database_pg.py:121-198`; the resulting shape is pinned by
+`tests/test_database_schema_fresh.py`):
+
+```bash
+python3 -m infrastructure.database_pg init_db
+```
+
+No `add_*_column` command is needed afterwards: a table `init_db` has just
+created already has every column.
+
+### Upgrading an existing database
+
+`init_db` is written entirely as `CREATE TABLE IF NOT EXISTS`. On a database
+that already has a table, that statement is a **no-op for that table** — it
+does not add columns to it. Re-running `init_db` on a long-lived instance
+therefore creates only whole tables that are absent (this is how
+`operational_events` arrives on an existing instance) and leaves every
+pre-existing table exactly as it was.
+
+The columns added to `logs` and `users` since those tables were first created
+are applied by the governed `add_*_column` commands, one column each:
+
+```bash
+python3 -m infrastructure.database_pg init_db   # creates operational_events if absent
+
+python3 -m infrastructure.database_pg add_usage_service_column
+python3 -m infrastructure.database_pg add_usage_request_id_column
+python3 -m infrastructure.database_pg add_usage_duration_ms_column
+python3 -m infrastructure.database_pg add_user_client_column
+python3 -m infrastructure.database_pg add_usage_source_column
+python3 -m infrastructure.database_pg add_usage_embedding_operation_kind_column
+python3 -m infrastructure.database_pg add_usage_quantity_origin_column
+python3 -m infrastructure.database_pg add_usage_cost_origin_column
+```
+
+That is the complete set: these eight are the only `add_column_if_missing()`
+call sites in the module, covering `logs.service`, `logs.request_id`,
+`logs.duration_ms`, `logs.source`, `logs.embedding_operation_kind`,
+`logs.quantity_origin`, `logs.cost_origin` and `users.client`.
+
+The listed order is the order the commands are declared in the source and in
+`print_help()`. Each command targets one fixed table and column, is
+independently idempotent, and no source or test establishes a dependency
+between them, so the order above is a convention for reproducibility rather
+than a constraint.
+
+Each command is safe to re-run. `add_column_if_missing()`
+(`database_pg.py:965`) fails closed: it executes `ALTER TABLE` only once the
+column's absence has been positively established, verifies the result before
+committing, and rolls back otherwise. Per command you will see one of:
+
+- `<table>.<column> added.` — the column was created,
+- `<table>.<column> already present, no change needed.` — nothing was done,
+- a `RuntimeError` and a non-zero exit — inspection, DDL or post-DDL
+  verification failed; do not treat the run as complete.
+
+### What these checks do and do not prove
+
+The existence checks behind `init_db` and every `add_*_column` command match on
+**names only**:
+
+- `init_db` relies on `CREATE TABLE IF NOT EXISTS`, which keys on the table
+  name.
+- `add_column_if_missing()` calls `build_check_column_exists_query()`
+  (`database_methods.py:170`), a `SELECT 1 FROM information_schema.columns
+  WHERE table_schema = %s AND table_name = %s AND column_name = %s`.
+
+So `already present, no change needed.` means **a column of that name exists on
+that table** — and nothing more. It is not evidence about that column's data
+type, nullability, default, constraints, indexes, or collation, and a table
+reported as existing is not thereby verified against the definition in
+`init_db`. Nor does a clean run of every command above establish that a
+long-lived database matches the repository-defined fresh schema: columns,
+constraints, defaults or indexes that drifted, or that were added outside these
+commands, are invisible to a name-only check and to `CREATE TABLE IF NOT
+EXISTS`.
+
+Confirming that an existing database actually conforms requires inspecting that
+database's real schema directly, against `init_db()` as the reference. The
+repository provides no command or test that performs that comparison — see
+[§16](#16-deployment--cicd).
 
 ---
 
 ## 6. Running the Application
 
-### Local development (Flask dev server)
+### Local development
+
+From the repository root, after activating your intended virtualenv:
 
 ```bash
-python main.py      # debug=True, port 5000
+make run-local      # → http://127.0.0.1:5000
 ```
 
-`main.py:83`. Sets `MPLBACKEND=Agg` (headless matplotlib), relaxes pandas display
-limits, and initializes the `datachat.runtime` + `agent_runs` loggers.
+The `run-local` target in the root `Makefile` runs:
+
+```bash
+LOG_LEVEL=INFO gunicorn main:app -k gevent --workers 1 --worker-connections 10 \
+           --timeout 300 --bind 127.0.0.1:5000
+```
+
+`127.0.0.1:5000` is the local address: the server is reachable only from your own
+machine. This is a convenience for starting the app; it is not deployment
+configuration, and it does not change Gunicorn's shutdown behaviour — Ctrl+C still
+behaves as Gunicorn normally does, tracebacks included.
+
+**Why Gunicorn/gevent and `LOG_LEVEL=INFO` locally.** Operational Persistence
+records operational events as they are emitted while the app serves requests, so
+what you see locally is only trustworthy if the app runs the same way it does when
+deployed. The Flask dev server differs on both points that matter here: it does not
+use the gevent worker that carries concurrent, long-running agent calls, and its
+reloader/debug behaviour can restart or duplicate the process underneath a run.
+Running the same single gevent worker as the `Dockerfile` keeps the concurrency
+model identical, and `LOG_LEVEL=INFO` keeps the operational events visible —
+at a coarser level they are filtered out and a check can look clean simply because
+nothing was recorded.
+
+The Flask dev server is still available with `python main.py` (`main.py:83`,
+`debug=True`, port 5000) when you want the reloader and do not need Operational
+Persistence checks. Either entry point sets `MPLBACKEND=Agg` (headless matplotlib),
+relaxes pandas display limits, and initializes the `datachat.runtime` +
+`agent_runs` loggers.
 
 ### Production (Docker / gunicorn)
 
@@ -838,7 +1007,22 @@ Secrets required in GitHub: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`
   add sticky sessions / externalize session state.
 - **Persistent volumes:** mount `/tmp/datachat_plots` (or set `DATACHAT_PLOTS_DIR`)
   and the `logs/` directory.
-- **Database:** ensure `pgvector` extension and run `init_db()` on first deploy.
+- **Database:** ensure the `pgvector` extension exists, then follow [§5](#5-database-layer).
+  On a **new** instance, `init_db` creates the whole schema. On an **existing**
+  instance, `init_db` adds only whole missing tables (`CREATE TABLE IF NOT
+  EXISTS` never alters a pre-existing table); the eight `add_*_column` commands
+  in §5 apply the newer `logs` and `users` columns and must be run as part of
+  the upgrade, or writes targeting those columns will fail after deploy.
+- **Schema conformance is not verified by the CLI.** The commands above check
+  table and column **names** only, so they cannot confirm that a long-lived
+  database matches the schema in `init_db()` — types, nullability, defaults,
+  constraints and indexes are outside what they inspect, and the repository
+  ships no command or test that compares a live schema against the fresh one.
+  Treat conformance of an existing instance as **requiring manual verification
+  against that database** before relying on it. Two known cases with no
+  governed command at all: `feedback.source` and `feedback.log_id` are present
+  in the fresh `feedback` table created by `init_db()`, but a `feedback` table
+  predating them is not upgraded by anything in the CLI.
 - **Secrets:** provide all required env vars (see [§4](#4-configuration-system-configpy))
   via your orchestrator's secret store — never bake them into the image.
 - **Admin API docs:** `/admin/api-docs` and `/admin/openapi.json` are session-protected;
