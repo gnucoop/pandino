@@ -315,3 +315,115 @@ def test_add_usage_cost_origin_column_rejects_unexpected_argument(monkeypatch):
     database_pg.run_cli(["database_pg.py", "add_usage_cost_origin_column", "foo"])
 
     assert events == ["print_help"]
+
+
+def test_list_users_passes_a_valid_limit_to_the_query_builder(monkeypatch):
+    captured = {}
+
+    class _Cursor:
+        def execute(self, query, params):
+            captured["executed"] = (query, params)
+
+        def fetchall(self):
+            return []
+
+    class _Conn:
+        def cursor(self):
+            return _Cursor()
+
+        def close(self):
+            captured["closed"] = True
+
+    def fake_builder(limit, offset=0, search=None):
+        captured["limit"] = limit
+        captured["offset"] = offset
+        return "QUERY", (limit, offset)
+
+    monkeypatch.setattr(database_pg, "connect", lambda: _Conn())
+    monkeypatch.setattr(database_pg, "build_list_users_query", fake_builder)
+
+    database_pg.list_users()
+
+    assert isinstance(captured["limit"], int)
+    assert captured["limit"] > 0
+    assert captured["limit"] == database_pg.CLI_LIST_USERS_LIMIT
+    assert captured["executed"] == ("QUERY", (captured["limit"], 0))
+    assert captured["closed"] is True
+
+
+def test_list_users_cli_path_is_operational(monkeypatch):
+    events = []
+
+    fake_config = object()
+    monkeypatch.setattr(database_pg, "load_dotenv", lambda: events.append("load_dotenv"))
+    monkeypatch.setattr(database_pg, "load_config", lambda: (events.append("load_config"), fake_config)[1])
+    monkeypatch.setattr(database_pg, "init", lambda config: events.append(("init", config)))
+    monkeypatch.setattr(database_pg, "print_help", lambda: events.append("print_help"))
+
+    calls = []
+
+    class _Cursor:
+        def execute(self, query, params):
+            calls.append(params)
+
+        def fetchall(self):
+            return [(1, "alice", b"encrypted", "2030-01-01", 10)]
+
+    class _Conn:
+        def cursor(self):
+            return _Cursor()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(database_pg, "connect", lambda: _Conn())
+    monkeypatch.setattr(
+        database_pg, "build_list_users_query", lambda limit, offset=0, search=None: ("QUERY", (limit, offset))
+    )
+    monkeypatch.setattr(database_pg, "get_cipher_suite", lambda: _Cipher())
+
+    database_pg.run_cli(["database_pg.py", "list_users"])
+
+    assert events == ["load_dotenv", "load_config", ("init", fake_config)]
+    assert calls == [(database_pg.CLI_LIST_USERS_LIMIT, 0)]
+
+
+class _Cipher:
+    def decrypt(self, value):
+        return b"super-secret-api-key"
+
+
+def test_list_users_never_prints_a_decrypted_api_key(monkeypatch, capsys):
+    class _Cursor:
+        def execute(self, query, params):
+            pass
+
+        def fetchall(self):
+            return [(1, "alice", b"encrypted", "2030-01-01", 10)]
+
+    class _Conn:
+        def cursor(self):
+            return _Cursor()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(database_pg, "connect", lambda: _Conn())
+    monkeypatch.setattr(
+        database_pg, "build_list_users_query", lambda limit, offset=0, search=None: ("QUERY", (limit, offset))
+    )
+    monkeypatch.setattr(database_pg, "get_cipher_suite", lambda: _Cipher())
+
+    database_pg.list_users()
+
+    out = capsys.readouterr().out
+    assert "alice" in out
+    assert "super-secret-api-key" not in out
+
+
+def test_add_user_help_matches_the_dispatcher(capsys):
+    database_pg.print_help()
+
+    out = capsys.readouterr().out
+    assert "  add_user <username> <api_key>  Add a new user" in out
+    assert "date_valid_until" not in out

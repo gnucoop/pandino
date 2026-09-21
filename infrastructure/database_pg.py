@@ -319,18 +319,30 @@ def edit_tokens(username: str, tokens_quantity: int) -> tuple[bool, str]:
         conn.close()
 
 
-def list_users():
+#: Upper bound applied by the ``list_users`` CLI command. The paginated
+#: ``build_list_users_query`` requires an explicit limit; this is the CLI's
+#: sensible default, generous enough to list every user on a customer
+#: instance in one call.
+CLI_LIST_USERS_LIMIT = 1000
+
+
+def list_users(limit: int = CLI_LIST_USERS_LIMIT):
     """
     Retrieves and displays a list of users from the database,
-    including decrypted API keys, expiration dates, and token balances.
+    including expiration dates and token balances. API keys are decrypted
+    only to report whether decryption succeeds; the key itself is never
+    printed.
 
+    :param limit: Maximum number of users to retrieve. Defaults to
+        :data:`CLI_LIST_USERS_LIMIT`, since ``build_list_users_query`` is
+        paginated and requires an explicit bound.
     :return: None. Prints user information to the console.
     """
     conn = connect()
     cursor = conn.cursor()
 
     try:
-        query, params = build_list_users_query()
+        query, params = build_list_users_query(limit)
         cursor.execute(query, params)
         users = cursor.fetchall()
     finally:
@@ -2425,7 +2437,7 @@ def print_help():
     print("Usage: python database-pg.py <command>")
     print("Commands:")
     print("  init_db                     Initialize the database")
-    print("  add_user <username> <api_key> <date_valid_until>  Add a new user")
+    print("  add_user <username> <api_key>  Add a new user")
     print("  remove_user <username> Removes an existing user")
     print("  get_user_by_username <user_name> Retrieve a user by its username/mail")
     print(
