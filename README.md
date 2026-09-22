@@ -16,6 +16,8 @@ Pandino is a powerful tool designed to analyze and visualize data using various 
 
 - **Conversational Data Analysis**: Upload CSV files and interact with your data using natural language queries, powered by PandasAI.
 
+- **Read-only SQL Access (optional)**: Let the DataChat agent answer questions from a dedicated PostgreSQL database in natural language. The schema — tables, views, materialized views and their columns — is reflected once, cached, and given to the agent up front, so it writes `SELECT` queries directly instead of spending turns discovering what exists. Each relation is also sampled once so the schema carries example values, which is what tells the agent how a column is actually written rather than leaving it to guess a format and match nothing. Disabled by default; enable it with `DATACHAT_SQL_ENABLED` and a dedicated `DATACHAT_DB_*` connection. Queries are validated before execution and run in a read-only transaction with a statement timeout and result caps.
+
 - **Retrieval-Augmented Generation (RAG)**: 
   - **Multi-format File Processing**: Ingest and process various file formats (PDF, TXT, Markdown, audio) to build a knowledge base.
   - **Vector Database Support**: Choose between Pinecone and PGVector for efficient similarity search.
@@ -78,6 +80,14 @@ Pandino targets **Python 3.10** (the repository pins `3.10.13`). To install Pand
    costs and RAG retrieval parameters. For the vector store you can use **PGVector** (backed by
    your PostgreSQL database) or **Pinecone** (set `PINECONE_API_KEY` and the `RAG_NAMESPACE_*`
    variables). Local models are supported via Ollama (`OLLAMA_BASE_URL`).
+
+6. *(Optional)* Enable read-only SQL access for DataChat:
+   Set `DATACHAT_SQL_ENABLED="true"` and fill in `DATACHAT_DB_HOST`, `DATACHAT_DB_NAME`,
+   `DATACHAT_DB_USER` and `DATACHAT_DB_PASSWORD`. These are **required** once the flag is on —
+   the app refuses to start without them — and they always describe a dedicated database:
+   they never fall back to the `PG*` application database. Point them at a role granted only
+   `CONNECT`, `USAGE` and `SELECT`. Result caps and the statement timeout are tunable via the
+   `DATACHAT_SQL_*` variables in `.env.example`.
 
 ### Running with Docker
 

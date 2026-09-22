@@ -9,6 +9,7 @@ from infrastructure.agent_manager import getAgent, createAgent, deleteAgent
 from infrastructure.ai import choose_llm
 from infrastructure.database_pg import edit_tokens, get_user_by_username, get_user_tokens
 from datachat.dataset_loader import load_csv_to_dataframe
+from datachat.sql_datasource import get_datasource as get_sql_datasource
 from datachat.output_normalizer import normalize_datachat_response
 from datachat.engine_output_adapter import adapt_engine_output, consume_adapter_fallback_used
 from utils.agent_serialization import serialize_runresult
@@ -92,9 +93,21 @@ def startChat() -> Response | tuple[Response, int]:
         or not llm_type
         or not user_name
         or not user_email
-        or not request_file
     ):
         return jsonify({"error": "Missing parameters"}), 400
+
+    # The CSV is optional only because a SQL-only session is now legitimate: the
+    # agent then answers from the database instead of a dataframe.
+    if not request_file and get_sql_datasource() is None:
+        return (
+            jsonify(
+                {
+                    "error": "Missing parameters",
+                    "detail": "a CSV file is required when the SQL datasource is disabled",
+                }
+            ),
+            400,
+        )
 
     # Checks if the User's tokens are enough for this operation
     user_tokens = get_user_tokens(user_email)
@@ -106,7 +119,7 @@ def startChat() -> Response | tuple[Response, int]:
         return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
 
     # Read the data from the provided CSV file
-    data = load_csv_to_dataframe(request_file)
+    data = load_csv_to_dataframe(request_file) if request_file else None
 
     provider_api_key = os.getenv(PROVIDER_API_KEY_MAP.get(llm_type, ""))
 

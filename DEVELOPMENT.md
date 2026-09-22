@@ -137,11 +137,15 @@ pandino/
 │   ├── bootstrap_static.py     #   Localized static HTML bootstrap (IT/EN/FR/ES)
 │   ├── output_normalizer.py    #   Engine output → stable Dino response schema
 │   ├── engine_output_adapter.py#   Coerce raw outputs into {kind,...} contract
-│   └── tools/                  #   11 pandas-backed analysis tools
+│   ├── sql_guard.py            #   sqlglot validation of LLM-authored SQL
+│   ├── sql_datasource.py       #   Read-only SQLAlchemy engine (optional datasource)
+│   ├── schema_snapshot_loader.py #  Reflect the SQL schema once, cache, render for the prompt
+│   └── tools/                  #   11 pandas-backed tools + 1 optional SQL tool
 │       ├── aggregate_tool.py describe_tool.py missing_values_tool.py
 │       ├── correlation_tool.py sample_rows_tool.py top_rows_tool.py
 │       ├── filter_rows_tool.py row_count_tool.py plot_tool.py
 │       ├── trend_tool.py unique_values_tool.py
+│       ├── sql_engine_tool.py sql_tool_utils.py
 │
 ├── llm/
 │   └── litellm_factory.py      #   build_litellm_model() for Smolagents
@@ -253,7 +257,13 @@ Known direct env reads still exist and are intentional:
 | **Token costs**     | `DATACHAT_TOKEN_COST`, `COMPLETION_TOKEN_COST`, `PROMPT_TOKEN_COST`, `AUDIO_FORM_TOKEN_COST`, `COMPARE_DOCS_TOKEN_COST`  | `1`                                                    |
 | **RAG**             | `RAG_TOP_K`, `RAG_MIN_SIM`, `RAG_DEFAULT_NAMESPACE`                                                                      | `3`, `0.5`, `Dino`                                     |
 | **DataChat engine** | `DATACHAT_ENGINE`, `DATACHAT_MAX_STEPS`, `DATACHAT_RATE_LIMIT_PER_MIN`, `DATACHAT_SESSION_TTL_MIN`, `DATACHAT_LOG_LEVEL` | `smolagents`, `12`, `0`, `60`, `INFO`                  |
+| **DataChat SQL**    | `DATACHAT_SQL_ENABLED`, `DATACHAT_DB_PORT/SCHEMA`, `DATACHAT_SQL_MAX_ROWS/MAX_COLUMNS/MAX_CELL_CHARS`, `DATACHAT_SQL_STATEMENT_TIMEOUT_MS`, `DATACHAT_SQL_INCLUDE_VIEWS` (also gates view reflection), `DATACHAT_SQL_ALLOWED_TABLES/DENIED_TABLES` (tables, views and matviews alike), `DATACHAT_SQL_SCHEMA_TTL_S/SCHEMA_MAX_CHARS/SCHEMA_INCLUDE_FKS`, `DATACHAT_SQL_SCHEMA_PROFILE_VALUES/PROFILE_SAMPLE_ROWS/PROFILE_MAX_VALUES/PROFILE_MAX_VALUE_CHARS`, `DATACHAT_SQL_QUOTE_IDENTIFIERS` | `false`, `5432`/`public`, `200`/`25`/`300`, `10000`, `true`, empty, `3600`/`40000`/`true`, `true`/`50`/`3`/`32`, `true` |
 | **Auth**            | `AUTH_GATEWAY_URL`, `STRIPE_SK_KEY`                                                                                      | `http://localhost:3000/validate`, `None`               |
+
+`DATACHAT_DB_HOST`, `DATACHAT_DB_NAME`, `DATACHAT_DB_USER` and `DATACHAT_DB_PASSWORD`
+have **no defaults and never fall back to the `PG*` application database**: they are
+required — and the app refuses to start — when `DATACHAT_SQL_ENABLED` is truthy, and
+ignored otherwise. See §11 "SQL datasource".
 
 ### How to read config inside a route/service
 
@@ -320,6 +330,21 @@ All SQL is built via `infrastructure/database_methods.py`, which returns
 values use `%s` placeholders — **this is how SQL-injection safety is enforced**.
 When adding a query, always add a `build_*_query()` helper here rather than
 string-formatting SQL inside `database_pg.py`.
+
+### Second datasource: `datachat/sql_datasource.py`
+
+There are two independent database layers, and they never share a connection:
+
+| | `infrastructure/database_pg.py` | `datachat/sql_datasource.py` |
+| --- | --- | --- |
+| Driver | psycopg 3 directly | SQLAlchemy 2.0 over psycopg 3 |
+| Access | read-write | read-only, enforced at four layers |
+| Database | the application DB (`PG*`) | a dedicated DB (`DATACHAT_DB_*`) |
+| Reached by | routes and services | the DataChat agent, when enabled |
+
+This is the first first-party use of `sqlalchemy.create_engine` in maui (SQLAlchemy
+was previously only a transitive dependency of `langchain_postgres`). See §11
+"SQL datasource" for the read-only guarantees.
 
 ### Database CLI
 
@@ -612,8 +637,9 @@ Pure-Python orchestration. Key services:
   keyed by API key (`activeEngines`). This means sessions are **per-process** —
   relevant when scaling horizontally (see [§16](#16-deployment--cicd)).
 - **`prompt_utils.py`** — `load_prompt(title, default_text=...)` resolution order:
-  **DB → in-code default → env var → ""**. `render_prompt(template, **kwargs)` does
-  safe `.format()` substitution.
+  **DB → in-code default → env var → ""**. `render_prompt(template, **kwargs)` substitutes
+  strict `{identifier}` placeholders in one regex pass; every other brace stays
+  literal.
 
 ### 7.4 DataChat (`datachat/`)
 
@@ -695,7 +721,7 @@ A session is: **start → N× chat → end**.
 
 | Method | Path             | Headers                                    | Body                                                         | Returns                                             |
 | ------ | ---------------- | ------------------------------------------ | ------------------------------------------------------------ | --------------------------------------------------- |
-| `POST` | `/startdatachat` | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | multipart: `file` (CSV), `model_name?`, `llm_type?`, `lang?` | `{Agent active:"active", suggested_questions?}`     |
+| `POST` | `/startdatachat` | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | multipart: `file` (CSV — required unless the SQL datasource is enabled), `model_name?`, `llm_type?`, `lang?` | `{Agent active:"active", suggested_questions?}`     |
 | `POST` | `/datachat`      | `X-API-KEY`, `X-USER-EMAIL`                | `{chat:"..."}`                                               | `{response:{type, value}, explanation, log_id?}`    |
 | `POST` | `/enddatachat`   | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | –                                                            | Deletes the in-memory agent and cleans up plot dirs |
 
@@ -837,14 +863,32 @@ def close(self) -> None
 
 `datachat/smolagents_engine.py` builds a Smolagents `CodeAgent` with **11 tools**
 (`datachat/tools/`): `describe`, `missing_values`, `unique_values`, `correlation`,
-`sample_rows`, `top_rows`, `filter_rows`, `row_count`, `aggregate`, `plot`, `trend`.
+`sample_rows`, `top_rows`, `filter_rows`, `row_count`, `aggregate`, `plot`, `trend`,
+**plus the optional `sql_engine`** when the SQL datasource is enabled (see below).
 
 Notable behaviors:
 
 - **Contract enforcement.** The agent's final answer must be a JSON object with a
-  `kind` ∈ `{text, table, image_path, error}`. A `final_answer_checks` guardrail
-  validates this; invalid answers fall back to a safe `{kind:"text"}` payload
-  (`_coerce_final_payload`, `smolagents_engine.py:138`).
+  `kind` ∈ `{text, table, image_path, error}`. The `final_answer_checks` guardrail
+  (`_check_final_answer`) validates this; answers that still get through invalid fall
+  back to a safe `{kind:"text"}` payload (`_coerce_final_payload`).
+  The guard **raises** rather than returning `False`: smolagents interpolates whatever
+  is raised into the step error it replays to the model, so returning `False` reaches
+  the model as `"failed with error:"` and nothing it can act on. A rejected answer is
+  not a failed run — the step error goes into memory and the agent gets another step.
+- **Empty answers are verified, not forwarded.** A `table` payload with no rows is
+  rejected once per question (`_MAX_EMPTY_FINAL_REJECTIONS`), with guidance to re-check
+  the filter values against the data before concluding anything. Zero rows is far more
+  often a filter written with the wrong value than data that is genuinely absent, and
+  the query was valid, so no other layer sees a problem. The budget is one, deliberately:
+  an empty result is a legitimate answer to "which clients lost money?", so the guard
+  buys a verification round rather than forbidding the answer — and the rejection points
+  at `kind="text"` as the way to report emptiness with an explanation attached.
+  `sql_engine` adds the same nudge in `meta.hint` the moment a query returns nothing,
+  which is earlier and usually enough on its own. Once the budget is spent the answer is
+  forwarded **as it stands**: an empty `table` is returned as an empty `table`, never
+  rewritten into `text`. The response `kind` is a contract with the caller, and how an
+  empty result is presented is the client's decision, not the engine's.
 - **Config from env.** Reads `DATACHAT_PROVIDER`, `DATACHAT_MODEL`,
   `DATACHAT_MAX_STEPS` directly (it does not receive `AppConfig`).
 - **Plot isolation.** Each session gets a unique plots dir
@@ -868,12 +912,164 @@ state is in-process memory, **sticky routing is required in production** when ru
 multiple gunicorn/gunicorn-gevent workers (the Dockerfile uses a single worker to
 avoid this).
 
+### SQL datasource (optional)
+
+Off unless `DATACHAT_SQL_ENABLED` is truthy. When on, the agent gets one extra tool,
+`sql_engine`, and the system prompt gains the `data_chat_sql_addendum` block, which
+carries the database schema in full. With the flag off the tool list and the prompt are
+identical to before the feature existed, and no connection is ever attempted.
+
+**Schema discovery is not a tool.** `datachat/schema_snapshot_loader.py` is the SQL
+counterpart of `dataset_loader.py`: just as an uploaded CSV is loaded once and its
+columns rendered into the prompt, the SQL schema is reflected once and rendered into
+the prompt. The agent is therefore *told* what exists instead of spending turns asking,
+and `chat()`'s `reset=True` cannot throw that knowledge away between messages.
+
+The snapshot is cached **process-wide** with a TTL (`DATACHAT_SQL_SCHEMA_TTL_S`),
+following the same module-global pattern as the shared engine, because the one-shot
+chat routes build and dispose an agent per request — a per-agent cache would re-reflect
+the whole database every time. `invalidate_snapshot()` forces a rebuild after a schema
+change.
+
+**Identifier case is repaired, not left to the model.** PostgreSQL folds every unquoted
+identifier to lowercase, and this database is overwhelmingly mixed-case: 34 of 41 relations
+and 214 of 272 distinct column names only resolve when quoted. An agent writing
+`FROM Trasporti` gets `42P01 relation "trasporti" does not exist` — a failure no amount of
+schema detail prevents, because the name it used *was* correct.
+
+`datachat/sql_identifiers.py` rewrites bare identifiers to their real, quoted spelling
+before `sql_guard` validates the query, and the tool executes the same string it validated,
+so the guard's "the AST checked is the AST that runs" property is untouched. The split
+inside the rewriter is the whole design:
+
+- **The AST decides what may be rewritten** — only an unquoted `Identifier` in relation or
+  column position. This is default-deny, and it has to be: `count`, `sum` and the `YEAR` of
+  `EXTRACT(YEAR FROM d)` are all bare `VAR` tokens that are not column references, and this
+  schema has a `Data` column that collides with exactly that class of word. Deciding from
+  tokens alone would be default-allow and would corrupt those queries.
+- **The tokens decide where to cut** — only the tokenizer reports source offsets, so it
+  supplies the spans. sqlglot expressions carry no positional metadata.
+
+Because only identifier spans are replaced, string literals, comments and already-quoted
+names survive byte-for-byte; none of them needs a rule of its own. The rewriter is total and
+fails open: anything unparseable, multi-statement or doubtful is returned unchanged for the
+guard to reject with a proper message.
+
+Two classes of name are deliberately left alone. Names already all-lowercase need no quoting,
+which keeps the rewrite off the materialized views entirely. And names that resolve to more
+than one spelling are ambiguous: this schema holds both `Anno` and `anno`, both `Cliente` and
+`cliente`. Columns are therefore resolved **against the relations the query actually
+references**, which settles it in both directions — `anno` becomes `"Anno"` in a `Budgets`
+query and stays bare in a `report_mensile` one. Only a query joining both is genuinely
+ambiguous, and there the name is left for the agent to quote from the schema, which is
+rendered fully quoted for that reason. `sql_tool_utils.sql_error` closes the loop by
+suggesting the real spelling on a 42P01/42703.
+
+**The snapshot carries example values, not just names and types.** Names and types say
+nothing about how a column is *written*, and that is where SQL agents actually fail: a
+period column holding `'202607'` rather than `'07'`, or a customer label living in
+`descrizione_cliente` while `id_cliente` holds an opaque code. Guessing either wrong
+returns zero rows, not an error, so nothing downstream can catch it. Each visible
+relation is therefore sampled once during reflection — a single
+`SELECT CAST(col AS text), ... LIMIT DATACHAT_SQL_SCHEMA_PROFILE_SAMPLE_ROWS` — and the
+distinct values are rendered as an `e.g.` line under the relation.
+
+Sampling, not `SELECT DISTINCT`: a plain `LIMIT` short-circuits, whereas `DISTINCT ...
+LIMIT n` sits behind a hash aggregate that reads the relation first, and this runs across
+every relation on the first request of each TTL. The cost of that choice is that the
+result is a *sample*, so the rendered schema says so explicitly — without that caveat the
+agent reads the sample as the column's domain and starts reporting data as missing
+because it did not appear in a handful of rows. Only text, boolean and date-like columns
+are sampled; a `NUMERIC` measure has no spelling to get wrong and would only spend prompt
+budget. A sample that fails or times out costs that relation its examples, never the
+snapshot: losing the hints is survivable, losing the schema is not.
+
+`SqlDatasource.reflect_schema()` does the whole schema in one connection using
+SQLAlchemy's `get_multi_*` API, so cost is a fixed number of round trips rather than one
+connection per relation. Note `get_multi_*` defaults to `ObjectKind.TABLE`: views and
+materialized views are only reflected when `DATACHAT_SQL_INCLUDE_VIEWS` widens the kind
+to `ObjectKind.ANY`. Tables, views and materialized views stay three separate listings —
+`list_tables()` does **not** fold views in — but share everything downstream: one
+allow/denylist namespace and one `sql_engine`, since a view is read exactly like a table
+in a `SELECT`.
+
+The loader applies the allow/denylist, so a hidden relation never reaches the prompt.
+A foreign key pointing at a hidden relation is dropped too — rendering it would disclose
+the name the rules exist to conceal. Rendering is compact (`name(col:type PK, ...)` plus
+one line per foreign key); nullability is deliberately omitted as it rarely changes the
+`SELECT` the model writes. If the rendering exceeds `DATACHAT_SQL_SCHEMA_MAX_CHARS` it
+degrades to relation names only, so a schema growing over time cannot silently inflate
+every request.
+
+If reflection fails, the agent is built **without** `sql_engine` and without any schema
+text: one that can write SQL but was never told the schema is worse than one with no SQL
+at all. The app still boots, and the CSV path is unaffected.
+
+`REFRESH MATERIALIZED VIEW` needs no special handling: `Refresh` is already in the
+guard's `_FORBIDDEN_NODE_NAMES`, so a matview can be read but never refreshed.
+
+This is **always a dedicated database** (`DATACHAT_DB_*`). It never falls back to the
+application database, which the agent reaches through its own tools.
+
+`sql_engine` is read-only through four independent layers:
+
+1. **Database role.** Grant the `DATACHAT_DB_USER` role nothing but `CONNECT`,
+   `USAGE` and `SELECT` — see §16. Every layer below is application-level and
+   therefore bypassable by a bug; grants are not.
+2. **Session settings.** `datachat/sql_datasource.py` passes
+   `default_transaction_read_only=on`, `statement_timeout`,
+   `idle_in_transaction_session_timeout` and `search_path` through libpq's `options`,
+   so they apply from connection establishment and cover schema reflection too.
+3. **Transaction mode.** `execution_options={"postgresql_readonly": True}` makes
+   SQLAlchemy open every transaction as `BEGIN ... READ ONLY`, leaving no window for a
+   statement to run first. Never set `isolation_level="AUTOCOMMIT"` on this engine — it
+   suppresses the implicit `BEGIN` and defeats this layer.
+4. **Statement validation.** `datachat/sql_guard.validate_select()` parses with sqlglot
+   and admits only a single `SELECT`/`WITH`/set-operation, with no write, session-changing
+   or `Command` node anywhere in the tree, no filesystem/`dblink`/`pg_sleep` function, and
+   no table outside the allow/denylist. Rejected queries never reach the database.
+
+Layer 4 is not redundant: psycopg3 sends parameterless queries over the *simple* query
+protocol, so `SELECT 1; DROP TABLE t` would genuinely submit both statements. It is also
+the only layer that can enforce the table lists. Note that the AST check sees table
+names, so a permitted view over a denied table still reads it — which is why layer 1
+is the production answer.
+
+Results are capped by `DATACHAT_SQL_MAX_ROWS` / `MAX_COLUMNS` / `MAX_CELL_CHARS`. Rows
+come through a server-side cursor and are cut at the fetch, never by rewriting the SQL,
+so memory is bounded whatever the query matches. Truncation is reported in
+`meta.truncated`; there is deliberately no total row count, since knowing it would cost
+a second `COUNT(*)`.
+
+`DATACHAT_SQL_ALLOWED_TABLES` and `DATACHAT_SQL_DENIED_TABLES` are both empty by
+default. The allowlist wins when non-empty; otherwise the denylist applies. Despite the
+names, the lists are **one namespace covering tables, views and materialized views**:
+the guard collects bare identifiers from `exp.Table` nodes, which is what a view name in
+a `FROM` parses to, so a separate view list could not be enforced anyway. Scoping is
+enforced in three places: every `extract_*` listing tool filters what it returns, so the
+agent never learns a hidden relation exists; every `extract_*_info` tool refuses it; and
+the guard rejects it.
+
+The engine is a lazily built, process-wide singleton. `sql_datasource.init(config)`
+does no I/O, so an unreachable database cannot block startup. **`SmolagentsEngine.close()`
+must not dispose it** — the pool is shared by every session, so one user's
+`/enddatachat` would drop another user's connections.
+
 ### Adding a new tool
 
 1. Create `datachat/tools/my_tool.py` subclassing `smolagents.Tool`.
 2. Declare `name`, `description`, `inputs`, `output_type`.
 3. Implement `forward(...)` returning a `{kind, ...}` contract dict.
-4. Instantiate it in `SmolagentsEngine._build_agent()` (`smolagents_engine.py:314`).
+4. Instantiate it in `SmolagentsEngine._build_agent()` — or in `_sql_tools()` for a
+   SQL tool.
+
+Before adding a tool, check whether it is really a tool. A tool is for something the
+model *chooses* to do, with arguments it picks. Facts the agent always needs and that
+take no meaningful arguments — the dataset's columns, the database schema — belong in
+the system prompt: load them once (see `dataset_loader.py` and
+`schema_snapshot_loader.py`) and render them into the instructions. Making them tools
+costs a turn per question and, because `chat()` runs with `reset=True`, the answer is
+discarded before the next message.
 
 ---
 
@@ -900,8 +1096,36 @@ Known prompt titles used across the codebase:
 | `describe_image_user`, `vision_ocr_user` | `infrastructure/ai.py`           |
 | `data_chat_system`                       | DataChat engine instructions     |
 | `start_chat_system`                      | DataChat bootstrap (LLM variant) |
+| `data_chat_sql_addendum`                 | DataChat SQL rules, appended to `data_chat_system` when the SQL datasource is enabled |
 
 Manage them via the admin UI (`/admin/prompts`) or the `prompts` table directly.
+
+### Placeholders
+
+`render_prompt(template, **kwargs)` substitutes `{name}` placeholders. Only the keys
+passed by the caller are substituted; **every other brace is literal**, so a prompt may
+contain JSON examples such as `{"kind":"text"}` without being mangled. A plain
+`str.format()` cannot do this — it reads `{"kind":"text"}` as a replacement field and
+raises — so when editing a prompt through the admin UI there is no need to double any
+braces.
+
+A *placeholder* is defined strictly as a bare identifier in single braces,
+`{name}`. `{"kind":"text"}`, `{a.b}`, `{x:>10}` and a lone `{` are therefore not
+placeholders and stay literal and silent. A placeholder that **is** recognizable
+but was not supplied by the caller — typically a stale name left in a DB-stored
+prompt — is left visible in the rendered output and reported as
+`event=prompt_placeholder_missing key=<name>`; the other placeholders still
+render, so one stale name no longer discards the whole substitution.
+
+| Placeholder    | Available in             |
+| -------------- | ------------------------ |
+| `{columns}`    | `data_chat_system` — the uploaded dataset's column list |
+| `{sql_schema}` | `data_chat_sql_addendum` — the rendered database schema |
+
+If an override omits `{sql_schema}`, the schema is appended after the template rather
+than dropped, so an addendum stored before the placeholder existed keeps working. A
+placeholder the caller does not supply is left as literal text and does not prevent the
+others from rendering.
 
 ---
 
@@ -976,6 +1200,16 @@ To add, say, `POST /summarize_text`:
   ```
   These verify namespace-aware RAG deletion and dashboard env allowlist/status-only
   behavior.
+- **Security regression suite for agent-authored SQL:**
+  ```bash
+  pytest tests/test_sql_guard.py
+  ```
+  Runs without a database or mocks. It pins the cases a keyword check cannot catch —
+  a write hidden in a CTE, `SELECT ... INTO`, `FOR UPDATE`, a semicolon inside a
+  string literal — and doubles as the canary for a sqlglot upgrade that renames an
+  expression class. Treat a failure here as a security regression, not a flaky test.
+  `tests/test_sql_datasource.py` and `tests/test_sql_tools.py` cover the engine
+  options and the tool contracts, also without PostgreSQL.
 - When writing tests, follow the same pattern: `unittest.mock.patch.dict` for env,
   and mock `infrastructure.*` boundaries. Services are designed to be tested without
   Flask.
@@ -1023,6 +1257,20 @@ Secrets required in GitHub: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`
   governed command at all: `feedback.source` and `feedback.log_id` are present
   in the fresh `feedback` table created by `init_db()`, but a `feedback` table
   predating them is not upgraded by anything in the CLI.
+- **DataChat SQL datasource:** create a least-privilege role for `DATACHAT_DB_USER`.
+  This is the only read-only layer an application bug cannot bypass:
+  ```sql
+  CREATE ROLE maui_datachat LOGIN PASSWORD '…';
+  GRANT CONNECT ON DATABASE analytics TO maui_datachat;
+  GRANT USAGE ON SCHEMA public TO maui_datachat;
+  GRANT SELECT ON ALL TABLES IN SCHEMA public TO maui_datachat;
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT SELECT ON TABLES TO maui_datachat;
+  ```
+  Keep `DATACHAT_SQL_STATEMENT_TIMEOUT_MS` conservative: `psycopg-binary` reaches
+  libpq through C and cannot be monkey-patched, so a slow query blocks every greenlet
+  in the `-k gevent` worker, not just its own request. Agent-authored SQL makes that
+  much easier to trigger than the handwritten queries elsewhere in the codebase.
 - **Secrets:** provide all required env vars (see [§4](#4-configuration-system-configpy))
   via your orchestrator's secret store — never bake them into the image.
 - **Admin API docs:** `/admin/api-docs` and `/admin/openapi.json` are session-protected;
@@ -1038,6 +1286,9 @@ Secrets required in GitHub: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`
 - **Docstrings** follow Google/NumPy-ish style with `:param:` / `:return:`.
 - **SQL safety** — always go through `infrastructure/database_methods.py` builders;
   never f-string SQL.
+- **Agent SQL** — every LLM-authored SQL string goes through
+  `datachat/sql_guard.validate_select()` before it reaches the database. Never call
+  `SqlDatasource.run_select()` directly.
 - **Configuration** — prefer `AppConfig` outside bootstrap/config code. If a direct env
   fallback is necessary, keep it explicit, narrow, and documented.
 - **Documentation** — use `project_docs/` for versioned project docs. Keep `/docs` for
