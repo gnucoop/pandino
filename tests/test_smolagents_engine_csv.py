@@ -35,9 +35,6 @@ def engine(tmp_path):
     instance.data = pd.DataFrame({"country": ["IT", "FR"], "sales": [10, 20]})
     instance._sql_ready = False
     instance._plots_dir = str(tmp_path)
-    instance._last_final_answer_check_passed = None
-    instance._last_final_kind = None
-    instance._active_request_id = "test"
     instance._empty_final_rejections = 0
     instance._last_run_result = None
     instance._last_run_duration_ms = None

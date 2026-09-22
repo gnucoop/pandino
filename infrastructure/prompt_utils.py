@@ -1,9 +1,15 @@
-import os
 import logging
+import os
+import re
 from typing import Optional
 from infrastructure.database_pg import get_prompt_from_db
 
 logger = logging.getLogger(__name__)
+
+#: A placeholder is a bare Python identifier in single braces - and nothing
+#: else. Anchoring on the identifier is what keeps JSON object syntax such as
+#: {"kind":"text"} out of the match set.
+_PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
 def load_prompt(
@@ -43,31 +49,48 @@ def render_prompt(template: str, **kwargs) -> str:
         template = "Hello {name}, today is {day}"
         render_prompt(template, name="Gustavo", day="Thursday")
 
-    Only the placeholders named in `kwargs` are substituted. Every other brace in
-    the template is literal and is passed through untouched, so a prompt may
-    contain JSON examples such as {"kind":"text"} without being mangled.
+    A *placeholder* is defined strictly: a single pair of braces around a bare
+    Python identifier, ``{name}``. Nothing else is one. That is what lets a
+    prompt carry JSON examples such as ``{"kind":"text"}`` - the brace is
+    followed by a quote, not an identifier, so it is never a candidate and is
+    passed through untouched.
+
+    Substitution is a single regex pass rather than ``str.format``, so:
+
+    - every brace that is not a strict placeholder stays literal, including
+      ``{{`` (no format-style unescaping happens, because no format happens);
+    - a recognizable placeholder the caller did not supply is left literal in
+      the output *and* reported via ``event=prompt_placeholder_missing``. The
+      old all-or-nothing behaviour - discard the whole render, return the raw
+      template - is deliberately not restored: one stale placeholder in a
+      DB-stored prompt must not cost the caller every other substitution.
 
     Not supported, because no prompt uses them: format specs and conversions
-    ({x:>10}, {x!r}). Those are treated as literal text.
+    ({x:>10}, {x!r}). Those do not match the strict form and stay literal.
 
     :param template: The prompt template containing placeholders in {curly braces}.
-    :param kwargs: Key-value pairs for substitution.
-    :return: The rendered prompt string with placeholders replaced.
+    :param kwargs: Key-value pairs for substitution. Unused keys are ignored.
+    :return: The rendered prompt string with supplied placeholders replaced.
     """
-    # Escape everything, then re-open only the placeholders we were given a
-    # value for. What is left escaped is literal and survives .format().
-    escaped = template.replace("{", "{{").replace("}", "}}")
-    for key in kwargs:
-        escaped = escaped.replace("{{" + key + "}}", "{" + key + "}")
+    missing: list[str] = []
+
+    def _substitute(match: "re.Match[str]") -> str:
+        key = match.group(1)
+        if key in kwargs:
+            return str(kwargs[key])
+        missing.append(key)
+        return match.group(0)
 
     try:
-        return escaped.format(**kwargs)
-    except KeyError as e:
-        missing_key = e.args[0]
-        logger.warning(
-            "event=prompt_placeholder_missing key=%s", missing_key
-        )
-        return template
+        rendered = _PLACEHOLDER_RE.sub(_substitute, template)
     except Exception as e:
+        # Reachable: _substitute calls str() on caller-supplied values, and a
+        # value whose __str__ raises propagates out of re.sub. Rare, but a
+        # render that blows up must not take the caller down with it.
         logger.error("event=prompt_render_failed error=%s", str(e))
         return template
+
+    for key in dict.fromkeys(missing):
+        logger.warning("event=prompt_placeholder_missing key=%s", key)
+
+    return rendered

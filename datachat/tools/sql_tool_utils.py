@@ -16,6 +16,9 @@ from uuid import UUID
 from sqlalchemy.exc import InterfaceError, OperationalError
 
 from datachat.sql_identifiers import suggest_identifier
+from utils.logging_config import get_request_id
+
+logger = logging.getLogger(__name__)
 
 # Database messages are surfaced to the model to let it fix its own query, so
 # they are trimmed to keep the agent context small.
@@ -140,9 +143,12 @@ def sql_error(
 
     if code == "READ_ONLY_VIOLATION":
         # The guard should have rejected this before it reached the database.
-        logging.error(
-            "[datachat][sql] read-only violation reached the database, "
-            "sql_guard has a gap: query=%s",
+        # An internal safety-infrastructure defect report, not a description of
+        # agent behaviour: the module logger owns it, enriched with the ambient
+        # request id so it can still be correlated with the run that hit it.
+        logger.error(
+            "event=sql_guard_gap_read_only_violation request_id=%s query=%s",
+            get_request_id(),
             query,
         )
 

@@ -10,6 +10,14 @@ from datachat.sql_datasource import SqlDatasource
 from datachat.sql_guard import validate_select
 from datachat.sql_identifiers import quote_identifiers
 from datachat.tools.sql_tool_utils import sql_error, to_json_scalar, truncate_cell
+from utils.logging_config import get_request_id
+
+# Agent-visible SQL behaviour - the tool being invoked, a query accepted or
+# rejected, its result and truncation - describes what the DataChat agent did
+# during a run, so it belongs to the datachat.runtime channel rather than to a
+# per-module logger. Internal SQL infrastructure (datasource lifecycle, schema
+# reflection) keeps its own module logger.
+runtime_logger = logging.getLogger("datachat.runtime")
 
 
 class SqlEngineTool(Tool):
@@ -80,8 +88,9 @@ class SqlEngineTool(Tool):
             if self._identifiers and self._datasource.quote_identifiers:
                 sql, quoted = quote_identifiers(sql, self._identifiers)
                 if quoted:
-                    logging.info(
-                        "[datachat][sql_engine_tool] quoted identifiers: %s",
+                    runtime_logger.info(
+                        "event=sql_tool_identifiers_quoted request_id=%s identifiers=%s",
+                        get_request_id(),
                         ",".join(quoted),
                     )
 
@@ -91,8 +100,9 @@ class SqlEngineTool(Tool):
                 denied_tables=self._datasource.denied_tables,
             )
             if not guard.ok:
-                logging.info(
-                    "[datachat][sql_engine_tool] rejected code=%s tables=%s",
+                runtime_logger.info(
+                    "event=sql_tool_rejected request_id=%s code=%s tables=%s",
+                    get_request_id(),
                     guard.code,
                     ",".join(guard.tables) or "none",
                 )
@@ -109,7 +119,9 @@ class SqlEngineTool(Tool):
             try:
                 columns, rows, truncated = self._datasource.run_select(sql, limit)
             except Exception as e:
-                logging.exception("[datachat][sql_engine_tool] query failed")
+                runtime_logger.exception(
+                    "event=sql_tool_query_failed request_id=%s", get_request_id()
+                )
                 return sql_error(e, query=sql, identifiers=self._known_names)
             duration_ms = round((time.time() - started) * 1000, 2)
 
@@ -127,8 +139,10 @@ class SqlEngineTool(Tool):
             ]
             records = replace_nan(records)
 
-            logging.info(
-                "[datachat][sql_engine_tool] returned=%s truncated=%s columns=%s duration_ms=%s tables=%s",
+            runtime_logger.info(
+                "event=sql_tool_result request_id=%s returned=%s truncated=%s "
+                "columns=%s duration_ms=%s tables=%s",
+                get_request_id(),
                 len(records),
                 truncated,
                 len(kept_columns),
@@ -159,5 +173,7 @@ class SqlEngineTool(Tool):
             return {"kind": "table", "data": records, "meta": meta}
 
         except Exception as e:
-            logging.exception("[datachat][sql_engine_tool] failed")
+            runtime_logger.exception(
+                "event=sql_tool_failed request_id=%s", get_request_id()
+            )
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

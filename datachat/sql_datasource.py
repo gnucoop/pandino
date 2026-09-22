@@ -27,6 +27,8 @@ from sqlalchemy.engine.reflection import ObjectKind
 from config import AppConfig, DatachatSqlConfig
 from datachat.sql_identifiers import quote_ident as _quote_ident
 
+logger = logging.getLogger(__name__)
+
 _config: Optional[DatachatSqlConfig] = None
 _engine: Optional[Engine] = None
 _lock = threading.Lock()
@@ -36,8 +38,8 @@ def init(config: AppConfig) -> None:
     """Store the datasource configuration. Performs no database I/O."""
     global _config
     _config = config.datachat_sql
-    logging.info(
-        "[datachat][sql_datasource] init enabled=%s host=%s db=%s schema=%s",
+    logger.info(
+        "event=sql_datasource_init enabled=%s host=%s db=%s schema=%s",
         _config.enabled,
         _config.host or "unset",
         _config.db or "unset",
@@ -307,8 +309,8 @@ class SqlDatasource:
                 if columns is None:
                     # Reflected by name but not by the multi-call: a relation
                     # dropped mid-reflection, or one the role cannot read.
-                    logging.warning(
-                        "[datachat][sql_datasource] no columns reflected for %s.%s, skipping",
+                    logger.warning(
+                        "event=sql_relation_skipped_no_columns schema=%s relation=%s",
                         schema,
                         name,
                     )
@@ -345,8 +347,8 @@ class SqlDatasource:
                     }
                 )
 
-        logging.info(
-            "[datachat][sql_datasource] reflect_schema schema=%s relations=%s include_views=%s include_fks=%s",
+        logger.info(
+            "event=sql_schema_reflected schema=%s relations=%s include_views=%s include_fks=%s",
             schema,
             len(relations),
             include_views,

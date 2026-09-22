@@ -225,10 +225,11 @@ def test_override_predating_the_placeholder_still_gets_the_schema(engine):
 
 @pytest.fixture
 def guarded(engine):
-    """The engine fields _check_final_answer touches, as __post_init__ would."""
-    engine._last_final_answer_check_passed = None
-    engine._last_final_kind = None
-    engine._active_request_id = "test"
+    """The engine fields _check_final_answer touches, as __post_init__ would.
+
+    The per-run budget is the only one left: the guard reads request identity
+    from the ambient logging context and keeps no other state on the instance.
+    """
     engine._empty_final_rejections = 0
     return engine
 
@@ -265,7 +266,6 @@ def test_an_empty_table_is_rejected_the_first_time(guarded):
     assert "SELECT DISTINCT" in message
     assert '{"kind":"text","text":"..."}' in message
     assert guarded._empty_final_rejections == 1
-    assert guarded._last_final_answer_check_passed is False
 
 
 def test_an_empty_table_is_accepted_after_its_verification_round(guarded):

@@ -1,13 +1,21 @@
 """
 Tests for infrastructure.prompt_utils.render_prompt.
 
-render_prompt is str.format() based, and every Datachat prompt carries literal
-JSON braces in its final-answer contract. A naive .format() reads those as
-replacement fields and raises, which used to make the whole template come back
-unrendered with its real placeholders still in place. These tests pin the
-substitution down so that cannot regress silently again.
+render_prompt substitutes strict ``{identifier}`` placeholders in a single
+regex pass. Every Datachat prompt carries literal JSON braces in its
+final-answer contract; a naive .format() read those as replacement fields and
+raised, which used to make the whole template come back unrendered with its
+real placeholders still in place.
+
+Two properties are pinned here and must not regress silently:
+
+1. literal JSON survives, and never counts as a missing placeholder;
+2. a *recognizable* placeholder the caller did not supply stays literal in the
+   output but is still reported via ``event=prompt_placeholder_missing`` -
+   partial rendering must not become silent rendering.
 """
 
+import logging
 import sys
 import types
 
@@ -107,3 +115,103 @@ def test_unknown_placeholder_is_left_literal_and_does_not_block_the_others():
     out = render_prompt("Hello {name}, {unsupplied} stays", name="Gustavo")
 
     assert out == "Hello Gustavo, {unsupplied} stays"
+
+
+# ---------------------------------------------------------------------------
+# Missing-placeholder diagnostics
+# ---------------------------------------------------------------------------
+
+
+def _missing_keys(caplog):
+    """The keys reported by event=prompt_placeholder_missing in caplog."""
+    return [
+        record.args[0]
+        for record in caplog.records
+        if record.getMessage().startswith("event=prompt_placeholder_missing")
+    ]
+
+
+def test_missing_placeholder_emits_the_structured_diagnostic(caplog):
+    with caplog.at_level(logging.WARNING, logger="infrastructure.prompt_utils"):
+        out = render_prompt("Hello {username}, use {old_variable}", username="Mario")
+
+    assert out == "Hello Mario, use {old_variable}"
+    assert _missing_keys(caplog) == ["old_variable"]
+
+
+def test_literal_json_does_not_emit_a_missing_placeholder_warning(caplog):
+    """
+    The whole point of the strict placeholder definition: {"kind":"text"} opens
+    with a quote, not an identifier, so it is not a candidate at all.
+    """
+    with caplog.at_level(logging.WARNING, logger="infrastructure.prompt_utils"):
+        out = render_prompt(TEMPLATE_WITH_JSON, columns=["age"])
+
+    assert '{"kind":"text","text":"..."}' in out
+    assert _missing_keys(caplog) == []
+
+
+def test_supplied_placeholder_emits_no_warning(caplog):
+    with caplog.at_level(logging.WARNING, logger="infrastructure.prompt_utils"):
+        out = render_prompt("Schema: {sql_schema}", sql_schema="users(id)")
+
+    assert out == "Schema: users(id)"
+    assert _missing_keys(caplog) == []
+
+
+def test_repeated_missing_placeholder_is_reported_once(caplog):
+    with caplog.at_level(logging.WARNING, logger="infrastructure.prompt_utils"):
+        render_prompt("{gone} then {gone}")
+
+    assert _missing_keys(caplog) == ["gone"]
+
+
+def test_stale_db_prompt_placeholder_is_visible_and_reported(caplog):
+    """
+    Regression cover for the real failure mode: a prompt stored in the DB still
+    references a placeholder the code no longer passes. The operator must be
+    able to see it - both in the rendered text and in the logs - instead of the
+    substitution silently going missing.
+    """
+    stored = "Columns: {columns}. Legacy: {dataframe_head}."
+
+    with caplog.at_level(logging.WARNING, logger="infrastructure.prompt_utils"):
+        out = render_prompt(stored, columns=["a"])
+
+    assert out == "Columns: ['a']. Legacy: {dataframe_head}."
+    assert _missing_keys(caplog) == ["dataframe_head"]
+
+
+def test_malformed_and_non_identifier_braces_are_never_placeholders(caplog):
+    """
+    Unbalanced braces, spaces, dotted/indexed names and format specs all fall
+    outside the strict definition, so they stay literal and silent rather than
+    being half-parsed by a permissive brace scanner.
+    """
+    template = "{ spaced } {a.b} {c[0]} {x:>10} {y!r} {unclosed and 100% {"
+
+    with caplog.at_level(logging.WARNING, logger="infrastructure.prompt_utils"):
+        out = render_prompt(template, a="A", c="C", x="X", y="Y")
+
+    assert out == template
+    assert _missing_keys(caplog) == []
+
+
+def test_render_failure_falls_back_to_the_template(caplog):
+    """
+    event=prompt_render_failed is still reachable: str() on a value is caller
+    controlled and can raise.
+    """
+
+    class Explodes:
+        def __str__(self):
+            raise RuntimeError("boom")
+
+    with caplog.at_level(logging.ERROR, logger="infrastructure.prompt_utils"):
+        out = render_prompt("value={v}", v=Explodes())
+
+    assert out == "value={v}"
+    assert any(
+        record.getMessage().startswith("event=prompt_render_failed")
+        for record in caplog.records
+    )

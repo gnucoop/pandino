@@ -30,6 +30,8 @@ from typing import Optional
 from datachat.sql_datasource import SqlDatasource
 from datachat.sql_identifiers import quote_ident
 
+logger = logging.getLogger(__name__)
+
 # Process-wide cache, following the same module-global + lock pattern as the
 # shared engine in sql_datasource.py.
 _snapshot: Optional["SchemaSnapshot"] = None
@@ -158,9 +160,8 @@ def _profile_columns(
             relation, names, datasource.schema_profile_sample_rows
         )
     except Exception:
-        logging.warning(
-            "[datachat][schema_snapshot] value sampling failed for %s, "
-            "rendering it without examples",
+        logger.warning(
+            "event=schema_value_sampling_failed relation=%s",
             relation,
             exc_info=True,
         )
@@ -242,8 +243,8 @@ def load_schema_snapshot(datasource: SqlDatasource) -> SchemaSnapshot:
         loaded_at=time.time(),
     )
 
-    logging.info(
-        "[datachat][schema_snapshot] loaded schema=%s visible=%s hidden=%s profiled=%s",
+    logger.info(
+        "event=schema_snapshot_loaded schema=%s visible=%s hidden=%s profiled=%s",
         snapshot.schema,
         len(relations),
         len(reflected) - len(relations),
@@ -285,9 +286,7 @@ def get_schema_snapshot(
         try:
             built = load_schema_snapshot(datasource)
         except Exception:
-            logging.exception(
-                "[datachat][schema_snapshot] reflection failed, SQL will be unavailable"
-            )
+            logger.exception("event=schema_snapshot_reflection_failed")
             return None
 
         _snapshot = built
@@ -448,17 +447,17 @@ def render_schema(snapshot: SchemaSnapshot, max_chars: int) -> str:
         if len(rendered) <= max_chars:
             break
         if index < len(_RENDER_TIERS) - 1:
-            logging.warning(
-                "[datachat][schema_snapshot] rendered schema %s chars at tier=%s "
-                "exceeds budget %s for %s relations, degrading",
+            logger.warning(
+                "event=schema_render_budget_exceeded chars=%s tier=%s "
+                "max_chars=%s relations=%s degrading=true",
                 len(rendered),
                 tier,
                 max_chars,
                 len(snapshot.relations),
             )
 
-    logging.info(
-        "[datachat][schema_snapshot] rendered schema=%s relations=%s tier=%s chars=%s",
+    logger.info(
+        "event=schema_rendered schema=%s relations=%s tier=%s chars=%s",
         snapshot.schema,
         len(snapshot.relations),
         chosen_tier,

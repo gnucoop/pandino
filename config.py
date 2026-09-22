@@ -13,6 +13,8 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Provider → environment-variable name map
 # Used by litellm_factory and agentchat handler to resolve API keys.
@@ -484,9 +486,8 @@ def load_config() -> AppConfig:
     try:
         datachat_sql = _load_datachat_sql_config()
     except ValueError as e:
-        logging.error(
-            "[config] DATACHAT SQL datasource is misconfigured and has been "
-            "disabled: %s",
+        logger.error(
+            "event=datachat_sql_config_invalid detail=%s",
             e,
         )
         datachat_sql = _load_datachat_sql_config(force_disabled=True)
