@@ -51,6 +51,9 @@ Thumbs.db
 *.exe
 *.war
 
+# Bash scripts
+*.sh
+
 # Large media files
 *.mp4
 *.tiff
