@@ -23,6 +23,7 @@ EXPECTED_TOOLS = [
     "filter_rows",
     "row_count",
     "aggregate",
+    "crosstab",
     "plot",
     "trend",
 ]
