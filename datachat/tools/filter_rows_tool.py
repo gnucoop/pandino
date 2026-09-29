@@ -64,6 +64,56 @@ def _coerce_filter_value(df: pd.DataFrame, col: str, raw: Any) -> Any:
     return raw
 
 
+# Distinguishes an omitted `value` from an explicit value=None (CURRENT eq semantics).
+_OMITTED: Any = object()
+
+_VALUELESS_OPS = {"is_empty", "is_not_empty"}
+_TEXT_OPS = {"contains", "not_contains"}
+
+
+def _empty_mask(series: pd.Series) -> pd.Series:
+    """
+    True where a cell holds no value: NaN/None, or (for non-numeric columns) a
+    blank/whitespace-only string.
+    """
+    missing = series.isna()
+    if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_bool_dtype(series):
+        return missing
+    return missing | (series.astype(str).str.strip() == "")
+
+
+def _is_text_series(series: pd.Series) -> bool:
+    """
+    True when every non-missing cell is a string (or the column is all missing).
+    Inspects values rather than dtype: on pandas 1.5 is_string_dtype() is True for
+    any object column, including mixed or boolean-with-None ones.
+    """
+    return pd.api.types.infer_dtype(series, skipna=True) in {"string", "empty"}
+
+
+def _contains_mask(series: pd.Series, needle: str) -> pd.Series:
+    """
+    Case-insensitive literal substring match (regex=False: the needle comes from an
+    LLM and is meant as text, not a pattern). Textual columns only; missing cells
+    never match.
+    """
+    text = series.astype(str).str.contains(needle, case=False, regex=False, na=False)
+    return text & ~series.isna()
+
+
+def _text_op_mask(series: pd.Series, op: str, value: Any) -> pd.Series:
+    """Mask for is_empty/is_not_empty/contains/not_contains."""
+    if op == "is_empty":
+        return _empty_mask(series)
+    if op == "is_not_empty":
+        return ~_empty_mask(series)
+    needle = str(value).strip()
+    if op == "contains":
+        return _contains_mask(series, needle)
+    # not_contains: complement of contains over filled-in cells only
+    return ~_contains_mask(series, needle) & ~_empty_mask(series)
+
+
 def _eq_mask(series: pd.Series, value: Any) -> pd.Series:
     """
     Build an equality mask in a type-aware way.
@@ -91,13 +141,17 @@ class FilterRowsTool(Tool):
     MVP+: supports:
     - eq (default) for strings/bools/numbers (type-aware)
     - lt/lte/gt/gte for numeric comparisons
+    - is_empty/is_not_empty (no value needed)
+    - contains/not_contains: case-insensitive literal substring
     - optional second condition (AND) via where_col2/op2/value2
     """
 
     name = "filter_rows"
     description = (
         "Return rows that satisfy one or two conditions on specified columns. "
-        "Supports equality and numeric comparisons (lt, lte, gt, gte). "
+        "Supports equality, numeric comparisons (lt, lte, gt, gte), "
+        "'is_empty'/'is_not_empty' (column missing/blank or filled in; no value needed) and "
+        "'contains'/'not_contains' (case-insensitive literal substring search in text). "
         "Returns a table of matching rows."
     )
     output_type = "object"
@@ -109,11 +163,15 @@ class FilterRowsTool(Tool):
         },
         "value": {
             "type": "any",
-            "description": "Value to match.",
+            "description": "Value to match. Not needed for 'is_empty'/'is_not_empty'.",
+            "nullable": True,
         },
         "op": {
             "type": "string",
-            "description": "Filter operation: 'eq' (default), 'lt', 'lte', 'gt', 'gte'.",
+            "description": (
+                "Filter operation: 'eq' (default), 'lt', 'lte', 'gt', 'gte', "
+                "'is_empty', 'is_not_empty', 'contains', 'not_contains'."
+            ),
             "nullable": True,
         },
         "data": {
@@ -133,7 +191,10 @@ class FilterRowsTool(Tool):
         },
         "op2": {
             "type": "string",
-            "description": "Optional second operation: 'eq' (default), 'lt', 'lte', 'gt', 'gte'.",
+            "description": (
+                "Optional second operation: same values as 'op'. With 'is_empty'/'is_not_empty' "
+                "the second condition applies as soon as where_col2 is set."
+            ),
             "nullable": True,
         },
         "value2": {
@@ -167,7 +228,7 @@ class FilterRowsTool(Tool):
     def forward(
         self,
         where_col: str,
-        value: Any,
+        value: Any = _OMITTED,
         op: Optional[str] = None,
         data: list[dict[str, Any]] | None = None,
         where_col2: Optional[str] = None,
@@ -212,7 +273,7 @@ class FilterRowsTool(Tool):
             else:
                 df_view = df[list(df.columns)[:10]]  # keep small by default
 
-            allowed_ops = {"eq", "lt", "lte", "gt", "gte"}
+            allowed_ops = {"eq", "lt", "lte", "gt", "gte"} | _VALUELESS_OPS | _TEXT_OPS
 
             # -----------------------------
             # Build mask #1
@@ -227,7 +288,34 @@ class FilterRowsTool(Tool):
 
             series1 = df[where_col]
 
-            if op_clean in {"lt", "lte", "gt", "gte"}:
+            # Only is_empty/is_not_empty may omit the value. An explicit value=None
+            # keeps its CURRENT meaning for eq.
+            if value is _OMITTED:
+                if op_clean not in _VALUELESS_OPS:
+                    return {
+                        "kind": "error",
+                        "message": f"A value is required for '{op_clean}'.",
+                        "code": "MISSING_FILTER_VALUE",
+                    }
+                value = None
+
+            if op_clean in _TEXT_OPS and (value is None or not str(value).strip()):
+                return {
+                    "kind": "error",
+                    "message": f"A non-empty value is required for '{op_clean}'.",
+                    "code": "MISSING_FILTER_VALUE",
+                }
+
+            if op_clean in _TEXT_OPS and not _is_text_series(series1):
+                return {
+                    "kind": "error",
+                    "message": f"'{op_clean}' requires a text column; '{where_col}' is not text.",
+                    "code": "NON_TEXT_COLUMN",
+                }
+
+            if op_clean in _VALUELESS_OPS | _TEXT_OPS:
+                mask1 = _text_op_mask(series1, op_clean, value)
+            elif op_clean in {"lt", "lte", "gt", "gte"}:
                 series1_num = pd.to_numeric(series1, errors="coerce")
                 try:
                     value_num = float(value)
@@ -256,7 +344,13 @@ class FilterRowsTool(Tool):
             mask_final = mask1
             where_col2_clean = (where_col2 or "").strip()
 
-            if where_col2_clean and value2 is not None:
+            # is_empty/is_not_empty need no value, so naming the column is enough.
+            op2_probe = (op2 or "eq").strip().lower()
+            second_active = bool(where_col2_clean) and (
+                value2 is not None or op2_probe in _VALUELESS_OPS
+            )
+
+            if second_active:
                 if where_col2_clean not in df.columns:
                     return {
                         "kind": "error",
@@ -274,7 +368,23 @@ class FilterRowsTool(Tool):
 
                 series2 = df[where_col2_clean]
 
-                if op2_clean in {"lt", "lte", "gt", "gte"}:
+                if op2_clean in _TEXT_OPS and not str(value2).strip():
+                    return {
+                        "kind": "error",
+                        "message": f"A non-empty value2 is required for '{op2_clean}'.",
+                        "code": "MISSING_FILTER_VALUE_2",
+                    }
+
+                if op2_clean in _TEXT_OPS and not _is_text_series(series2):
+                    return {
+                        "kind": "error",
+                        "message": f"'{op2_clean}' requires a text column; '{where_col2_clean}' is not text.",
+                        "code": "NON_TEXT_COLUMN_2",
+                    }
+
+                if op2_clean in _VALUELESS_OPS | _TEXT_OPS:
+                    mask2 = _text_op_mask(series2, op2_clean, value2)
+                elif op2_clean in {"lt", "lte", "gt", "gte"}:
                     series2_num = pd.to_numeric(series2, errors="coerce")
                     try:
                         value2_num = float(str(value2))
@@ -320,8 +430,8 @@ class FilterRowsTool(Tool):
                 op_clean,
                 value,
                 where_col2_clean or None,
-                (op2 or "eq") if (where_col2_clean and value2 is not None) else None,
-                value2 if (where_col2_clean and value2 is not None) else None,
+                (op2 or "eq") if second_active else None,
+                value2 if second_active else None,
                 n_int,
                 len(safe_records),
             )

@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.tools.limits import MIN_RELIABLE_SAMPLE, sample_warning
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ class AggregateTool(Tool):
 
     name = "aggregate"
     description = (
-        "Group rows by one column and apply an aggregation (count, mean, sum, etc.). "
+        "Group rows by one or two columns and apply an aggregation (count, mean, sum, etc.). "
         "Works on the full dataset or on a subset passed via `data`. "
         "Returns a small table suitable for further filtering, sorting, plotting, or counting."
     )
@@ -132,8 +133,11 @@ class AggregateTool(Tool):
     # IMPORTANT: keys MUST match forward() params exactly (excluding self)
     inputs: ClassVar[dict[str, Any]] = {
         "group_by": {
-            "type": "string",
-            "description": "Column name to group by (e.g., 'Problemi', 'MIgrante').",
+            "type": "any",
+            "description": (
+                "Column name to group by (e.g., 'Problemi'), or a list of at most two "
+                "column names for a two-dimensional breakdown (e.g., ['Problemi', 'MIgrante'])."
+            ),
         },
         "op": {
             "type": "string",
@@ -240,25 +244,38 @@ class AggregateTool(Tool):
             else:
                 df = self._df
 
-            # --- group_by hardening: sometimes the LLM passes ["col"] instead of "col" ---
+            # --- group_by: one column, or a list of at most two ---
+            # A list used to be reduced to its first entry, which silently turned a
+            # two-dimensional request into a one-dimensional (wrong) answer.
             if isinstance(group_by, list):
-                gb_list = [str(x).strip() for x in group_by if str(x).strip()]
-                group_by_clean = gb_list[0] if gb_list else ""
+                group_by_cols = [str(x).strip() for x in group_by if str(x).strip()]
             else:
-                group_by_clean = (group_by or "").strip()
+                single = (group_by or "").strip()
+                group_by_cols = [single] if single else []
 
             op_clean = (op or "").strip().lower()
             metric_clean = (metric or "").strip() if metric is not None else None
 
-            if not group_by_clean:
+            if not group_by_cols:
                 return {"kind": "error", "message": "Missing group_by column.", "code": "MISSING_GROUP_BY"}
 
-            if group_by_clean not in df.columns:
+            if len(group_by_cols) > 2:
                 return {
                     "kind": "error",
-                    "message": f"Invalid group_by column: {group_by_clean}",
+                    "message": f"group_by accepts at most 2 columns, got {len(group_by_cols)}.",
+                    "code": "TOO_MANY_GROUP_BY",
+                }
+
+            missing_cols = [c for c in group_by_cols if c not in df.columns]
+            if missing_cols:
+                return {
+                    "kind": "error",
+                    "message": f"Invalid group_by column: {', '.join(missing_cols)}",
                     "code": "INVALID_GROUP_BY",
                 }
+
+            # Label for the log line; the grouping itself uses the list.
+            group_by_clean = " + ".join(group_by_cols)
 
             allowed_ops = {"count", "mean", "sum", "min", "max"}
             if op_clean not in allowed_ops:
@@ -308,7 +325,7 @@ class AggregateTool(Tool):
             # ---- compute aggregation ----
             if op_clean == "count":
                 out = (
-                    df_work.groupby(group_by_clean, dropna=False)
+                    df_work.groupby(group_by_cols, dropna=False)
                     .size()
                     .reset_index(name="count")
                 )
@@ -337,9 +354,10 @@ class AggregateTool(Tool):
                     # min/max: fallback to string if numeric is entirely NaN
                     agg_series = metric_num if metric_num.notna().any() else df_work[metric_clean].astype(str)
 
-                tmp = pd.DataFrame({group_by_clean: df_work[group_by_clean], metric_clean: agg_series})
+                tmp = df_work[group_by_cols].copy()
+                tmp[metric_clean] = agg_series
                 out = (
-                    tmp.groupby(group_by_clean, dropna=False)[metric_clean]
+                    tmp.groupby(group_by_cols, dropna=False)[metric_clean]
                     .agg(op_clean)
                     .reset_index()
                 )
@@ -349,6 +367,19 @@ class AggregateTool(Tool):
 
             # ---- sort + trim ----
             out = out.sort_values(by=value_col, ascending=asc, na_position="last").head(n_int)
+
+            # ---- small-sample caveat (non-count only), judged on the groups returned ----
+            note = None
+            if op_clean != "count" and not out.empty:
+                sizes = (
+                    df_work.groupby(group_by_cols, dropna=False)
+                    .size()
+                    .reset_index(name="__rows__")
+                )
+                shown = out[group_by_cols].merge(sizes, on=group_by_cols, how="left")["__rows__"]
+                thin = shown[shown < MIN_RELIABLE_SAMPLE]
+                if not thin.empty:
+                    note = sample_warning(int(thin.min()), count=int(thin.shape[0]))
 
             # ---- sanitize to JSON-friendly records ----
             records = out.to_dict(orient="records")
@@ -370,7 +401,10 @@ class AggregateTool(Tool):
                 f"{wc2}:{op2_filter or 'eq'}:{value2}" if (wc2 and value2 is not None) else None,
             )
 
-            return {"kind": "table", "data": safe_records}
+            payload: dict[str, Any] = {"kind": "table", "data": safe_records}
+            if note:
+                payload["note"] = note
+            return payload
 
         except Exception as e:
             logger.exception("event=tool_call_failed")
