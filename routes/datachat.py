@@ -12,6 +12,7 @@ from datachat.dataset_loader import load_csv_to_dataframe
 from datachat.sql_datasource import get_datasource as get_sql_datasource
 from datachat.output_normalizer import normalize_datachat_response
 from datachat.engine_output_adapter import adapt_engine_output, consume_adapter_fallback_used
+from datachat.result_provenance import lookup_trusted_result
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult
 from utils.logging_config import get_request_id
@@ -387,7 +388,9 @@ def dataChat() -> Response | tuple[Response, int]:
         )
 
         try:
-            response_dict = normalize_datachat_response(response)
+            response_dict = normalize_datachat_response(
+                response, trusted=lookup_trusted_result(response)
+            )
         except RuntimeError as e:
             _logger.info(
                 "datachat_request_end request_id=%s status=error http_status=500 duration_ms_total=%.2f user=%s engine=%s response_kind=%s error_code=NORMALIZE_FAILED",

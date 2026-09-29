@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.result_provenance import record_trusted_result
 from datachat.tools.limits import (
     MIN_RELIABLE_SAMPLE,
     InvalidLimit,
@@ -412,7 +413,7 @@ class AggregateTool(Tool):
             payload: dict[str, Any] = {"kind": "table", "data": safe_records}
             if note:
                 payload["note"] = note
-            return payload
+            return record_trusted_result(payload, note=note)
 
         except InvalidLimit as e:
             return invalid_limit_error(e)
