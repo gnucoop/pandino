@@ -13,7 +13,8 @@ from datachat.dataset_loader import load_csv_to_dataframe
 from datachat.sql_datasource import get_datasource as get_sql_datasource
 from datachat.output_normalizer import TableExporter, normalize_datachat_response
 from datachat.engine_output_adapter import adapt_engine_output, consume_adapter_fallback_used
-from datachat.result_provenance import lookup_trusted_result
+from datachat.chart_registry import get_recorded_charts
+from datachat.result_provenance import TrustedResult, lookup_trusted_result
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult
 from utils.logging_config import get_request_id
@@ -45,6 +46,29 @@ def _table_exporter(api_key: str) -> TableExporter:
         }
 
     return export
+
+
+def _attach_recorded_charts(
+    response_dict: dict[str, Any], trusted: Optional[TrustedResult]
+) -> dict[str, Any]:
+    """
+    Add the charts the chart tool recorded in this request as ``charts``.
+
+    Whatever ``charts`` the agent wrote into its answer is dropped: only
+    backend-recorded specs are sent. ``note`` stays a single trusted caveat:
+    the primary result's when it has one, otherwise the first charted table's.
+    """
+    response_dict.pop("charts", None)
+    recorded = get_recorded_charts()
+    if not recorded:
+        return response_dict
+
+    response_dict["charts"] = [chart.spec for chart in recorded]
+    if trusted is None or not trusted.note:
+        chart_note = next((chart.note for chart in recorded if chart.note), None)
+        if chart_note:
+            response_dict["note"] = chart_note
+    return response_dict
 
 
 @datachat_bp.route("/enddatachat", methods=["POST"])
@@ -437,10 +461,11 @@ def dataChat() -> Response | tuple[Response, int]:
             adapter_fallback_used,
         )
 
+        trusted = lookup_trusted_result(response)
         try:
             response_dict = normalize_datachat_response(
                 response,
-                trusted=lookup_trusted_result(response),
+                trusted=trusted,
                 exporter=_table_exporter(api_key),
             )
         except RuntimeError as e:
@@ -453,6 +478,8 @@ def dataChat() -> Response | tuple[Response, int]:
                 response_kind or "unknown",
             )
             return jsonify({"error": str(e)}), 500
+
+        response_dict = _attach_recorded_charts(response_dict, trusted)
 
         # Spends User's tokens
         edit_tokens(user_email, -int(config.datachat_token_cost))

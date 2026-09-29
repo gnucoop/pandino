@@ -26,6 +26,7 @@ EXPECTED_TOOLS = [
     "crosstab",
     "plot",
     "trend",
+    "chart",
 ]
 
 

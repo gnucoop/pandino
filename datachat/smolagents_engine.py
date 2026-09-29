@@ -18,6 +18,7 @@ from datachat.bootstrap_static import get_static_bootstrap_html
 from datachat.engine_interface import DataChatEngine, EngineBootstrapResult
 from datachat.sql_datasource import SqlDatasource
 from datachat.tools.aggregate_tool import AggregateTool
+from datachat.tools.chart_tool import ChartTool
 from datachat.tools.correlation_tool import CorrelationTool
 from datachat.tools.crosstab_tool import CrosstabTool
 from datachat.tools.describe_tool import DescribeTool
@@ -100,6 +101,24 @@ _SQL_ADDENDUM_DEFAULT = textwrap.dedent(
 
     The final-answer rules stated above are unchanged: sql_engine already returns
     a valid table payload and can be passed to final_answer as it is.
+    """
+)
+
+# Appended to the system instructions only when the chart tool is registered,
+# that is when a dataframe is loaded (see _data_tools()).
+_CHART_ADDENDUM = textwrap.dedent(
+    """\
+    CHARTS
+    - The chart tool attaches a chart to your answer; you still finish with a normal
+      final answer (usually kind="text" commenting on the chart). Never write chart
+      data into the final answer yourself.
+    - Distribution of one column: chart(kind="bar", x="<column>") counts the rows per value.
+    - Two numeric columns: chart(kind="scatter", x="<column>", y="<column>").
+    - A metric per group (mean, sum, ...): call aggregate first, then
+      chart(kind="bar", x="<group column>", y="<value column>", data=result["data"]).
+    - A count split by a second column: aggregate(group_by=["<x>", "<series>"], op="count"),
+      then chart(kind="bar", x="<x>", y="count", series_by="<series>", data=result["data"]).
+    - Box and hexbin plots are only available as images through the plot tool.
     """
 )
 
@@ -430,6 +449,8 @@ class SmolagentsEngine(DataChatEngine):
 
         template = load_prompt("data_chat_system", default_text=default_context)
         instructions = render_prompt(template, columns=cols)
+        if self.data is not None:
+            instructions = instructions + "\n\n" + _CHART_ADDENDUM
 
         # Gate: with no datasource nothing SQL is appended and no reflection is
         # attempted, so the agent is exactly what it is with SQL disabled.
@@ -491,6 +512,7 @@ class SmolagentsEngine(DataChatEngine):
             CrosstabTool(datasource),
             PlotTool(datasource, output_dir=self._plots_dir or os.getenv("DATACHAT_PLOTS_DIR", "/tmp/datachat_plots")),
             TrendTool(datasource),
+            ChartTool(datasource),
         ]
 
     def _sql_tools(self, datasource: Optional[SqlDatasource] = None) -> list[Any]:
