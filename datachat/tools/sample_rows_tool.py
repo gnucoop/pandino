@@ -89,7 +89,7 @@ class SampleRowsTool(Tool):
         "columns": {
             "type": "array",
             "description": (
-                "Optional list of columns to include. If omitted, a subset will be chosen."
+                "Optional list of columns to include. If omitted, all columns are included."
             ),
             "items": {"type": "string"},
             "nullable": True,
@@ -158,16 +158,8 @@ class SampleRowsTool(Tool):
             # -----------------------------
             # Column selection
             # -----------------------------
-            if columns:
-                cols = [c for c in columns if c in df.columns]
-                if cols:
-                    df_view = df[cols]
-                else:
-                    df_view = df
-            else:
-                # If we're sampling from upstream tool output, it's usually already small/curated,
-                # so keep all columns. If sampling from the session dataset, keep it compact.
-                df_view = df if is_upstream else df[list(df.columns)[:10]]
+            cols = [c for c in (columns or []) if c in df.columns]
+            df_view = df[cols] if cols else df
 
             # -----------------------------
             # Pagination then sample

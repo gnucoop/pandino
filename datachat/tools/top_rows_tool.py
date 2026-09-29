@@ -123,7 +123,7 @@ class TopRowsTool(Tool):
         },
         "columns": {
             "type": "array",
-            "description": "Optional list of columns to include. If omitted, a subset will be chosen.",
+            "description": "Optional list of columns to include. If omitted, all columns are included.",
             "items": {"type": "string"},
             "nullable": True,
         },
@@ -203,13 +203,8 @@ class TopRowsTool(Tool):
                 return {"kind": "error", "message": f"Invalid sort_by column: {sort_by_clean}", "code": "INVALID_SORT_COLUMN"}
 
             # --- choose columns to return ---
-            if columns:
-                chosen = [c for c in columns if c in df.columns]
-                df_view = df[chosen] if chosen else df
-            else:
-                # If we're operating on tool-produced data, keep all columns (already "small").
-                # If session dataset, cap to first 10 columns for safety.
-                df_view = df if data is not None else df[list(df.columns)[:10]]
+            chosen = [c for c in (columns or []) if c in df.columns]
+            df_view = df[chosen] if chosen else df
 
             # --- sorting (robust) ---
             sort_key = _coerce_sort_key(df[sort_by_clean])

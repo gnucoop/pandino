@@ -63,13 +63,6 @@ def test_aggregate_invalid_second_column(sales_df):
     assert out["code"] == "INVALID_GROUP_BY"
 
 
-def test_aggregate_limits_unchanged():
-    df = pd.DataFrame({"g": [f"g{i}" for i in range(80)], "v": range(80)})
-    tool = AggregateTool(df)
-    assert len(tool.forward(group_by="g", op="count")["data"]) == 10  # default n
-    assert len(tool.forward(group_by="g", op="count", n=500)["data"]) == 50  # max
-
-
 def test_small_sample_note_for_mean(sales_df):
     out = AggregateTool(sales_df).forward(group_by="region", op="mean", metric="amount")
     note = out["note"]
@@ -219,16 +212,6 @@ def test_eq_none_and_empty_string_semantics_unchanged(text_df):
 def test_eq_existing_behaviour(text_df):
     out = FilterRowsTool(text_df).forward(where_col="comment", value="orario scomodo")
     assert _ids(out) == [1]
-
-
-def test_filter_limits_and_projection_unchanged():
-    df = pd.DataFrame({f"c{i}": range(100) for i in range(15)})
-    tool = FilterRowsTool(df)
-    out = tool.forward(where_col="c0", op="is_not_empty")
-    assert len(out["data"]) == 5  # default n
-    assert list(out["data"][0].keys()) == [f"c{i}" for i in range(10)]  # default projection
-    assert out["meta"]["total_matches"] == 100
-    assert len(tool.forward(where_col="c0", op="is_not_empty", n=500)["data"]) == 50  # max
 
 
 # ---------------------------------------------------------------------------

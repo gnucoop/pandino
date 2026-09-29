@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.tools.limits import InvalidLimit, invalid_limit_error, optional_limit
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +153,7 @@ class FilterRowsTool(Tool):
         "Supports equality, numeric comparisons (lt, lte, gt, gte), "
         "'is_empty'/'is_not_empty' (column missing/blank or filled in; no value needed) and "
         "'contains'/'not_contains' (case-insensitive literal substring search in text). "
-        "Returns a table of matching rows."
+        "Returns all matching rows with all columns unless `n` or `columns` is given."
     )
     output_type = "object"
 
@@ -205,7 +206,7 @@ class FilterRowsTool(Tool):
 
         "n": {
             "type": "integer",
-            "description": "Max number of rows to return (max 50).",
+            "description": "Optional max number of rows to return. If omitted, all matching rows are returned.",
             "nullable": True,
         },
         "offset": {
@@ -215,7 +216,7 @@ class FilterRowsTool(Tool):
         },
         "columns": {
             "type": "array",
-            "description": "Optional list of columns to include.",
+            "description": "Optional list of columns to include. If omitted, all columns are included.",
             "items": {"type": "string"},
             "nullable": True,
         },
@@ -234,7 +235,7 @@ class FilterRowsTool(Tool):
         where_col2: Optional[str] = None,
         op2: Optional[str] = None,
         value2: Optional[Any] = None,
-        n: Optional[int] = 5,
+        n: Optional[int] = None,
         offset: Optional[int] = None,
         columns: Optional[list[str]] = None,
     ) -> dict[str, Any]:
@@ -263,15 +264,11 @@ class FilterRowsTool(Tool):
                     "code": "INVALID_FILTER_COLUMN",
                 }
 
-            n_int = max(1, min(int(n or 5), 50))
+            limit = optional_limit(n)
             offset_int = max(0, int(offset or 0))
 
-            # Choose columns
-            if columns:
-                chosen = [c for c in columns if c in df.columns]
-                df_view = df[chosen] if chosen else df
-            else:
-                df_view = df[list(df.columns)[:10]]  # keep small by default
+            chosen = [c for c in (columns or []) if c in df.columns]
+            df_view = df[chosen] if chosen else df
 
             allowed_ops = {"eq", "lt", "lte", "gt", "gte"} | _VALUELESS_OPS | _TEXT_OPS
 
@@ -412,7 +409,8 @@ class FilterRowsTool(Tool):
             filtered_all = df_view[mask_final]
             total_matches = int(mask_final.sum())
 
-            filtered = filtered_all.iloc[offset_int : offset_int + n_int]
+            end = offset_int + limit if limit is not None else None
+            filtered = filtered_all.iloc[offset_int:end]
 
             records = filtered.to_dict(orient="records")
 
@@ -432,7 +430,7 @@ class FilterRowsTool(Tool):
                 where_col2_clean or None,
                 (op2 or "eq") if second_active else None,
                 value2 if second_active else None,
-                n_int,
+                limit,
                 len(safe_records),
             )
 
@@ -446,6 +444,8 @@ class FilterRowsTool(Tool):
                 },
             }
 
+        except InvalidLimit as e:
+            return invalid_limit_error(e)
         except Exception as e:
             logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

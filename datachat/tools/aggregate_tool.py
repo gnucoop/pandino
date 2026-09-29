@@ -5,7 +5,13 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
-from datachat.tools.limits import MIN_RELIABLE_SAMPLE, sample_warning
+from datachat.tools.limits import (
+    MIN_RELIABLE_SAMPLE,
+    InvalidLimit,
+    invalid_limit_error,
+    optional_limit,
+    sample_warning,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +41,12 @@ def _to_json_scalar(value: Any) -> Any:
     return str(value)
 
 
+class _FilterError(Exception):
+    def __init__(self, message: str, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 def _apply_single_filter(
     df: pd.DataFrame,
     *,
@@ -48,16 +60,20 @@ def _apply_single_filter(
     Supported ops: eq, lt, lte, gt, gte
     - eq: case-insensitive string match; supports bool strings "true"/"false"
     - comparisons: numeric comparisons (value must be numeric-coercible)
+
+    Raises _FilterError when the filter cannot be applied as requested.
     """
     where_col_clean = (where_col or "").strip()
     if not where_col_clean or where_col_clean not in df.columns:
-        # Conservative: invalid filter column -> no filtering
-        return df
+        raise _FilterError(f"Invalid filter column: {where_col}", "INVALID_FILTER_COLUMN")
 
     op_clean = (op or "eq").strip().lower()
     allowed_ops = {"eq", "lt", "lte", "gt", "gte"}
     if op_clean not in allowed_ops:
-        return df
+        raise _FilterError(f"Invalid filter operation: {op_clean}", "INVALID_FILTER_OP")
+
+    if value is None:
+        raise _FilterError(f"A filter value is required for column '{where_col_clean}'.", "MISSING_FILTER_VALUE")
 
     s = df[where_col_clean]
 
@@ -67,8 +83,10 @@ def _apply_single_filter(
         try:
             v_num = float(value)
         except Exception:
-            # Cannot apply numeric comparison -> no filtering
-            return df
+            raise _FilterError(
+                f"Value '{value}' is not numeric and cannot be used with '{op_clean}'.",
+                "NON_NUMERIC_VALUE",
+            ) from None
 
         if op_clean == "lt":
             mask = s_num < v_num
@@ -126,7 +144,7 @@ class AggregateTool(Tool):
     description = (
         "Group rows by one or two columns and apply an aggregation (count, mean, sum, etc.). "
         "Works on the full dataset or on a subset passed via `data`. "
-        "Returns a small table suitable for further filtering, sorting, plotting, or counting."
+        "Returns all groups unless `n` is given; suitable for further filtering, sorting, plotting, or counting."
     )
     output_type = "object"
 
@@ -159,7 +177,7 @@ class AggregateTool(Tool):
         },
         "n": {
             "type": "integer",
-            "description": "Max number of result rows to return (max 50).",
+            "description": "Optional max number of groups to return (top-N by the sort order). If omitted, all groups are returned.",
             "nullable": True,
         },
         "ascending": {
@@ -171,7 +189,7 @@ class AggregateTool(Tool):
         # --- NEW: optional pre-aggregation filter #1 ---
         "where_col": {
             "type": "string",
-            "description": "Optional filter column applied before aggregation.",
+            "description": "Optional filter column applied before aggregation (requires `value`).",
             "nullable": True,
         },
         "op_filter": {
@@ -188,7 +206,7 @@ class AggregateTool(Tool):
         # --- NEW: optional pre-aggregation filter #2 (AND) ---
         "where_col2": {
             "type": "string",
-            "description": "Optional second filter column (AND).",
+            "description": "Optional second filter column (AND, requires `value2`).",
             "nullable": True,
         },
         "op2_filter": {
@@ -213,7 +231,7 @@ class AggregateTool(Tool):
         op: str,
         metric: Optional[str] = None,
         data: list[dict[str, Any]] | None = None,
-        n: Optional[int] = 10,
+        n: Optional[int] = None,
         ascending: Optional[bool] = False,
         where_col: Optional[str] = None,
         op_filter: Optional[str] = None,
@@ -285,8 +303,7 @@ class AggregateTool(Tool):
                     "code": "INVALID_OP",
                 }
 
-            n_default = 10
-            n_int = max(1, min(int(n if n is not None else n_default), 50))
+            limit = optional_limit(n)
             asc = bool(ascending) if ascending is not None else False
 
             # -----------------------------
@@ -295,22 +312,13 @@ class AggregateTool(Tool):
             df_work = df
 
             wc1 = (where_col or "").strip()
-            if wc1 and value is not None:
-                df_work = _apply_single_filter(
-                    df_work,
-                    where_col=wc1,
-                    op=(op_filter or "eq"),
-                    value=value,
-                )
-
             wc2 = (where_col2 or "").strip()
-            if wc2 and value2 is not None:
-                df_work = _apply_single_filter(
-                    df_work,
-                    where_col=wc2,
-                    op=(op2_filter or "eq"),
-                    value=value2,
-                )
+            try:
+                for col, op_f, val in ((wc1, op_filter, value), (wc2, op2_filter, value2)):
+                    if col or val is not None:
+                        df_work = _apply_single_filter(df_work, where_col=col, op=(op_f or "eq"), value=val)
+            except _FilterError as e:
+                return {"kind": "error", "message": str(e), "code": e.code}
 
             if df_work.empty:
                 logger.info(
@@ -366,7 +374,7 @@ class AggregateTool(Tool):
                 out = out.rename(columns={metric_clean: value_col})
 
             # ---- sort + trim ----
-            out = out.sort_values(by=value_col, ascending=asc, na_position="last").head(n_int)
+            out = out.sort_values(by=value_col, ascending=asc, na_position="last").iloc[:limit]
 
             # ---- small-sample caveat (non-count only), judged on the groups returned ----
             note = None
@@ -395,7 +403,7 @@ class AggregateTool(Tool):
                 group_by_clean,
                 op_clean,
                 metric_clean,
-                n_int,
+                limit,
                 asc,
                 f"{wc1}:{op_filter or 'eq'}:{value}" if (wc1 and value is not None) else None,
                 f"{wc2}:{op2_filter or 'eq'}:{value2}" if (wc2 and value2 is not None) else None,
@@ -406,6 +414,8 @@ class AggregateTool(Tool):
                 payload["note"] = note
             return payload
 
+        except InvalidLimit as e:
+            return invalid_limit_error(e)
         except Exception as e:
             logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

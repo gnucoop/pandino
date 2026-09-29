@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.tools.limits import InvalidLimit, invalid_limit_error, optional_limit
 
 logger = logging.getLogger(__name__)
 
@@ -26,9 +27,9 @@ class UniqueValuesTool(Tool):
 
     name = "unique_values"
     description = (
-        "Return distinct values of a specified column with their counts. "
+        "Return distinct values of a specified column with their counts, most frequent first. "
         "Supports execution on the session dataset or on provided table data. "
-        "Returns a table."
+        "Returns all distinct values unless `n` is given."
     )
     output_type = "object"
 
@@ -48,7 +49,7 @@ class UniqueValuesTool(Tool):
         },        
         "n": {
             "type": "integer",
-            "description": "Max number of unique values to return (max 50).",
+            "description": "Optional max number of values to return (top-N by count). If omitted, all distinct values are returned.",
             "nullable": True,
         },
     }
@@ -61,7 +62,7 @@ class UniqueValuesTool(Tool):
         self,
         column: str,
         data: list[dict[str, Any]] | None = None,
-        n: Optional[int] = 20,
+        n: Optional[int] = None,
     ) -> dict[str, Any]:
         
         try:
@@ -96,17 +97,19 @@ class UniqueValuesTool(Tool):
             if col not in df.columns:
                 return {"kind": "error", "message": f"Invalid column: {col}", "code": "INVALID_COLUMN"}
 
-            n_int = max(1, min(int(n or 20), 50))
+            limit = optional_limit(n)
 
             s = df[col].dropna()
-            vc = s.value_counts().head(n_int)
+            vc = s.value_counts().iloc[:limit]
             records = [{"value": _to_json_scalar(idx), "count": _to_json_scalar(int(cnt))} for idx, cnt in vc.items()]
 
             records = replace_nan(records)
 
-            logger.info("event=tool_call_result col=%s n=%s", col, n_int)
+            logger.info("event=tool_call_result col=%s n=%s", col, limit)
             return {"kind": "table", "data": records}
 
+        except InvalidLimit as e:
+            return invalid_limit_error(e)
         except Exception as e:
             logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

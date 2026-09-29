@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.tools.limits import InvalidLimit, invalid_limit_error, optional_limit
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,7 @@ class TrendTool(Tool):
     description = (
         "Compute a time trend by grouping rows on a date column using day, week, or month buckets. "
         "Works on the full dataset or on a subset passed via `data`. "
-        "Returns a small table usable for comparisons or plotting."
+        "Returns the full period series unless `n` is given; usable for comparisons or plotting."
     )
     output_type = "object"
 
@@ -134,7 +135,7 @@ class TrendTool(Tool):
         },
         "n": {
             "type": "integer",
-            "description": "Max number of periods to return (max 50).",
+            "description": "Optional max number of periods to return, taken after sorting. If omitted, all periods are returned.",
             "nullable": True,
         },
         "ascending": {
@@ -165,7 +166,7 @@ class TrendTool(Tool):
         metric: Optional[str] = None,
         start: Optional[Any] = None,
         end: Optional[Any] = None,
-        n: Optional[int] = 50,
+        n: Optional[int] = None,
         ascending: Optional[bool] = True,
         include_empty: Optional[bool] = False,
     ) -> dict[str, Any]:
@@ -221,7 +222,7 @@ class TrendTool(Tool):
                 if metric_clean not in df.columns:
                     return {"kind": "error", "message": f"Invalid metric column: {metric_clean}", "code": "INVALID_METRIC"}
 
-            n_int = max(1, min(int(n if n is not None else 50), 50))
+            limit = optional_limit(n)
             asc = bool(ascending) if ascending is not None else True
             keep_empty = bool(include_empty) if include_empty is not None else False
 
@@ -304,7 +305,7 @@ class TrendTool(Tool):
             out["period"] = out["period_dt"].apply(lambda x: _format_period(pd.Timestamp(x), freq))
             out = out.drop(columns=["period_dt"], errors="ignore")
 
-            out = out.sort_values(by="period", ascending=asc).head(n_int)
+            out = out.sort_values(by="period", ascending=asc).iloc[:limit]
 
             records = out[["period", value_col]].to_dict(orient="records")
             safe_records: list[dict[str, Any]] = []
@@ -321,13 +322,15 @@ class TrendTool(Tool):
                 metric_clean,
                 start_ts.isoformat() if start_ts is not None else None,
                 end_ts.isoformat() if end_ts is not None else None,
-                n_int,
+                limit,
                 len(safe_records),
                 keep_empty,
             )
 
             return {"kind": "table", "data": safe_records}
 
+        except InvalidLimit as e:
+            return invalid_limit_error(e)
         except Exception as e:
             logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

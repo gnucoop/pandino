@@ -15,6 +15,22 @@ import matplotlib.pyplot as plt
 logger = logging.getLogger(__name__)
 
 
+def _pie_slices(totals: pd.Series, n: int) -> tuple[list[str], list[float]]:
+    """
+    Largest n categories as pie slices, with the rest folded into one "Other"
+    slice so every percentage is relative to the full total.
+    """
+    ordered = totals.sort_values(ascending=False)
+    shown = ordered.head(n)
+    labels = [str(v) for v in shown.index.tolist()]
+    values = [float(v) for v in shown.tolist()]
+    rest = ordered.iloc[n:]
+    if not rest.empty:
+        labels.append(f"Other ({len(rest)} categories)")
+        values.append(float(rest.sum()))
+    return labels, values
+
+
 class PlotTool(Tool):
     """
     Smolagents tool: generate a simple plot from a bound DataFrame and save it to a PNG file.
@@ -97,7 +113,10 @@ class PlotTool(Tool):
         },
         "n": {
             "type": "integer",
-            "description": "Max number of categories for bar/pie/box-grouped (max 50).",
+            "description": (
+                "Max number of categories for bar/pie/box-grouped (max 50). "
+                "For pie, the remaining categories are grouped into one 'Other' slice."
+            ),
             "nullable": True,
         },
         "bins": {
@@ -636,17 +655,9 @@ class PlotTool(Tool):
             elif kind_clean == "pie":
                 if not y_clean:
                     # composition as counts by category (agg ignored)
-                    counts = (
-                        df.groupby(x_clean, dropna=False)
-                        .size()
-                        .sort_values(ascending=False)
-                        .head(n_int)
-                    )
-                    labels = [str(v) for v in counts.index.tolist()]
-                    
-                    values = counts.to_numpy(dtype=float, copy=False)
+                    labels, values = _pie_slices(df.groupby(x_clean, dropna=False).size(), n_int)
 
-                    if values.size == 0 or float(np.sum(values)) == 0.0:
+                    if not values or sum(values) == 0:
                         return _err(f"Column '{x_clean}' has no values to compute pie counts.", "EMPTY_RESULT")
 
                     plt.pie(values, labels=labels, autopct="%1.1f%%")
@@ -658,15 +669,10 @@ class PlotTool(Tool):
                     if tmp.empty or tmp[y_clean].notna().sum() == 0:
                         return _err(f"Column '{y_clean}' has no numeric values for pie sum.", "NO_NUMERIC_DATA")
 
-                    sums = (
-                        tmp.groupby(x_clean, dropna=False)[y_clean]
-                        .sum()
-                        .sort_values(ascending=False)
-                        .head(n_int)
-                    )
-
-                    labels = [str(v) for v in sums.index.tolist()]
-                    values = sums.values.tolist()
+                    totals = tmp.groupby(x_clean, dropna=False)[y_clean].sum()
+                    if (totals < 0).any():
+                        return _err(f"Pie requires non-negative sums of '{y_clean}' per category.", "NEGATIVE_VALUES")
+                    labels, values = _pie_slices(totals, n_int)
 
                     if not values or sum(values) == 0:
                         return _err(f"Sum of '{y_clean}' by '{x_clean}' is empty or zero.", "EMPTY_RESULT")
