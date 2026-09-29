@@ -14,11 +14,12 @@ from datachat.sql_datasource import get_datasource as get_sql_datasource
 from datachat.output_normalizer import TableExporter, normalize_datachat_response
 from datachat.engine_output_adapter import adapt_engine_output, consume_adapter_fallback_used
 from datachat.chart_registry import get_recorded_charts
+from datachat.provider_contributions import get_provider_contributions
 from datachat.result_provenance import TrustedResult, lookup_trusted_result
 from utils.agent_serialization import serialize_runresult
 from utils.agent_logging import log_runresult
 from utils.logging_config import get_request_id
-from usage.recording import record_token_consumption
+from usage.recording import record_additional_token_consumption, record_token_consumption
 from usage.request_state import get_usage_log_id
 from config import PROVIDER_API_KEY_MAP
 from routes.utils import assert_valid_api_key
@@ -69,6 +70,41 @@ def _attach_recorded_charts(
         if chart_note:
             response_dict["note"] = chart_note
     return response_dict
+
+
+def _flush_provider_contributions(user_email: str) -> None:
+    """
+    Persist each provider call a tool made during this run as its own Usage row.
+
+    Additional rows only: the response-facing ``log_id`` keeps naming the
+    CodeAgent row. Fail-open like the primary recording.
+    """
+    contributions = get_provider_contributions()
+    if not contributions:
+        return
+
+    try:
+        user = get_user_by_username(user_email)
+    except Exception as exc:
+        logger.warning(
+            "event=datachat_usage_user_lookup_failed error_type=%s",
+            type(exc).__name__,
+        )
+        return
+    user_id = user.get("id") if user else None
+    if not isinstance(user_id, int):
+        return
+
+    # The writer logs its own failures; one failed row does not stop the rest.
+    for contribution in contributions:
+        record_additional_token_consumption(
+            user_id=user_id,
+            provider=contribution.provider,
+            model=contribution.model,
+            service="/datachat",
+            token_input=contribution.token_input,
+            token_output=contribution.token_output,
+        )
 
 
 @datachat_bp.route("/enddatachat", methods=["POST"])
@@ -353,6 +389,9 @@ def dataChat() -> Response | tuple[Response, int]:
         chat_started = time.time()
 
         response = engine.chat(chat)
+
+        # Tool-side provider calls were consumed even when the run failed.
+        _flush_provider_contributions(user_email)
 
         response_kind = response.get("kind") if isinstance(response, dict) else None
 
