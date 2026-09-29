@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from flask import Blueprint, Response, jsonify, request, current_app
 
-from infrastructure.agent_manager import getAgent, createAgent, deleteAgent
+from infrastructure.agent_manager import getAgent, createAgent, deleteAgent, try_acquire_run, release_run
 from infrastructure.ai import choose_llm
 from infrastructure.database_pg import edit_tokens, get_user_by_username, get_user_tokens
 from datachat.dataset_loader import load_csv_to_dataframe
@@ -228,174 +228,198 @@ def dataChat() -> Response | tuple[Response, int]:
         )
         return jsonify({"error": "Agent not active for this Api Key"}), 400
 
-    # Checks if the User's tokens are enough for this operation
-
-    user_tokens = get_user_tokens(user_email)
-
-    if user_tokens is None:
+    # Only one run per engine: a concurrent request is rejected, not queued.
+    # Taken before the balance read so it cannot see a balance that the
+    # active run is about to debit.
+    if not try_acquire_run(engine):
         _logger.info(
-            "datachat_request_end request_id=%s status=error http_status=500 duration_ms_total=%.2f user=%s engine=%s error_code=USER_TOKENS_NOT_FOUND",
+            "datachat_request_end request_id=%s status=error http_status=409 duration_ms_total=%.2f user=%s engine=%s error_code=SESSION_BUSY",
             request_id,
             (time.time() - request_started) * 1000,
             user_email,
             engine_name,
         )
-        return jsonify({"error": "Could not retrieve user tokens"}), 500
-
-    if int(config.datachat_token_cost) > user_tokens:
-        _logger.info(
-            "datachat_request_end request_id=%s status=error http_status=500 duration_ms_total=%.2f user=%s engine=%s error_code=NOT_ENOUGH_TOKENS",
-            request_id,
-            (time.time() - request_started) * 1000,
-            user_email,
-            engine_name,
+        return (
+            jsonify(
+                {
+                    "error": "session_busy",
+                    "message": "A request is already being processed for this session.",
+                }
+            ),
+            409,
         )
-        return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
-
-    # Perform the chat operation and get the response and explanation
-    chat_started = time.time()
-
-    response = engine.chat(chat)
-
-    response_kind = response.get("kind") if isinstance(response, dict) else None
-
-    _logger.info(
-        "datachat_engine_done request_id=%s user=%s engine=%s duration_ms=%.2f response_kind=%s",
-        request_id,
-        user_email,
-        engine_name,
-        (time.time() - chat_started) * 1000,
-        response_kind or "unknown",
-    )
-
-    trace = None
-    log_id: Optional[int] = None
-    structured_log_ok = False
-    db_log_ok = False
-    if hasattr(engine, "get_last_trace"):
-        try:
-            trace = engine.get_last_trace()  # type: ignore[attr-defined]
-        except Exception as e:
-            logger.warning("event=datachat_trace_read_failed error=%s", e)
-
-    trace_payload: Optional[dict[str, Any]] = None
-    if isinstance(trace, dict) and trace.get("run_result") is not None:
-        try:
-            trace_payload = serialize_runresult(trace["run_result"])
-            if isinstance(trace_payload.get("metrics"), dict):
-                trace_payload["metrics"]["duration_ms"] = trace.get("duration_ms")
-        except Exception as e:
-            logger.error("event=datachat_trace_serialize_failed error=%s", e)
-
-    if trace_payload is not None:
-        try:
-            log_runresult(
-                trace["run_result"],
-                user=user_email,
-                namespace="datachat",
-                language="N/A",
-                question=str(chat),
-                extra={
-                    "channel": "datachat",
-                    "response_kind": response_kind,
-                },
-            )
-            structured_log_ok = True
-        except Exception as e:
-            logger.error("event=datachat_structured_log_failed error=%s", e)
-
-        # === DATABASE TOKEN USAGE LOGGING ===
-
-        # The accounting-side user lookup is not a prerequisite of the
-        # DataChat response: a failure here skips recording and leaves the
-        # response, the engine state and the token debit untouched. Only the
-        # exception type is named, never the username or the message.
-        try:
-            user = get_user_by_username(user_email)
-        except Exception as exc:
-            logger.warning(
-                "event=datachat_usage_user_lookup_failed error_type=%s",
-                type(exc).__name__,
-            )
-            user = None
-
-        if user:
-            user_id = user.get("id")
-
-            # The serialized runtime reports absent token counts as None; a
-            # zero pair is a real observation and is recorded as one.
-            token_metrics = trace_payload.get("metrics", {}).get("token_usage", {})
-            token_input = token_metrics.get("input") or 0
-            token_output = token_metrics.get("output") or 0
-
-            if isinstance(user_id, int):
-                db_log_ok = record_token_consumption(
-                    user_id=user_id,
-                    provider=config.models.datachat_provider,
-                    model=config.models.datachat_model,
-                    service="/datachat",
-                    token_input=token_input,
-                    token_output=token_output,
-                )
-
-                if db_log_ok:
-                    # Preserve the existing response contract without exposing
-                    # row identity through the recording API.
-                    log_id = get_usage_log_id()
-
-    _logger.info(
-        "datachat_trace_status request_id=%s user=%s engine=%s trace_present=%s structured_log_ok=%s db_log_ok=%s log_id=%s",
-        request_id,
-        user_email,
-        engine_name,
-        bool(trace_payload is not None),
-        structured_log_ok,
-        db_log_ok,
-        log_id if log_id is not None else "none",
-    )
-
-    response = adapt_engine_output(response)
-    adapter_fallback_used = consume_adapter_fallback_used()
-    _logger.info(
-        "datachat_adapter_status request_id=%s user=%s engine=%s adapter_fallback_used=%s",
-        request_id,
-        user_email,
-        engine_name,
-        adapter_fallback_used,
-    )
 
     try:
-        response_dict = normalize_datachat_response(response)
-    except RuntimeError as e:
+        # Checks if the User's tokens are enough for this operation
+
+        user_tokens = get_user_tokens(user_email)
+
+        if user_tokens is None:
+            _logger.info(
+                "datachat_request_end request_id=%s status=error http_status=500 duration_ms_total=%.2f user=%s engine=%s error_code=USER_TOKENS_NOT_FOUND",
+                request_id,
+                (time.time() - request_started) * 1000,
+                user_email,
+                engine_name,
+            )
+            return jsonify({"error": "Could not retrieve user tokens"}), 500
+
+        if int(config.datachat_token_cost) > user_tokens:
+            _logger.info(
+                "datachat_request_end request_id=%s status=error http_status=500 duration_ms_total=%.2f user=%s engine=%s error_code=NOT_ENOUGH_TOKENS",
+                request_id,
+                (time.time() - request_started) * 1000,
+                user_email,
+                engine_name,
+            )
+            return jsonify({"error": "Not enough tokens", "user_tokens": user_tokens}), 500
+
+        # Perform the chat operation and get the response and explanation
+        chat_started = time.time()
+
+        response = engine.chat(chat)
+
+        response_kind = response.get("kind") if isinstance(response, dict) else None
+
         _logger.info(
-            "datachat_request_end request_id=%s status=error http_status=500 duration_ms_total=%.2f user=%s engine=%s response_kind=%s error_code=NORMALIZE_FAILED",
+            "datachat_engine_done request_id=%s user=%s engine=%s duration_ms=%.2f response_kind=%s",
+            request_id,
+            user_email,
+            engine_name,
+            (time.time() - chat_started) * 1000,
+            response_kind or "unknown",
+        )
+
+        trace = None
+        log_id: Optional[int] = None
+        structured_log_ok = False
+        db_log_ok = False
+        if hasattr(engine, "get_last_trace"):
+            try:
+                trace = engine.get_last_trace()  # type: ignore[attr-defined]
+            except Exception as e:
+                logger.warning("event=datachat_trace_read_failed error=%s", e)
+
+        trace_payload: Optional[dict[str, Any]] = None
+        if isinstance(trace, dict) and trace.get("run_result") is not None:
+            try:
+                trace_payload = serialize_runresult(trace["run_result"])
+                if isinstance(trace_payload.get("metrics"), dict):
+                    trace_payload["metrics"]["duration_ms"] = trace.get("duration_ms")
+            except Exception as e:
+                logger.error("event=datachat_trace_serialize_failed error=%s", e)
+
+        if trace_payload is not None:
+            try:
+                log_runresult(
+                    trace["run_result"],
+                    user=user_email,
+                    namespace="datachat",
+                    language="N/A",
+                    question=str(chat),
+                    extra={
+                        "channel": "datachat",
+                        "response_kind": response_kind,
+                    },
+                )
+                structured_log_ok = True
+            except Exception as e:
+                logger.error("event=datachat_structured_log_failed error=%s", e)
+
+            # === DATABASE TOKEN USAGE LOGGING ===
+
+            # The accounting-side user lookup is not a prerequisite of the
+            # DataChat response: a failure here skips recording and leaves the
+            # response, the engine state and the token debit untouched. Only the
+            # exception type is named, never the username or the message.
+            try:
+                user = get_user_by_username(user_email)
+            except Exception as exc:
+                logger.warning(
+                    "event=datachat_usage_user_lookup_failed error_type=%s",
+                    type(exc).__name__,
+                )
+                user = None
+
+            if user:
+                user_id = user.get("id")
+
+                # The serialized runtime reports absent token counts as None; a
+                # zero pair is a real observation and is recorded as one.
+                token_metrics = trace_payload.get("metrics", {}).get("token_usage", {})
+                token_input = token_metrics.get("input") or 0
+                token_output = token_metrics.get("output") or 0
+
+                if isinstance(user_id, int):
+                    db_log_ok = record_token_consumption(
+                        user_id=user_id,
+                        provider=config.models.datachat_provider,
+                        model=config.models.datachat_model,
+                        service="/datachat",
+                        token_input=token_input,
+                        token_output=token_output,
+                    )
+
+                    if db_log_ok:
+                        # Preserve the existing response contract without exposing
+                        # row identity through the recording API.
+                        log_id = get_usage_log_id()
+
+        _logger.info(
+            "datachat_trace_status request_id=%s user=%s engine=%s trace_present=%s structured_log_ok=%s db_log_ok=%s log_id=%s",
+            request_id,
+            user_email,
+            engine_name,
+            bool(trace_payload is not None),
+            structured_log_ok,
+            db_log_ok,
+            log_id if log_id is not None else "none",
+        )
+
+        response = adapt_engine_output(response)
+        adapter_fallback_used = consume_adapter_fallback_used()
+        _logger.info(
+            "datachat_adapter_status request_id=%s user=%s engine=%s adapter_fallback_used=%s",
+            request_id,
+            user_email,
+            engine_name,
+            adapter_fallback_used,
+        )
+
+        try:
+            response_dict = normalize_datachat_response(response)
+        except RuntimeError as e:
+            _logger.info(
+                "datachat_request_end request_id=%s status=error http_status=500 duration_ms_total=%.2f user=%s engine=%s response_kind=%s error_code=NORMALIZE_FAILED",
+                request_id,
+                (time.time() - request_started) * 1000,
+                user_email,
+                engine_name,
+                response_kind or "unknown",
+            )
+            return jsonify({"error": str(e)}), 500
+
+        # Spends User's tokens
+        edit_tokens(user_email, -int(config.datachat_token_cost))
+
+        response_payload: dict[str, Any] = {
+            "response": response_dict,
+            "explanation": None,
+        }
+        if log_id is not None:
+            response_payload["log_id"] = log_id
+
+        _logger.info(
+            "datachat_request_end request_id=%s status=ok http_status=200 duration_ms_total=%.2f user=%s engine=%s response_kind=%s adapter_fallback_used=%s log_id=%s",
             request_id,
             (time.time() - request_started) * 1000,
             user_email,
             engine_name,
             response_kind or "unknown",
+            adapter_fallback_used,
+            log_id if log_id is not None else "none",
         )
-        return jsonify({"error": str(e)}), 500
 
-    # Spends User's tokens
-    edit_tokens(user_email, -int(config.datachat_token_cost))
-
-    response_payload: dict[str, Any] = {
-        "response": response_dict,
-        "explanation": None,
-    }
-    if log_id is not None:
-        response_payload["log_id"] = log_id
-
-    _logger.info(
-        "datachat_request_end request_id=%s status=ok http_status=200 duration_ms_total=%.2f user=%s engine=%s response_kind=%s adapter_fallback_used=%s log_id=%s",
-        request_id,
-        (time.time() - request_started) * 1000,
-        user_email,
-        engine_name,
-        response_kind or "unknown",
-        adapter_fallback_used,
-        log_id if log_id is not None else "none",
-    )
-
-    return jsonify(response_payload)
+        return jsonify(response_payload)
+    finally:
+        release_run(engine)

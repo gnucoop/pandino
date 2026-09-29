@@ -1,9 +1,18 @@
+import threading
+
 from datachat.engine_factory import create_engine
 from datachat.engine_interface import DataChatEngine
 
 
 # Dictionary of active agents associated to an Api Key
 activeEngines: dict[str, DataChatEngine] = {}
+
+# Engines with a /datachat run in progress, keyed by id(engine) rather than by
+# Api Key or by the engine itself: SmolagentsEngine is a dataclass, so it is
+# unhashable and compares by fields. Holding the engine as the value keeps its
+# id from being reused while the run is active.
+_busyEngines: dict[int, DataChatEngine] = {}
+_busyLock = threading.Lock()
 
 
 # Retrieves an active agent associated with an Api Key
@@ -47,3 +56,17 @@ def deleteAgent(api_key, user_name) -> DataChatEngine | None:
 def listAgents():
     return {k: "engine_active" for k in activeEngines.keys()}
 
+
+# Marks an engine as running without waiting. Returns False if it is already busy.
+def try_acquire_run(engine: DataChatEngine) -> bool:
+    with _busyLock:
+        if id(engine) in _busyEngines:
+            return False
+        _busyEngines[id(engine)] = engine
+        return True
+
+
+# Clears the running mark of an engine. Safe to call from a finally block.
+def release_run(engine: DataChatEngine) -> None:
+    with _busyLock:
+        _busyEngines.pop(id(engine), None)
