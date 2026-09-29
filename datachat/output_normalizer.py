@@ -1,6 +1,6 @@
 import math
 import os
-from typing import Any, Optional
+from typing import Any, Callable, Iterable, Optional
 
 import pandas as pd
 
@@ -77,32 +77,45 @@ def _sanitize_table_records(
     return sanitized
 
 
-def _column_count(rows: list[Any]) -> int:
-    """Number of distinct column names across the dict rows."""
+# Receives the complete table (column names in order, then its rows) and
+# returns extra response fields, or None when nothing should be added.
+TableExporter = Callable[[list[str], Iterable[dict[str, Any]]], Optional[dict[str, Any]]]
+
+
+def _column_names(rows: list[Any]) -> list[str]:
+    """Distinct column names across the dict rows, in first-seen order."""
     columns: dict[str, None] = {}
     for row in rows:
         if isinstance(row, dict):
             columns.update(dict.fromkeys(str(k) for k in row))
-    return len(columns)
+    return list(columns)
+
+
+def _column_count(rows: list[Any]) -> int:
+    """Number of distinct column names across the dict rows."""
+    return len(_column_names(rows))
 
 
 def _table_response(
     data: list[Any],
     *,
-    result_columns: Optional[int] = None,
+    columns: Optional[list[str]] = None,
     trusted: Optional[TrustedResult] = None,
+    exporter: Optional[TableExporter] = None,
 ) -> dict[str, Any]:
     """
     Build a "dataframe" response whose value is a bounded preview of ``data``.
 
     The preview metadata describes the table handed to this function; it says
     nothing about how many rows the original source holds. Only ``trusted``
-    facts recorded by a tool can add source-level claims or a note.
+    facts recorded by a tool can add source-level claims or a note. When the
+    preview hides part of the table, ``exporter`` receives the whole of it.
     """
     value = replace_nan(_sanitize_table_records(data))
     result_rows = sum(1 for row in data if isinstance(row, dict))
-    if result_columns is None:
-        result_columns = _column_count(data)
+    if columns is None:
+        columns = _column_names(data)
+    result_columns = len(columns)
     preview_rows = len(value)
     preview_columns = _column_count(value)
     # With no rows nothing is hidden, even when the result names its columns.
@@ -122,6 +135,9 @@ def _table_response(
             response["more_rows_available"] = True
         if trusted.note:
             response["note"] = trusted.note
+    if response["truncated"] and exporter is not None:
+        rows = ({str(k): v for k, v in row.items()} for row in data if isinstance(row, dict))
+        response.update(exporter(columns, rows) or {})
     return response
 
 
@@ -133,6 +149,7 @@ def _table_response(
 def normalize_datachat_response(
     response: Any,
     trusted: Optional[TrustedResult] = None,
+    exporter: Optional[TableExporter] = None,
 ) -> dict[str, Any]:
     """
     Normalize outputs into the *exact* "response_dict" structure expected by Dino (AS-IS).
@@ -195,13 +212,14 @@ def normalize_datachat_response(
             if isinstance(data, pd.DataFrame):
                 return _table_response(
                     data.to_dict(orient="records"),
-                    result_columns=len(data.columns),
+                    columns=[str(c) for c in data.columns],
                     trusted=trusted,
+                    exporter=exporter,
                 )
 
             # Preferred: list-of-dicts (records)
             if isinstance(data, list):
-                return _table_response(data, trusted=trusted)
+                return _table_response(data, trusted=trusted, exporter=exporter)
 
             # Rare: dict (already structured). Keep as dict to avoid guessing shape.
             if isinstance(data, dict):
