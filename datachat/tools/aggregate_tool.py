@@ -331,6 +331,13 @@ class AggregateTool(Tool):
                 )
                 return {"kind": "table", "data": []}
 
+            # Group Categorical keys by their observed values: pandas would otherwise
+            # emit declared-but-unobserved categories and (on 1.5) drop missing keys
+            # despite dropna=False.
+            cat_cols = [c for c in group_by_cols if isinstance(df_work[c].dtype, pd.CategoricalDtype)]
+            if cat_cols:
+                df_work = df_work.astype({c: object for c in cat_cols})
+
             # ---- compute aggregation ----
             if op_clean == "count":
                 out = (
