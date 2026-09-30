@@ -159,3 +159,13 @@ def test_sentiment_description_says_null_is_not_neutral():
     assert "never 'neutral'" in description
     assert "prefer aggregate=True" in description
     assert "coverage note" in description
+
+
+def test_honesty_block_explains_the_agent_visible_partial_flag(df):
+    with _prompts(stored_system="Custom base prompt."):
+        text = _engine(df)._build_instructions(None)
+
+    honesty = text[text.index("ANALYTICAL HONESTY"):]
+    assert '"more_rows_available": true' in honesty
+    assert "incomplete source rows" in honesty
+    assert "only the retrieved rows" in honesty

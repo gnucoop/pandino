@@ -66,7 +66,15 @@ def record_trusted_result(
     more_rows_available: bool = False,
     note: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Record trusted facts for ``payload["data"]`` and return ``payload``."""
+    """
+    Record trusted facts for ``payload["data"]`` and return ``payload``.
+
+    A true ``more_rows_available`` is also written into ``payload`` so the agent
+    sees it on the tool result. That key is advisory only: trust is never read
+    back from it, only from this registry.
+    """
+    if more_rows_available:
+        payload["more_rows_available"] = True
     data = payload.get("data")
     registry = _registry()
     if registry is None or not isinstance(data, list):

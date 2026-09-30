@@ -143,6 +143,9 @@ _ANALYTICAL_HONESTY_ADDENDUM = textwrap.dedent(
     - A "note" in a tool result is a trusted caveat about that result (partial
       coverage, excluded rows, small groups, statistical limits). When it materially
       qualifies your conclusion, say so briefly in the answer; no need to quote it.
+    - "more_rows_available": true on a tool result means it was derived from
+      incomplete source rows: say the analysis covers only the retrieved rows,
+      unless you recomputed the answer at the source.
     - If the user asked for all rows, every response or complete coverage and a tool
       reports partial coverage, do not present the result as complete: state what
       was actually covered. Do not promise further runs you have not made.

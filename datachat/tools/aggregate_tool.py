@@ -337,7 +337,11 @@ class AggregateTool(Tool):
                     wc2 or None,
                     value2,
                 )
-                return {"kind": "table", "data": []}
+                # No match among partial rows does not mean no match in the source.
+                return record_trusted_result(
+                    {"kind": "table", "data": []},
+                    more_rows_available=inherits_more_rows_available(data),
+                )
 
             # Group Categorical keys by their observed values: pandas would otherwise
             # emit declared-but-unobserved categories and (on 1.5) drop missing keys
