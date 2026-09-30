@@ -61,7 +61,9 @@ class PlotTool(Tool):
     description = (
         "Generate a chart from tabular data using a specified chart type "
         "(bar, line, histogram, pie, box, scatter, hexbin, kde/density, area). "
-        "Returns the file path of the generated image."
+        "Returns the file path of the generated image. Use it for histogram, box, "
+        "kde/density and hexbin; for ordinary bar, line, pie and scatter charts prefer "
+        "the 'chart' tool."
     )
     output_type = "object"
 

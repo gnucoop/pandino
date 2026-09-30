@@ -90,7 +90,12 @@ _SQL_ADDENDUM_DEFAULT = textwrap.dedent(
     - Only a single SELECT (or WITH ... SELECT) is accepted. INSERT, UPDATE,
       DELETE and DDL are rejected before reaching the database.
     - Add an explicit LIMIT while exploring. Results are capped: if meta.truncated
-      is true the answer is incomplete, so narrow the query and run it again.
+      is true the rows are incomplete, and anything computed from them describes
+      only those rows. Do not treat them as the whole source. Add a WHERE only when
+      that filter is part of what the user asked about.
+    - For population-wide questions (averages, totals, counts, metrics per group),
+      compute the answer in the database with GROUP BY and COUNT/SUM/AVG/MIN/MAX
+      instead of fetching capped raw rows and computing statistics on them.
     - If sql_engine returns kind="error", read its "code" field, fix the query and
       retry at most twice before explaining the limitation to the user.
     - The values shown after "e.g." in the schema are samples, not the full set a
@@ -116,13 +121,37 @@ _CHART_ADDENDUM = textwrap.dedent(
     - The chart tool attaches a chart to your answer; you still finish with a normal
       final answer (usually kind="text" commenting on the chart). Never write chart
       data into the final answer yourself.
-    - Distribution of one column: chart(kind="bar", x="<column>") counts the rows per value.
+    - Categorical or ordinal column (few distinct values): chart(kind="bar", x="<column>")
+      counts the rows per value. It draws one bar per distinct value, so for a
+      continuous numeric column use plot(kind="hist", x="<column>") instead.
     - Two numeric columns: chart(kind="scatter", x="<column>", y="<column>").
     - A metric per group (mean, sum, ...): call aggregate first, then
       chart(kind="bar", x="<group column>", y="<value column>", data=result["data"]).
     - A count split by a second column: aggregate(group_by=["<x>", "<series>"], op="count"),
       then chart(kind="bar", x="<x>", y="count", series_by="<series>", data=result["data"]).
-    - Box and hexbin plots are only available as images through the plot tool.
+    - Over time: call trend (or aggregate) first, then chart(kind="line", data=result["data"]).
+      chart does not bucket dates itself.
+    - Histogram, box, KDE/density and hexbin plots are images from the plot tool.
+    """
+)
+
+# Appended only when the dataframe tools are registered. Code-owned, like
+# _CHART_ADDENDUM, so a DB-stored data_chat_system override cannot drop it.
+_ANALYTICAL_HONESTY_ADDENDUM = textwrap.dedent(
+    """\
+    ANALYTICAL HONESTY
+    - A "note" in a tool result is a trusted caveat about that result (partial
+      coverage, excluded rows, small groups, statistical limits). When it materially
+      qualifies your conclusion, say so briefly in the answer; no need to quote it.
+    - If the user asked for all rows, every response or complete coverage and a tool
+      reports partial coverage, do not present the result as complete: state what
+      was actually covered. Do not promise further runs you have not made.
+    - Never infer values, labels, counts or sentiment for rows a tool did not analyze.
+      A null sentiment or category is not "neutral", "other" or "no category"; for
+      classify_match use classification_status (classified, unclassified, unavailable).
+    - To sort text into themes when the user gave no categories: run keywords, propose
+      a small set of categories from the recurring terms, then classify_match, and
+      say the categories are your proposal. There is no automatic clustering tool.
     """
 )
 
@@ -454,7 +483,9 @@ class SmolagentsEngine(DataChatEngine):
         template = load_prompt("data_chat_system", default_text=default_context)
         instructions = render_prompt(template, columns=cols)
         if self.data is not None:
-            instructions = instructions + "\n\n" + _CHART_ADDENDUM
+            instructions = (
+                instructions + "\n\n" + _CHART_ADDENDUM + "\n\n" + _ANALYTICAL_HONESTY_ADDENDUM
+            )
 
         # Gate: with no datasource nothing SQL is appended and no reflection is
         # attempted, so the agent is exactly what it is with SQL disabled.

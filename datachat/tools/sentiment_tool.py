@@ -174,7 +174,10 @@ class SentimentAnalysisTool(Tool):
         "source columns needed for a later aggregate/crosstab by segment. With aggregate=True "
         "returns the number of non-empty rows per sentiment (no keep_columns); rows that could "
         "not be analyzed are counted as '(not analyzed)', missing and blank values are left out. At most "
-        f"{MAX_UNIQUE_VALUES} distinct values are analyzed per call."
+        f"{MAX_UNIQUE_VALUES} distinct values are analyzed per call. A null sentiment means no "
+        "result is available, never 'neutral'. For a plain sentiment distribution prefer "
+        "aggregate=True, which keeps '(not analyzed)' apart. When a coverage note is returned, "
+        "state that coverage was partial."
     )
     output_type = "object"
 

@@ -184,7 +184,9 @@ class ClassifyMatchTool(Tool):
         "'unavailable' (no classification could be obtained, e.g. missing or non-text value, "
         f"input limits; category null). At most {MAX_CATEGORIES} categories of at most "
         f"{MAX_CATEGORY_CHARS} characters each; at most {MAX_UNIQUE_VALUES} distinct values are "
-        "classified per call. Do NOT use for sentiment: use 'sentiment_analysis'."
+        "classified per call. A null category covers both 'unclassified' and 'unavailable': "
+        "to report or aggregate coverage, use classification_status, not category. "
+        "Do NOT use for sentiment: use 'sentiment_analysis'."
     )
     output_type = "object"
 
