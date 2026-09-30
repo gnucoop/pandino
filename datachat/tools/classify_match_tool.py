@@ -10,6 +10,7 @@ from smolagents.models import ChatMessage, MessageRole
 
 from datachat.provider_contributions import record_provider_contribution
 from datachat.result_provenance import record_trusted_result
+from datachat.tools.keep_columns import INVALID_KEEP_COLUMNS, validate_keep_columns
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,8 @@ _USER_PROMPT = (
     "Items:\n{items}"
 )
 
+_RESULT_FIELDS = ("category", "classification_status")
+
 _MESSAGES = {
     "MISSING_COLUMN": "Missing column name.",
     "INVALID_COLUMN": "Invalid column.",
@@ -72,6 +75,11 @@ def _error(code: str) -> dict[str, Any]:
 def _reject(code: str) -> dict[str, Any]:
     logger.info("event=tool_call_rejected tool=classify_match code=%s", code)
     return _error(code)
+
+
+def _reject_keep_columns() -> dict[str, Any]:
+    logger.info("event=tool_call_rejected tool=classify_match code=%s", INVALID_KEEP_COLUMNS["code"])
+    return dict(INVALID_KEEP_COLUMNS)
 
 
 def _serialize(items: list[dict[str, Any]]) -> str:
@@ -168,8 +176,10 @@ class ClassifyMatchTool(Tool):
     name = "classify_match"
     description = (
         "Classify the text values of a column into exactly one of the supplied categories, or "
-        "none of them. Returns one row per source row: {<column>: value, category, "
-        "classification_status}. classification_status is 'classified' (category is one of the "
+        "none of them. Returns one row per source row, in source order: {<column>: value, "
+        "<keep_columns...>, category, classification_status}. Pass keep_columns (e.g. ['region']) "
+        "to carry source columns needed for a later aggregate/crosstab by segment. "
+        "classification_status is 'classified' (category is one of the "
         "supplied labels), 'unclassified' (no supplied category fits; category null) or "
         "'unavailable' (no classification could be obtained, e.g. missing or non-text value, "
         f"input limits; category null). At most {MAX_CATEGORIES} categories of at most "
@@ -186,6 +196,15 @@ class ClassifyMatchTool(Tool):
         "categories": {
             "type": "array",
             "description": "The category labels to classify into, e.g. ['Health', 'Administration'].",
+            "items": {"type": "string"},
+            "nullable": True,
+        },
+        "keep_columns": {
+            "type": "array",
+            "description": (
+                "Optional source columns to keep in each result row, in the given order, "
+                "e.g. ['region', 'age_group']."
+            ),
             "items": {"type": "string"},
             "nullable": True,
         },
@@ -212,14 +231,18 @@ class ClassifyMatchTool(Tool):
         column: str,
         categories: Optional[list[str]] = None,
         data: list[dict[str, Any]] | None = None,
+        keep_columns: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         try:
             col = column.strip() if isinstance(column, str) else ""
             if not col:
                 return _reject("MISSING_COLUMN")
             # The output fields would overwrite the source value in each row.
-            if col in ("category", "classification_status"):
+            if col in _RESULT_FIELDS:
                 return _reject("INVALID_COLUMN")
+            keep, valid = validate_keep_columns(keep_columns, col, _RESULT_FIELDS)
+            if not valid:
+                return _reject_keep_columns()
 
             labels, code = _validate_categories(categories)
             if code is not None:
@@ -241,6 +264,8 @@ class ClassifyMatchTool(Tool):
 
             if col not in df.columns:
                 return _reject("INVALID_COLUMN")
+            if any(name not in df.columns for name in keep):
+                return _reject_keep_columns()
 
             # Every source row is kept; identity is the exact source string.
             values: list[Any] = df[col].tolist()
@@ -279,8 +304,9 @@ class ClassifyMatchTool(Tool):
                         state[text] = _CLASSIFIED if results[item_id] is not None else _UNCLASSIFIED
 
             counts = {"no_text": 0, _CLASSIFIED: 0, _UNCLASSIFIED: 0, _INPUT_LIMITS: 0, _NO_USABLE_RESULT: 0}
+            kept = [df[name].tolist() for name in keep]
             records = []
-            for value in values:
+            for i, value in enumerate(values):
                 row_state = state[value] if _is_analyzable(value) else "no_text"
                 counts[row_state] += 1
                 if row_state == _CLASSIFIED:
@@ -289,7 +315,12 @@ class ClassifyMatchTool(Tool):
                     category, status = None, UNCLASSIFIED
                 else:
                     category, status = None, UNAVAILABLE
-                records.append({col: value, "category": category, "classification_status": status})
+                record = {col: value}
+                for name, column_values in zip(keep, kept):
+                    record[name] = column_values[i]
+                record["category"] = category
+                record["classification_status"] = status
+                records.append(record)
 
             unavailable = counts["no_text"] + counts[_INPUT_LIMITS] + counts[_NO_USABLE_RESULT]
             logger.info(

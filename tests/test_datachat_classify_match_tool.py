@@ -93,9 +93,10 @@ def _statuses(out):
 
 def test_signature_and_inputs():
     params = inspect.signature(ClassifyMatchTool.forward).parameters
-    assert list(params)[1:] == ["column", "categories", "data"]
+    assert list(params)[1:] == ["column", "categories", "data", "keep_columns"]
     assert params["column"].default is inspect.Parameter.empty
-    assert set(ClassifyMatchTool.inputs) == {"column", "categories", "data"}
+    assert params["keep_columns"].default is None
+    assert set(ClassifyMatchTool.inputs) == {"column", "categories", "data", "keep_columns"}
     assert ClassifyMatchTool.name == "classify_match"
 
 

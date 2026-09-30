@@ -10,6 +10,7 @@ from smolagents.models import ChatMessage, MessageRole
 
 from datachat.provider_contributions import record_provider_contribution
 from datachat.result_provenance import record_trusted_result
+from datachat.tools.keep_columns import INVALID_KEEP_COLUMNS, validate_keep_columns
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ MAX_BATCH_CHARS = 20_000
 
 SENTIMENT_LABELS = ("positive", "negative", "neutral")
 NOT_ANALYZED = "(not analyzed)"
+RESULT_FIELDS = ("sentiment", "score")
 
 # Final state of a deduplication identity; every source row carrying it inherits it.
 _CLASSIFIED, _OVERSIZE, _NOT_SELECTED, _UNUSABLE = range(4)
@@ -49,6 +51,11 @@ _TOOL_FAILED = {
     "kind": "error",
     "code": "TOOL_FAILED",
     "message": "Sentiment analysis failed.",
+}
+_KEEP_COLUMNS_WITH_AGGREGATE = {
+    "kind": "error",
+    "code": "KEEP_COLUMNS_WITH_AGGREGATE",
+    "message": "keep_columns is only supported with aggregate=False.",
 }
 _PARSE_FAILED = {
     "kind": "error",
@@ -161,10 +168,12 @@ class SentimentAnalysisTool(Tool):
     description = (
         "Classify the sentiment of the values of a text column as 'positive', 'negative' or "
         "'neutral', with a confidence score (0-1) when the classifier provides a valid one. "
-        "By default (aggregate=False) returns one row per non-empty source row: "
-        "{<col>: value, sentiment, score}. With aggregate=True returns the number of rows per "
-        "sentiment. Rows that could not be analyzed have sentiment null and are counted as "
-        "'(not analyzed)'. Missing and blank values are left out. At most "
+        "By default (aggregate=False) returns one row per source row, in source order: "
+        "{<col>: value, <keep_columns...>, sentiment, score}; missing, blank and unanalyzed "
+        "values have sentiment and score null. Pass keep_columns (e.g. ['service']) to carry "
+        "source columns needed for a later aggregate/crosstab by segment. With aggregate=True "
+        "returns the number of non-empty rows per sentiment (no keep_columns); rows that could "
+        "not be analyzed are counted as '(not analyzed)', missing and blank values are left out. At most "
         f"{MAX_UNIQUE_VALUES} distinct values are analyzed per call."
     )
     output_type = "object"
@@ -177,6 +186,15 @@ class SentimentAnalysisTool(Tool):
         "aggregate": {
             "type": "boolean",
             "description": "If True, return row counts per sentiment instead of the per-row results (default False).",
+            "nullable": True,
+        },
+        "keep_columns": {
+            "type": "array",
+            "description": (
+                "Optional source columns to keep in each row-level result row, in the given order, "
+                "e.g. ['service', 'region']. Only with aggregate=False."
+            ),
+            "items": {"type": "string"},
             "nullable": True,
         },
         "data": {
@@ -202,11 +220,20 @@ class SentimentAnalysisTool(Tool):
         col: str,
         aggregate: bool = False,
         data: list[dict[str, Any]] | None = None,
+        keep_columns: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         try:
             column = col.strip() if isinstance(col, str) else ""
             if not column:
                 return {"kind": "error", "message": "Missing column name.", "code": "MISSING_COLUMN"}
+            # The result fields would overwrite the source value in each row.
+            if column in RESULT_FIELDS:
+                return {"kind": "error", "message": f"Invalid column: {column}", "code": "INVALID_COLUMN"}
+            if aggregate and keep_columns is not None:
+                return dict(_KEEP_COLUMNS_WITH_AGGREGATE)
+            keep, valid = validate_keep_columns(keep_columns, column, RESULT_FIELDS)
+            if not valid:
+                return dict(INVALID_KEEP_COLUMNS)
 
             if data is not None:
                 if isinstance(data, dict) and "data" in data:
@@ -224,22 +251,24 @@ class SentimentAnalysisTool(Tool):
 
             if column not in df.columns:
                 return {"kind": "error", "message": f"Invalid column: {column}", "code": "INVALID_COLUMN"}
+            if any(name not in df.columns for name in keep):
+                return dict(INVALID_KEEP_COLUMNS)
 
             # Analytical population: non-missing, non-blank source rows, in order.
-            values: list[Any] = []
+            # Row-level output keeps every source row; None marks a row outside the population.
+            source_values: list[Any] = df[column].tolist()
+            source_keys: list[Optional[tuple[type, Any]]] = []
             row_keys: list[tuple[type, Any]] = []
             texts: dict[tuple[type, Any], str] = {}
-            for value in df[column].tolist():
+            for value in source_values:
                 if _is_missing(value) or (isinstance(value, str) and not value.strip()):
+                    source_keys.append(None)
                     continue
                 key = _identity(value)
-                values.append(value)
+                source_keys.append(key)
                 row_keys.append(key)
                 if key not in texts:
                     texts[key] = _provider_text(value)
-
-            if not values:
-                return {"kind": "table", "data": []}
 
             # Bounded selection: a first-seen prefix of the individually eligible identities.
             state: dict[tuple[type, Any], int] = {}
@@ -282,10 +311,19 @@ class SentimentAnalysisTool(Tool):
                 per_label[NOT_ANALYZED] = len(row_keys) - counts[_CLASSIFIED]
                 records = [{"sentiment": k, "count": n} for k, n in per_label.items() if n > 0]
             else:
+                kept = [df[name].tolist() for name in keep]
                 records = []
-                for value, key in zip(values, row_keys):
-                    label, score = classified[ids[key]] if state[key] == _CLASSIFIED else (None, None)
-                    records.append({column: value, "sentiment": label, "score": score})
+                for i, (value, key) in enumerate(zip(source_values, source_keys)):
+                    if key is not None and state[key] == _CLASSIFIED:
+                        label, score = classified[ids[key]]
+                    else:
+                        label, score = None, None
+                    record = {column: value}
+                    for name, column_values in zip(keep, kept):
+                        record[name] = column_values[i]
+                    record["sentiment"] = label
+                    record["score"] = score
+                    records.append(record)
 
             logger.info(
                 "event=tool_call_result tool=sentiment_analysis aggregate=%s rows=%s distinct=%s "

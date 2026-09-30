@@ -86,11 +86,12 @@ def _note_counts(note):
 
 def test_signature_and_inputs():
     params = inspect.signature(SentimentAnalysisTool.forward).parameters
-    assert list(params)[1:] == ["col", "aggregate", "data"]
+    assert list(params)[1:] == ["col", "aggregate", "data", "keep_columns"]
     assert params["col"].default is inspect.Parameter.empty
     assert params["aggregate"].default is False
     assert params["data"].default is None
-    assert set(SentimentAnalysisTool.inputs) == {"col", "aggregate", "data"}
+    assert params["keep_columns"].default is None
+    assert set(SentimentAnalysisTool.inputs) == {"col", "aggregate", "data", "keep_columns"}
     assert "labels" not in SentimentAnalysisTool.inputs
 
 
@@ -154,18 +155,32 @@ def test_engine_holds_no_sentiment_state():
 # --- analytical population ----------------------------------------------------------
 
 
-@pytest.mark.parametrize("aggregate", [False, True])
-def test_empty_population_is_an_empty_table_without_call_or_note(aggregate):
+def test_empty_population_is_an_empty_aggregate_without_call_or_note():
     df = _df([None, np.nan, pd.NA, pd.NaT, "", "   ", "\n\t"])
-    out, facts, contributions, model = _run(df, col="t", aggregate=aggregate)
+    out, facts, contributions, model = _run(df, col="t", aggregate=True)
     assert out == {"kind": "table", "data": []}
     assert model.calls == [] and contributions == [] and facts is None
 
 
-def test_missing_and_blank_rows_are_omitted_originals_kept_in_order():
-    df = _df(["b", None, " a ", "", np.nan, "None", "   ", "nan", "null", "b"])
-    out, facts, _, model = _run(df, col="t")
-    assert [r["t"] for r in out["data"]] == ["b", " a ", "None", "nan", "null", "b"]
+def test_empty_population_row_level_keeps_every_row_without_call_or_note():
+    df = _df([None, "", "   "])
+    out, facts, contributions, model = _run(df, col="t")
+    assert out == {
+        "kind": "table",
+        "data": [{"t": v, "sentiment": None, "score": None} for v in (None, "", "   ")],
+    }
+    assert model.calls == [] and contributions == [] and facts is None
+
+
+def test_missing_and_blank_rows_are_kept_unanalyzed_originals_in_order():
+    values = ["b", None, " a ", "", np.nan, "None", "   ", "nan", "null", "b"]
+    out, facts, _, model = _run(_df(values), col="t")
+    assert len(out["data"]) == len(values)
+    for record, value in zip(out["data"], values):
+        assert record["t"] is value or (value != value and record["t"] != record["t"])
+    blank = [1, 3, 4, 6]
+    assert all(out["data"][i]["sentiment"] is None and out["data"][i]["score"] is None for i in blank)
+    assert all(out["data"][i]["sentiment"] == "positive" for i in range(len(values)) if i not in blank)
     assert [i["text"] for i in model.calls[0]["items"]] == ["b", " a ", "None", "nan", "null"]
     assert facts is None
 
@@ -276,7 +291,7 @@ def test_all_oversize_is_a_successful_unanalyzed_result(aggregate):
     if aggregate:
         assert out["data"] == [{"sentiment": "(not analyzed)", "count": 3}]
     else:
-        assert out["data"] == [{"t": v, "sentiment": None, "score": None} for v in (big1, big2, big1)]
+        assert out["data"] == [{"t": v, "sentiment": None, "score": None} for v in (big1, None, big2, big1)]
     assert _note_counts(facts.note) == (3, 0, 0)
     assert "3 of 3" in facts.note
 
