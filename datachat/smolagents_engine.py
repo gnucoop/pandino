@@ -19,6 +19,7 @@ from datachat.engine_interface import DataChatEngine, EngineBootstrapResult
 from datachat.sql_datasource import SqlDatasource
 from datachat.tools.aggregate_tool import AggregateTool
 from datachat.tools.chart_tool import ChartTool
+from datachat.tools.classify_match_tool import ClassifyMatchTool
 from datachat.tools.compare_groups_tool import CompareGroupsTool
 from datachat.tools.correlation_tool import CorrelationTool
 from datachat.tools.crosstab_tool import CrosstabTool
@@ -519,6 +520,12 @@ class SmolagentsEngine(DataChatEngine):
             TrendTool(datasource),
             ChartTool(datasource),
             SentimentAnalysisTool(
+                datasource,
+                model=self._model,
+                provider=self._provider,
+                model_name=self._configured_model,
+            ),
+            ClassifyMatchTool(
                 datasource,
                 model=self._model,
                 provider=self._provider,

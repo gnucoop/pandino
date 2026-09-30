@@ -30,6 +30,7 @@ EXPECTED_TOOLS = [
     "trend",
     "chart",
     "sentiment_analysis",
+    "classify_match",
 ]
 
 
