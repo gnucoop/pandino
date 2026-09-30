@@ -389,17 +389,20 @@ class AggregateTool(Tool):
                 value_col = f"{op_clean}_{metric_clean}"
                 out = out.rename(columns={metric_clean: value_col})
 
+                # Sample behind each value: the non-missing entries of the very
+                # series aggregated above, which is what sum/mean/min/max consume.
+                sizes = (
+                    tmp.groupby(group_by_cols, dropna=False)[metric_clean]
+                    .count()
+                    .reset_index(name="__rows__")
+                )
+
             # ---- sort + trim ----
             out = out.sort_values(by=value_col, ascending=asc, na_position="last").iloc[:limit]
 
             # ---- small-sample caveat (non-count only), judged on the groups returned ----
             note = None
             if op_clean != "count" and not out.empty:
-                sizes = (
-                    df_work.groupby(group_by_cols, dropna=False)
-                    .size()
-                    .reset_index(name="__rows__")
-                )
                 shown = out[group_by_cols].merge(sizes, on=group_by_cols, how="left")["__rows__"]
                 thin = shown[shown < MIN_RELIABLE_SAMPLE]
                 if not thin.empty:
