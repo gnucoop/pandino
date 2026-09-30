@@ -19,6 +19,7 @@ from typing import Any, Optional
 
 __all__ = [
     "TrustedResult",
+    "inherits_more_rows_available",
     "lookup_trusted_result",
     "record_trusted_result",
 ]
@@ -97,3 +98,15 @@ def lookup_trusted_result(payload: Any) -> Optional[TrustedResult]:
     if len(data) != entry.row_count or _first_row_keys(data) != entry.first_row_keys:
         return None
     return entry.facts
+
+
+def inherits_more_rows_available(data: Any) -> bool:
+    """
+    True when ``data`` is a tool-produced list whose source had more rows.
+
+    This is the only fact a table derived from ``data`` inherits: the source
+    stays partial whatever the transformation. A ``note`` describes its own
+    table and is never inherited.
+    """
+    trusted = lookup_trusted_result({"data": data})
+    return trusted is not None and trusted.more_rows_available

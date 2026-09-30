@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.result_provenance import inherits_more_rows_available, record_trusted_result
 from datachat.tools.limits import InvalidLimit, invalid_limit_error, optional_limit
 
 logger = logging.getLogger(__name__)
@@ -434,15 +435,18 @@ class FilterRowsTool(Tool):
                 len(safe_records),
             )
 
-            return {
-                "kind": "table",
-                "data": safe_records,
-                "meta": {
-                    "offset": offset_int,
-                    "returned": len(safe_records),
-                    "total_matches": total_matches,
+            return record_trusted_result(
+                {
+                    "kind": "table",
+                    "data": safe_records,
+                    "meta": {
+                        "offset": offset_int,
+                        "returned": len(safe_records),
+                        "total_matches": total_matches,
+                    },
                 },
-            }
+                more_rows_available=inherits_more_rows_available(data),
+            )
 
         except InvalidLimit as e:
             return invalid_limit_error(e)

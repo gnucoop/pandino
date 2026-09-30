@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.result_provenance import inherits_more_rows_available, record_trusted_result
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,9 @@ class CorrelationTool(Tool):
             if not y:
                 if x and x not in df.columns and data is not None:
                     x = {c.lower(): c for c in df.columns}.get(x.lower(), x)
-                return self._ranking(df, anchor=x or None, method=method_clean)
+                return record_trusted_result(
+                    self._ranking(df, anchor=x or None, method=method_clean), more_rows_available=inherits_more_rows_available(data)
+                )
 
             if not x:
                 return {"kind": "error", "message": "Missing col_x or col_y.", "code": "MISSING_COLUMNS"}
@@ -162,7 +165,7 @@ class CorrelationTool(Tool):
             records = replace_nan([row])
 
             logger.info("event=tool_call_result x=%s y=%s n=%s corr=%.6f", x, y, len(tmp), corr)
-            return {"kind": "table", "data": records}
+            return record_trusted_result({"kind": "table", "data": records}, more_rows_available=inherits_more_rows_available(data))
 
         except Exception as e:
             logger.exception("event=tool_call_failed")

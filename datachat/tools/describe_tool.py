@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.result_provenance import inherits_more_rows_available, record_trusted_result
 from datachat.tools.limits import InvalidLimit, invalid_limit_error, optional_limit
 
 logger = logging.getLogger(__name__)
@@ -172,7 +173,7 @@ class DescribeTool(Tool):
             records = replace_nan(records)
 
             logger.info("event=tool_call_result cols=%s", len(records))
-            return {"kind": "table", "data": records}
+            return record_trusted_result({"kind": "table", "data": records}, more_rows_available=inherits_more_rows_available(data))
 
         except InvalidLimit as e:
             return invalid_limit_error(e)

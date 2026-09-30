@@ -5,7 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
-from datachat.result_provenance import record_trusted_result
+from datachat.result_provenance import inherits_more_rows_available, record_trusted_result
 from datachat.tools.date_parsing import (
     AMBIGUOUS_DATE_FORMAT,
     INCONSISTENT_TIMEZONES,
@@ -346,7 +346,7 @@ class TrendTool(Tool):
             if excluded:
                 note = f"{excluded} row(s) were excluded because their date value was missing or could not be interpreted."
                 payload["note"] = note
-            return record_trusted_result(payload, note=note)
+            return record_trusted_result(payload, more_rows_available=inherits_more_rows_available(data), note=note)
 
         except InvalidLimit as e:
             return invalid_limit_error(e)

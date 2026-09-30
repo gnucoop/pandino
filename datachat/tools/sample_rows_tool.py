@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.result_provenance import inherits_more_rows_available, record_trusted_result
 
 logger = logging.getLogger(__name__)
 
@@ -185,16 +186,19 @@ class SampleRowsTool(Tool):
                 len(records),
             )
 
-            return {
-                "kind": "table",
-                "data": records,
-                "meta": {
-                    "offset": offset_int,
-                    "returned": len(records),
-                    # total is easy only for DataFrame; we can still provide it
-                    "total_rows": int(len(df_view)),
+            return record_trusted_result(
+                {
+                    "kind": "table",
+                    "data": records,
+                    "meta": {
+                        "offset": offset_int,
+                        "returned": len(records),
+                        # total is easy only for DataFrame; we can still provide it
+                        "total_rows": int(len(df_view)),
+                    },
                 },
-            }
+                more_rows_available=inherits_more_rows_available(data),
+            )
 
         except Exception as e:
             logger.exception("event=tool_call_failed")

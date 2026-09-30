@@ -4,6 +4,8 @@ from typing import Any, ClassVar
 import pandas as pd
 from smolagents import Tool
 
+from datachat.result_provenance import inherits_more_rows_available, record_trusted_result
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,7 +58,7 @@ class RowCountTool(Tool):
 
             logger.info("event=tool_call_result n_rows=%s", n_rows)
 
-            return {"kind": "table", "data": [{"row_count": n_rows}]}
+            return record_trusted_result({"kind": "table", "data": [{"row_count": n_rows}]}, more_rows_available=inherits_more_rows_available(data))
 
         except Exception as e:
             logger.exception("event=tool_call_failed")

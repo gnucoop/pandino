@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from smolagents import Tool
 
-from datachat.result_provenance import record_trusted_result
+from datachat.result_provenance import inherits_more_rows_available, record_trusted_result
 
 logger = logging.getLogger(__name__)
 
@@ -188,7 +188,7 @@ class CompareGroupsTool(Tool):
             else:
                 df = self._df
 
-            return self._compare(df, metric, group_col, group_a, group_b)
+            return self._compare(df, metric, group_col, group_a, group_b, inherits_more_rows_available(data))
 
         except _ToolError as e:
             return {"kind": "error", "message": e.message, "code": e.code}
@@ -196,7 +196,9 @@ class CompareGroupsTool(Tool):
             logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}
 
-    def _compare(self, df: pd.DataFrame, metric: Any, group_col: Any, group_a: Any, group_b: Any) -> dict[str, Any]:
+    def _compare(
+        self, df: pd.DataFrame, metric: Any, group_col: Any, group_a: Any, group_b: Any, more_rows_available: bool
+    ) -> dict[str, Any]:
         from scipy import stats  # noqa: PLC0415
 
         metric_col = metric.strip() if isinstance(metric, str) else ""
@@ -323,4 +325,4 @@ class CompareGroupsTool(Tool):
         payload: dict[str, Any] = {"kind": "table", "data": [record]}
         if note:
             payload["note"] = note
-        return record_trusted_result(payload, note=note)
+        return record_trusted_result(payload, more_rows_available=more_rows_available, note=note)

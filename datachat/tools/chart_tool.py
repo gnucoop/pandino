@@ -10,7 +10,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.chart_registry import record_chart
-from datachat.result_provenance import lookup_trusted_result
+from datachat.result_provenance import TrustedResult, lookup_trusted_result
 from datachat.tools.crosstab_tool import (
     _DATETIME,
     _MISSING,
@@ -210,7 +210,7 @@ class ChartTool(Tool):
         horizontal: Optional[bool] = None,
     ) -> dict[str, Any]:
         try:
-            spec, note, stats = self._build(kind, x, y, series_by, data, title, horizontal)
+            spec, trusted, stats = self._build(kind, x, y, series_by, data, title, horizontal)
         except _ChartError as e:
             logger.info("event=tool_call_rejected code=%s", e.code)
             return {"kind": "error", "message": str(e), "code": e.code}
@@ -219,7 +219,12 @@ class ChartTool(Tool):
             logger.warning("event=tool_call_failed error_type=%s", type(e).__name__)
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}
 
-        record_chart(spec, note=note)
+        note = trusted.note if trusted is not None else None
+        record_chart(
+            spec,
+            note=note,
+            more_rows_available=trusted is not None and trusted.more_rows_available,
+        )
         logger.info(
             "event=tool_call_result kind=%s mode=%s row_count=%s label_count=%s "
             "dataset_count=%s point_count=%s skipped_rows=%s trusted_note=%s",
@@ -253,7 +258,7 @@ class ChartTool(Tool):
         data: Any,
         title: Any,
         horizontal: Any,
-    ) -> tuple[dict[str, Any], Optional[str], dict[str, Any]]:
+    ) -> tuple[dict[str, Any], Optional[TrustedResult], dict[str, Any]]:
         chart_kind = str(kind or "").strip().lower()
         if chart_kind not in _KINDS:
             raise _ChartError(
@@ -280,7 +285,7 @@ class ChartTool(Tool):
         if series_col is not None and series_col in (x_col, y_col):
             raise _ChartError("series_by must be a different column from x and y.", "SAME_DIMENSION")
 
-        note: Optional[str] = None
+        trusted: Optional[TrustedResult] = None
         if data is not None:
             if isinstance(data, dict) and "data" in data:
                 data = data.get("data")
@@ -290,9 +295,8 @@ class ChartTool(Tool):
             columns: set[Any] = set().union(*(row.keys() for row in records))
             values: Callable[[str], list[Any]] = lambda col: [row.get(col) for row in records]  # noqa: E731
             row_count = len(records)
-            # Only the tool-produced list itself carries its trusted caveat.
+            # Only the tool-produced list itself carries its trusted facts.
             trusted = lookup_trusted_result({"data": data})
-            note = trusted.note if trusted is not None else None
         elif self._df is not None:
             df = self._df
             columns = set(df.columns)
@@ -339,7 +343,7 @@ class ChartTool(Tool):
             "stacked": False,
             "horizontal": horizontal,
         }
-        return spec, note, {"mode": mode, "row_count": row_count, "skipped_rows": skipped}
+        return spec, trusted, {"mode": mode, "row_count": row_count, "skipped_rows": skipped}
 
     @staticmethod
     def _counts(column: list[Any]) -> tuple[list[Any], list[dict[str, Any]]]:

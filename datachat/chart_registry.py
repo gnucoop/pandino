@@ -1,7 +1,8 @@
 """Request-local charts produced by the chart tool.
 
 A successful chart tool call records the chart spec it built, together with the
-trusted caveat of the table it was drawn from, if any. The route attaches the
+trusted caveat of the table it was drawn from, if any, and whether that table's
+source had more rows. The route attaches the
 recorded specs to the response as ``charts``. Nothing the agent writes into its
 final answer can add a chart: only specs recorded here reach the client.
 
@@ -26,6 +27,7 @@ class RecordedChart:
     spec: dict[str, Any]
     # Backend-trusted caveat of the source table (see result_provenance).
     note: Optional[str] = None
+    more_rows_available: bool = False
 
 
 def _registry(create: bool) -> Optional[list[RecordedChart]]:
@@ -40,11 +42,18 @@ def _registry(create: bool) -> Optional[list[RecordedChart]]:
     return registry
 
 
-def record_chart(spec: dict[str, Any], *, note: Optional[str] = None) -> None:
+def record_chart(
+    spec: dict[str, Any],
+    *,
+    note: Optional[str] = None,
+    more_rows_available: bool = False,
+) -> None:
     """Append ``spec`` to this request's charts, in production order."""
     registry = _registry(create=True)
     if registry is not None:
-        registry.append(RecordedChart(spec=spec, note=note or None))
+        registry.append(
+            RecordedChart(spec=spec, note=note or None, more_rows_available=more_rows_available)
+        )
 
 
 def get_recorded_charts() -> list[RecordedChart]:

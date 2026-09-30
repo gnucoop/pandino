@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 from smolagents import Tool
 
+from datachat.result_provenance import inherits_more_rows_available, record_trusted_result
+
 logger = logging.getLogger(__name__)
 
 MISSING_LABEL = "(empty)"
@@ -256,7 +258,10 @@ class CrosstabTool(Tool):
                 len(row_keys),
                 len(col_keys),
             )
-            return {"kind": "table", "data": records}
+            return record_trusted_result(
+                {"kind": "table", "data": records},
+                more_rows_available=inherits_more_rows_available(data),
+            )
 
         except Exception as e:
             logger.exception("event=tool_call_failed")

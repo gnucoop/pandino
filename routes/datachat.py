@@ -58,6 +58,7 @@ def _attach_recorded_charts(
     Whatever ``charts`` the agent wrote into its answer is dropped: only
     backend-recorded specs are sent. ``note`` stays a single trusted caveat:
     the primary result's when it has one, otherwise the first charted table's.
+    ``more_rows_available`` is set when any charted table's source had more rows.
     """
     response_dict.pop("charts", None)
     recorded = get_recorded_charts()
@@ -69,6 +70,8 @@ def _attach_recorded_charts(
         chart_note = next((chart.note for chart in recorded if chart.note), None)
         if chart_note:
             response_dict["note"] = chart_note
+    if any(chart.more_rows_available for chart in recorded):
+        response_dict["more_rows_available"] = True
     return response_dict
 
 

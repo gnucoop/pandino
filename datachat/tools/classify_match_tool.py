@@ -9,7 +9,7 @@ from smolagents import Tool
 from smolagents.models import ChatMessage, MessageRole
 
 from datachat.provider_contributions import record_provider_contribution
-from datachat.result_provenance import record_trusted_result
+from datachat.result_provenance import inherits_more_rows_available, record_trusted_result
 from datachat.tools.keep_columns import INVALID_KEEP_COLUMNS, validate_keep_columns
 
 logger = logging.getLogger(__name__)
@@ -337,10 +337,13 @@ class ClassifyMatchTool(Tool):
             )
 
             payload = {"kind": "table", "data": records}
+            more_rows = inherits_more_rows_available(data)
             if unavailable:
                 note = _coverage_note(counts["no_text"], counts[_INPUT_LIMITS], counts[_NO_USABLE_RESULT])
-                return record_trusted_result(payload, note=note)
-            return payload
+                # The agent sees the same trusted caveat the route later forwards.
+                payload["note"] = note
+                return record_trusted_result(payload, more_rows_available=more_rows, note=note)
+            return record_trusted_result(payload, more_rows_available=more_rows)
 
         except Exception as e:
             logger.error("event=tool_call_failed tool=classify_match error_type=%s", type(e).__name__)

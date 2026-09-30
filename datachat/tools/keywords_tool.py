@@ -9,7 +9,7 @@ from typing import Any, ClassVar, Optional
 import pandas as pd
 from smolagents import Tool
 
-from datachat.result_provenance import record_trusted_result
+from datachat.result_provenance import inherits_more_rows_available, record_trusted_result
 from datachat.tools.keywords_stopwords import LANGUAGES, STOPWORDS
 from datachat.tools.limits import InvalidLimit, invalid_limit_error, optional_limit
 
@@ -156,7 +156,9 @@ class KeywordsTool(Tool):
             if col not in df.columns:
                 raise _ToolError(f"Invalid column: {col}", "INVALID_COLUMN")
 
-            return self._keywords(df[col].tolist(), col, STOPWORDS[lang], threshold, limit, lang)
+            return self._keywords(
+                df[col].tolist(), col, STOPWORDS[lang], threshold, limit, lang, inherits_more_rows_available(data)
+            )
 
         except _ToolError as e:
             return {"kind": "error", "message": e.message, "code": e.code}
@@ -174,6 +176,7 @@ class KeywordsTool(Tool):
         threshold: int,
         limit: Optional[int],
         lang: str,
+        more_rows_available: bool,
     ) -> dict[str, Any]:
         analyzed = 0
         non_text = 0
@@ -227,4 +230,4 @@ class KeywordsTool(Tool):
         note = f"Excluded {non_text} non-text row(s) from keyword analysis." if non_text else None
         if note:
             payload["note"] = note
-        return record_trusted_result(payload, note=note)
+        return record_trusted_result(payload, more_rows_available=more_rows_available, note=note)
