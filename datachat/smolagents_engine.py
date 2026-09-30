@@ -19,6 +19,7 @@ from datachat.engine_interface import DataChatEngine, EngineBootstrapResult
 from datachat.sql_datasource import SqlDatasource
 from datachat.tools.aggregate_tool import AggregateTool
 from datachat.tools.chart_tool import ChartTool
+from datachat.tools.compare_groups_tool import CompareGroupsTool
 from datachat.tools.correlation_tool import CorrelationTool
 from datachat.tools.crosstab_tool import CrosstabTool
 from datachat.tools.describe_tool import DescribeTool
@@ -511,6 +512,7 @@ class SmolagentsEngine(DataChatEngine):
             RowCountTool(datasource),
             AggregateTool(datasource),
             CrosstabTool(datasource),
+            CompareGroupsTool(datasource),
             PlotTool(datasource, output_dir=self._plots_dir or os.getenv("DATACHAT_PLOTS_DIR", "/tmp/datachat_plots")),
             TrendTool(datasource),
             ChartTool(datasource),
