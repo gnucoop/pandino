@@ -5,6 +5,14 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.result_provenance import record_trusted_result
+from datachat.tools.date_parsing import (
+    AMBIGUOUS_DATE_FORMAT,
+    INCONSISTENT_TIMEZONES,
+    date_error,
+    parse_date_bound,
+    parse_date_series,
+)
 from datachat.tools.limits import InvalidLimit, invalid_limit_error, optional_limit
 
 logger = logging.getLogger(__name__)
@@ -23,21 +31,6 @@ def _to_json_scalar(value: Any) -> Any:
     if isinstance(value, (int, float, str)):
         return value
     return str(value)
-
-
-def _parse_iso_date(s: Any) -> pd.Timestamp | None:
-    if s is None:
-        return None
-    try:
-        txt = str(s).strip()
-        if not txt:
-            return None
-        ts = pd.to_datetime(txt, errors="coerce", utc=False)
-        if pd.isna(ts):
-            return None
-        return ts if isinstance(ts, pd.Timestamp) else pd.Timestamp(ts)
-    except Exception:
-        return None
 
 
 def _freq_to_pandas(freq: str) -> str | None:
@@ -226,15 +219,36 @@ class TrendTool(Tool):
             asc = bool(ascending) if ascending is not None else True
             keep_empty = bool(include_empty) if include_empty is not None else False
 
-            dt = pd.to_datetime(df[date_col_clean], errors="coerce")
+            parsed = parse_date_series(df[date_col_clean])
+            if parsed.error:
+                return date_error(parsed.error, date_col_clean)
+            dt = parsed.values
             if dt.isna().all():
                 return {"kind": "error", "message": f"Column '{date_col_clean}' has no parseable dates.", "code": "NO_PARSEABLE_DATES"}
+            excluded = int(dt.isna().sum())
+
+            bounds = []
+            for bound in (start, end):
+                ts, code = parse_date_bound(bound, parsed)
+                if code == AMBIGUOUS_DATE_FORMAT:
+                    return {
+                        "kind": "error",
+                        "message": "The start/end date order (dd/mm or mm/dd) is ambiguous; use ISO format (YYYY-MM-DD).",
+                        "code": code,
+                    }
+                if code == INCONSISTENT_TIMEZONES:
+                    return {
+                        "kind": "error",
+                        "message": f"The start/end date timezone is not compatible with column '{date_col_clean}'.",
+                        "code": code,
+                    }
+                if code:
+                    return {"kind": "error", "message": "Invalid start/end date; use ISO format (YYYY-MM-DD).", "code": code}
+                bounds.append(ts)
+            start_ts, end_ts = bounds
 
             tmp = df.copy()
             tmp["__dt"] = dt
-
-            start_ts = _parse_iso_date(start)
-            end_ts = _parse_iso_date(end)
 
             tmp = tmp[tmp["__dt"].notna()]
             if start_ts is not None:
@@ -327,7 +341,12 @@ class TrendTool(Tool):
                 keep_empty,
             )
 
-            return {"kind": "table", "data": safe_records}
+            payload: dict[str, Any] = {"kind": "table", "data": safe_records}
+            note = None
+            if excluded:
+                note = f"{excluded} row(s) were excluded because their date value was missing or could not be interpreted."
+                payload["note"] = note
+            return record_trusted_result(payload, note=note)
 
         except InvalidLimit as e:
             return invalid_limit_error(e)

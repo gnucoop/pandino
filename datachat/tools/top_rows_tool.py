@@ -5,6 +5,7 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.tools.date_parsing import date_error, parse_date_series
 
 logger = logging.getLogger(__name__)
 
@@ -59,25 +60,32 @@ def _truncate_cell(v: Any, max_chars: int) -> Any:
     return v
 
 
-def _coerce_sort_key(series: pd.Series) -> pd.Series:
+def _coerce_sort_key(series: pd.Series) -> tuple[Optional[pd.Series], Optional[str]]:
     """
-    Build a robust sort key:
-    1) try datetime
-    2) else try numeric
-    3) else string (case-insensitive)
+    Build a robust sort key, returning (key, date error code):
+    1) numeric/boolean dtype -> as is
+    2) native datetime dtype -> as is
+    3) text where most values are dates -> datetime under the column-level date policy
+       (ambiguous day/month order or mixed timezones -> error code, never a guess)
+    4) else try numeric
+    5) else string (case-insensitive)
     """
-    # Datetime attempt
-    dt = pd.to_datetime(series, errors="coerce", utc=False)
-    if dt.notna().any():
-        return dt
+    if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
+        return series, None
+
+    parsed = parse_date_series(series)
+    if parsed.present and parsed.date_like * 2 > parsed.present:
+        if parsed.error:
+            return None, parsed.error
+        return parsed.values, None
 
     # Numeric attempt
     num = pd.to_numeric(series, errors="coerce")
     if num.notna().any():
-        return num
+        return num, None
 
     # String fallback (stable-ish)
-    return series.astype(str).str.strip().str.lower()
+    return series.astype(str).str.strip().str.lower(), None
 
 
 class TopRowsTool(Tool):
@@ -207,7 +215,9 @@ class TopRowsTool(Tool):
             df_view = df[chosen] if chosen else df
 
             # --- sorting (robust) ---
-            sort_key = _coerce_sort_key(df[sort_by_clean])
+            sort_key, date_code = _coerce_sort_key(df[sort_by_clean])
+            if date_code:
+                return date_error(date_code, sort_by_clean)
             df_sorted = (
                 df_view.assign(__sort_key=sort_key)
                 .sort_values(by="__sort_key", ascending=asc, na_position="last")
