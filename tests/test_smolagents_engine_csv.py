@@ -25,6 +25,7 @@ EXPECTED_TOOLS = [
     "aggregate",
     "crosstab",
     "compare_groups",
+    "keywords",
     "plot",
     "trend",
     "chart",

@@ -24,6 +24,7 @@ from datachat.tools.correlation_tool import CorrelationTool
 from datachat.tools.crosstab_tool import CrosstabTool
 from datachat.tools.describe_tool import DescribeTool
 from datachat.tools.filter_rows_tool import FilterRowsTool
+from datachat.tools.keywords_tool import KeywordsTool
 from datachat.tools.missing_values_tool import MissingValuesTool
 from datachat.tools.plot_tool import PlotTool
 from datachat.tools.row_count_tool import RowCountTool
@@ -513,6 +514,7 @@ class SmolagentsEngine(DataChatEngine):
             AggregateTool(datasource),
             CrosstabTool(datasource),
             CompareGroupsTool(datasource),
+            KeywordsTool(datasource),
             PlotTool(datasource, output_dir=self._plots_dir or os.getenv("DATACHAT_PLOTS_DIR", "/tmp/datachat_plots")),
             TrendTool(datasource),
             ChartTool(datasource),
