@@ -27,6 +27,7 @@ EXPECTED_TOOLS = [
     "plot",
     "trend",
     "chart",
+    "sentiment_analysis",
 ]
 
 

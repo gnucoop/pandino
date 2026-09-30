@@ -27,6 +27,7 @@ from datachat.tools.missing_values_tool import MissingValuesTool
 from datachat.tools.plot_tool import PlotTool
 from datachat.tools.row_count_tool import RowCountTool
 from datachat.tools.sample_rows_tool import SampleRowsTool
+from datachat.tools.sentiment_tool import SentimentAnalysisTool
 from datachat.tools.sql_engine_tool import SqlEngineTool
 from datachat.tools.top_rows_tool import TopRowsTool
 from datachat.tools.trend_tool import TrendTool
@@ -513,6 +514,12 @@ class SmolagentsEngine(DataChatEngine):
             PlotTool(datasource, output_dir=self._plots_dir or os.getenv("DATACHAT_PLOTS_DIR", "/tmp/datachat_plots")),
             TrendTool(datasource),
             ChartTool(datasource),
+            SentimentAnalysisTool(
+                datasource,
+                model=self._model,
+                provider=self._provider,
+                model_name=self._configured_model,
+            ),
         ]
 
     def _sql_tools(self, datasource: Optional[SqlDatasource] = None) -> list[Any]:
