@@ -59,7 +59,9 @@ def _apply_single_filter(
     Apply a single filter to df and return the filtered df.
 
     Supported ops: eq, lt, lte, gt, gte
-    - eq: case-insensitive string match; supports bool strings "true"/"false"
+    - eq: bool values / bool strings "true"/"false" first; on numeric (non-bool) columns,
+      numeric-coercible values (5, 5.0, "5") compare numerically; otherwise
+      case-insensitive trimmed string match
     - comparisons: numeric comparisons (value must be numeric-coercible)
 
     Raises _FilterError when the filter cannot be applied as requested.
@@ -120,6 +122,12 @@ def _apply_single_filter(
             else:
                 mask = s.astype(str).str.strip().str.lower() == ("true" if v_bool else "false")
             return df[mask]
+
+    # Numeric column: compare numerically so 5, 5.0 and "5" match a stored 5.0
+    if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
+        v_num = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+        if pd.notna(v_num):
+            return df[pd.to_numeric(s, errors="coerce") == float(v_num)]
 
     # Default: string compare (case-insensitive, trimmed)
     mask = s.astype(str).str.strip().str.lower() == str(value).strip().lower()
