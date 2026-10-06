@@ -508,6 +508,50 @@ def table_mapping(
     return Extracted(tuple(zip(labels.value, values.value)))
 
 
+def table_label_values(
+    response: NormalizedResponse | None,
+    labels: Iterable[str],
+    *,
+    value_columns: Sequence[str] = (),
+    allow_truncated: bool = False,
+) -> Extracted:
+    """``(label, value)`` pairs from an answer table whose column names are not known in advance.
+
+    - label column: the only column holding at least two of ``labels``
+      (normalized; one when a single label is expected);
+    - value column: the first of ``value_columns`` present, otherwise the
+      only other column whose every value parses as a plain number.
+
+    Any ambiguity (no or several candidate columns, rows with different
+    columns) is an extraction error, never a guess.
+    """
+    rows = table_rows(response, allow_truncated=allow_truncated)
+    if not rows.ok:
+        return rows
+    records = rows.value
+    if not records or not all(isinstance(r, dict) for r in records):
+        return Extracted(error="table rows are not records")
+    columns = list(records[0])
+    if any(set(r) != set(columns) for r in records):
+        return Extracted(error="table rows differ in columns")
+    wanted = {normalize_label(label) for label in labels}
+    needed = min(2, len(wanted))
+    label_cols = [c for c in columns if sum(normalize_label(r[c]) in wanted for r in records) >= needed]
+    if len(label_cols) != 1:
+        return Extracted(error="no unique label column")
+    label_col = label_cols[0]
+    others = [c for c in columns if c != label_col]
+    named = [c for c in value_columns if c in others]
+    if named:
+        value_col = named[0]
+    else:
+        numeric = [c for c in others if all(to_number(r[c]).ok for r in records)]
+        if len(numeric) != 1:
+            return Extracted(error="no unique numeric value column")
+        value_col = numeric[0]
+    return Extracted(tuple((r[label_col], r[value_col]) for r in records))
+
+
 def charts(response: NormalizedResponse | None) -> Extracted:
     """Backend-recorded charts. An OK response without charts yields an empty tuple."""
     error = _response_error(response)
