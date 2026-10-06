@@ -572,6 +572,39 @@ this down, pass `origins=[...]` instead.
 `main.py:59` raises at startup if `ENCRYPTION_KEY` is unset, and assigns it to
 `app.secret_key` (used for admin session cookies).
 
+### DataChat Functional Evaluation harness
+
+`python -m evaluation.datachat` runs frozen DataChat evaluation scenarios against
+a Maui (Gunicorn/gevent) process that the harness launches, owns and stops itself.
+It writes an evidence package under `evaluation/datachat/runs/` (git-ignored); it
+does not grade answers. The local evaluation artifacts under
+`docs/datachat_functional_evaluation/` must be present, and the normal `.env`
+(provider, model, DB, `ENCRYPTION_KEY`) is used as-is. The full contract lives in
+the harness design document in that directory.
+
+Run from the repository root with the virtualenv active. Identify an existing
+Maui user with enough tokens (placeholders shown):
+
+```bash
+export MAUI_FE_EMAIL='user@example.org'
+export MAUI_FE_USERNAME='user@example.org'
+read -s MAUI_FE_API_KEY && export MAUI_FE_API_KEY   # or omit: the CLI prompts (hidden input)
+```
+
+`--email` / `--username` override the variables. There is no flag for the API key.
+
+```bash
+python -m evaluation.datachat FE-01                 # one scenario, port 5055 by default
+python -m evaluation.datachat FE-01 --port 5056     # if 5055 is in use (no auto-selection)
+python -m evaluation.datachat --all                 # full suite, exploratory
+python -m evaluation.datachat --all --official      # official: needs --all and a clean working tree
+unset MAUI_FE_API_KEY                               # when done
+```
+
+Exit codes: `0` completed, `1` aborted on an infrastructure/preflight condition,
+`2` usage/configuration error, `3` unexpected harness error, `130` interrupted.
+Offline tests: `pytest tests/test_fe_harness_*.py`.
+
 ---
 
 ## 7. Layered Architecture In Depth
