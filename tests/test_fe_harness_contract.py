@@ -73,7 +73,7 @@ def test_pinned_artifacts_are_exact():
         ("evaluation_dataset.csv", "f98f610ceb21e4121ef7310883ae8e3d55496512f0a5a633f1e04aeca47f38fe", True),
         ("ground_truth.json", "25de35052d44286f05fa6cb941deab050de084ed87d0695c0fbc587f4fbd77d1", True),
         ("ground_truth.md", "cc1068b74d3004c458a3464e928da787dd3269d8761385361ef712a722db5383", True),
-        ("datachat_functional_evaluation_design.md", "0d7462ea1a475339775ef6229887d1ed66cc4ec106f2567bcb7ad83663513914", True),
+        ("datachat_functional_evaluation_design.md", "279773599231b359a0a391a3be238f643128373468b77b803deab378f8b032ee", True),
         ("generate_dataset.py", "0c5802b6b341466cb2b39a7b2fa721b6f5ca7794a6c53086c337bd93b904645b", False),
     ]
 
