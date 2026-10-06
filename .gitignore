@@ -65,3 +65,6 @@ Thumbs.db
 .aider*
 
 .claude/
+
+# DataChat Functional Evaluation generated runs
+/evaluation/datachat/runs/
