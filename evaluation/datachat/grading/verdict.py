@@ -31,8 +31,10 @@ Verdict order (one verdict per GRADEABLE scenario):
 4. otherwise PASS.
 
 NOT_APPLICABLE (check or review), SHOULD INDETERMINATE and MAY never affect
-the verdict. The execution assessment is an input: it is derived from
-normalized evidence elsewhere, never here.
+the verdict. The execution assessment and its stable reason are inputs: they
+are derived from normalized evidence elsewhere, never here, and are recorded
+verbatim in the grade. Review answers apply to catalogue review items only;
+they never change the execution assessment (no human execution override in v1).
 """
 
 import json
@@ -45,6 +47,7 @@ from evaluation.datachat.grading.model import (
     CheckStatus,
     EvidenceClass,
     ExecutionAssessment,
+    ExecutionAssessmentReason,
     FailureCategory,
     Gate,
     ManualReviewItem,
@@ -52,6 +55,7 @@ from evaluation.datachat.grading.model import (
     ReviewStatus,
     ScenarioGrade,
     Verdict,
+    check_execution_provenance,
 )
 
 MUST, SHOULD = RequirementLevel.MUST, RequirementLevel.SHOULD
@@ -207,7 +211,8 @@ def _failures(checks: Sequence[CheckResult], reviews: Sequence[ManualReviewItem]
 
 def build_scenario_grade(
     *,
-    execution_assessment: ExecutionAssessment,
+    execution_assessment: ExecutionAssessment | None,
+    execution_assessment_reason: ExecutionAssessmentReason | None,
     scenario_id: str,
     gate: Gate,
     execution_sha256: str | None,
@@ -218,17 +223,24 @@ def build_scenario_grade(
 ) -> ScenarioGrade:
     """One ``ScenarioGrade``. Non-gradeable gates get no verdict and must carry no checks.
 
-    ``execution_assessment`` is mandatory: OK asserts that execution evidence was examined
-    and found usable, so it is never assumed.
+    ``execution_assessment`` and ``execution_assessment_reason`` are mandatory and never
+    defaulted: a valid pair for GRADEABLE (OK asserts execution evidence was examined and
+    found usable), both None for any other gate.
     """
-    if not isinstance(execution_assessment, ExecutionAssessment):
-        raise VerdictBuildError(f"{scenario_id}: invalid execution assessment {execution_assessment!r}")
+    try:
+        check_execution_provenance(execution_assessment, execution_assessment_reason)
+    except ValueError as exc:
+        raise VerdictBuildError(f"{scenario_id}: {exc}") from exc
     if gate is not Gate.GRADEABLE:
+        if execution_assessment is not None:
+            raise VerdictBuildError(f"{scenario_id}: gate {gate.value} admits no execution assessment")
         if checks or manual_reviews or tuple(review_answers):
             raise VerdictBuildError(f"{scenario_id}: gate {gate.value} cannot carry checks or reviews")
         return ScenarioGrade(scenario_id=scenario_id, gate=gate, execution_sha256=execution_sha256,
                              teardown_verified=teardown_verified)
 
+    if execution_assessment is None:
+        raise VerdictBuildError(f"{scenario_id}: a GRADEABLE scenario needs an execution assessment")
     checks = tuple(checks)
     reviews = merge_reviews(manual_reviews, review_answers).items
     _check_invariants(checks, reviews)
@@ -262,6 +274,8 @@ def build_scenario_grade(
         caveats=caveats,
         checks=checks,
         manual_reviews=reviews,
+        execution_assessment=execution_assessment,
+        execution_assessment_reason=execution_assessment_reason,
         execution_sha256=execution_sha256,
         teardown_verified=teardown_verified,
     )

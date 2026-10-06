@@ -10,7 +10,7 @@ import pytest
 
 from evaluation.datachat.grading import catalogue as cat
 from evaluation.datachat.grading import verdict as v
-from evaluation.datachat.grading.model import ExecutionAssessment
+from evaluation.datachat.grading.model import ExecutionAssessment, ExecutionAssessmentReason
 from evaluation.datachat.grading.model import (
     CheckResult,
     CheckStatus,
@@ -31,6 +31,9 @@ MET, NOT_MET, IND, NA = (CheckStatus.MET, CheckStatus.NOT_MET, CheckStatus.INDET
 DIRECT, INFERRED = EvidenceClass.DIRECT, EvidenceClass.INFERRED
 F = FailureCategory
 SHA = "a" * 64
+RS = ExecutionAssessmentReason
+REASON = {ExecutionAssessment.OK: RS.USABLE_OUTCOME, ExecutionAssessment.FAILED: RS.ERROR_OUTCOME,
+          ExecutionAssessment.NEEDS_REVIEW: RS.ADAPTER_FALLBACK}
 REF = ("scenarios/FE-01/http/datachat.response.bin",)
 
 
@@ -51,7 +54,8 @@ def ans(cid, status=ReviewStatus.SATISFIED, sha=SHA, note=None):
 def build(checks=(), reviews=(), answers=()):
     return v.build_scenario_grade(scenario_id="FE-01", gate=Gate.GRADEABLE, execution_sha256="e" * 64,
                                   teardown_verified=True, checks=checks, manual_reviews=reviews,
-                                  review_answers=answers, execution_assessment=ExecutionAssessment.OK)
+                                  review_answers=answers, execution_assessment=ExecutionAssessment.OK,
+                                  execution_assessment_reason=RS.USABLE_OUTCOME)
 
 
 # --- Core verdict table ----------------------------------------------------------------
@@ -117,7 +121,8 @@ EA = ExecutionAssessment
 def build_ea(assessment, checks=(), reviews=()):
     return v.build_scenario_grade(scenario_id="FE-01", gate=Gate.GRADEABLE, execution_sha256="e" * 64,
                                   teardown_verified=True, checks=checks, manual_reviews=reviews,
-                                  execution_assessment=assessment)
+                                  execution_assessment=assessment,
+                                  execution_assessment_reason=REASON.get(assessment, RS.USABLE_OUTCOME))
 
 
 def test_execution_ok_is_neutral():
@@ -145,6 +150,32 @@ def test_execution_assessment_cannot_be_omitted():
     with pytest.raises(TypeError, match="execution_assessment"):
         v.build_scenario_grade(scenario_id="FE-01", gate=Gate.GRADEABLE, execution_sha256="e" * 64,
                                teardown_verified=True, checks=[chk("m")])
+    with pytest.raises(TypeError, match="execution_assessment_reason"):
+        v.build_scenario_grade(scenario_id="FE-01", gate=Gate.GRADEABLE, execution_sha256="e" * 64,
+                               teardown_verified=True, execution_assessment=EA.OK)
+    with pytest.raises(v.VerdictBuildError):
+        v.build_scenario_grade(scenario_id="FE-01", gate=Gate.GRADEABLE, execution_sha256="e" * 64,
+                               teardown_verified=True, execution_assessment=None,
+                               execution_assessment_reason=None)
+
+
+@pytest.mark.parametrize("assessment,reason", [
+    (EA.OK, RS.ADAPTER_FALLBACK), (EA.FAILED, RS.USABLE_OUTCOME), (EA.NEEDS_REVIEW, RS.HTTP_5XX),
+    (EA.OK, None), (None, RS.USABLE_OUTCOME), (EA.OK, "USABLE_OUTCOME"),
+])
+def test_impossible_assessment_reason_pairs_rejected(assessment, reason):
+    with pytest.raises(v.VerdictBuildError):
+        v.build_scenario_grade(scenario_id="FE-01", gate=Gate.GRADEABLE, execution_sha256="e" * 64,
+                               teardown_verified=True, execution_assessment=assessment,
+                               execution_assessment_reason=reason)
+
+
+def test_execution_provenance_recorded_verbatim():
+    g = build_ea(EA.NEEDS_REVIEW, [chk("m", NOT_MET)])
+    assert g.verdict is Verdict.FAIL_ANALYTICAL
+    assert (g.execution_assessment, g.execution_assessment_reason) == (EA.NEEDS_REVIEW, RS.ADAPTER_FALLBACK)
+    d = g.to_dict()
+    assert (d["execution_assessment"], d["execution_assessment_reason"]) == ("NEEDS_REVIEW", "ADAPTER_FALLBACK")
 
 
 def test_execution_assessment_must_be_the_enum():
@@ -286,12 +317,16 @@ def test_invariant_violations():
 @pytest.mark.parametrize("gate", [Gate.NOT_RUN, Gate.NOT_SCOREABLE_INFRA, Gate.NOT_SCOREABLE])
 def test_non_gradeable_gates_get_no_verdict(gate):
     g = v.build_scenario_grade(scenario_id="FE-03", gate=gate, execution_sha256=None, teardown_verified=None,
-                               execution_assessment=ExecutionAssessment.OK)
+                               execution_assessment=None, execution_assessment_reason=None)
     assert g.verdict is None and g.root_failure is None and g.checks == ()
+    assert g.execution_assessment is None and g.execution_assessment_reason is None
     with pytest.raises(v.VerdictBuildError):
         v.build_scenario_grade(scenario_id="FE-03", gate=gate, execution_sha256=None, teardown_verified=None,
-                               execution_assessment=ExecutionAssessment.OK,
+                               execution_assessment=None, execution_assessment_reason=None,
                                checks=[chk("m")])
+    with pytest.raises(v.VerdictBuildError, match="admits no execution assessment"):
+        v.build_scenario_grade(scenario_id="FE-03", gate=gate, execution_sha256=None, teardown_verified=None,
+                               execution_assessment=EA.OK, execution_assessment_reason=RS.USABLE_OUTCOME)
 
 
 def test_deterministic_and_non_mutating():
@@ -314,7 +349,8 @@ def grade_from_catalogue(ev, answers=()):
     return v.build_scenario_grade(scenario_id=ev.scenario_id, gate=ev.gate, execution_sha256=ev.execution_sha256,
                                   teardown_verified=ev.teardown_verified, checks=result.checks,
                                   manual_reviews=result.manual_reviews, review_answers=answers,
-                                  execution_assessment=ExecutionAssessment.OK), result
+                                  execution_assessment=ExecutionAssessment.OK,
+                                  execution_assessment_reason=RS.USABLE_OUTCOME), result
 
 
 def answer_all(result, status=ReviewStatus.SATISFIED, **override):

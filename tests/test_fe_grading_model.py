@@ -10,6 +10,7 @@ from dataclasses import FrozenInstanceError, fields
 import pytest
 
 from evaluation.datachat.grading.model import (
+    EXECUTION_REASONS,
     GRADING_SCHEMA_VERSION,
     CheckResult,
     CheckStatus,
@@ -17,6 +18,7 @@ from evaluation.datachat.grading.model import (
     EvidenceClass,
     FailureCategory,
     ExecutionAssessment,
+    ExecutionAssessmentReason,
     Gate,
     ManualReviewItem,
     RequirementLevel,
@@ -129,9 +131,13 @@ def test_scenario_grade_nullable_verdict_and_gate_guard():
         scenario_id="FE-01", gate=Gate.GRADEABLE, verdict=Verdict.FAIL_ANALYTICAL,
         root_failure=FailureCategory.ANALYTICAL, other_failures=(FailureCategory.HONESTY,),
         checks=(_check(),), manual_reviews=(_review(),), execution_sha256="b" * 64, teardown_verified=False,
+        execution_assessment=ExecutionAssessment.OK,
+        execution_assessment_reason=ExecutionAssessmentReason.USABLE_OUTCOME,
     )
     data = full.to_dict()
     assert json.loads(json.dumps(data)) == data
+    assert (data["execution_assessment"], data["execution_assessment_reason"]) == ("OK", "USABLE_OUTCOME")
+    assert data_null_execution(grade)
     assert data["other_failures"] == ["HONESTY"] and data["teardown_verified"] is False
 
 
@@ -147,3 +153,33 @@ def test_run_grade_has_no_score_or_run_verdict():
     assert not {n for n in names if "score" in n}
     assert "verdict" not in {f.name for f in fields(RunGrade)}
     assert data["grading_complete"] is False and data["official"] is False
+
+
+def data_null_execution(grade):
+    d = grade.to_dict()
+    return d["execution_assessment"] is None and d["execution_assessment_reason"] is None
+
+
+@pytest.mark.parametrize("kwargs", [
+    {},  # gradeable without assessment
+    {"execution_assessment": ExecutionAssessment.OK},  # without reason
+    {"execution_assessment_reason": ExecutionAssessmentReason.USABLE_OUTCOME},
+    {"execution_assessment": ExecutionAssessment.OK,
+     "execution_assessment_reason": ExecutionAssessmentReason.ADAPTER_FALLBACK},  # impossible pair
+])
+def test_gradeable_grade_requires_valid_execution_provenance(kwargs):
+    with pytest.raises(ValueError):
+        ScenarioGrade(scenario_id="FE-01", gate=Gate.GRADEABLE, **kwargs)
+
+
+@pytest.mark.parametrize("gate", [Gate.NOT_RUN, Gate.NOT_SCOREABLE_INFRA, Gate.NOT_SCOREABLE])
+def test_non_gradeable_grade_rejects_execution_provenance(gate):
+    assert data_null_execution(ScenarioGrade(scenario_id="FE-01", gate=gate))
+    with pytest.raises(ValueError):
+        ScenarioGrade(scenario_id="FE-01", gate=gate, execution_assessment=ExecutionAssessment.FAILED,
+                      execution_assessment_reason=ExecutionAssessmentReason.ERROR_OUTCOME)
+
+
+def test_every_reason_belongs_to_exactly_one_assessment():
+    owners = [a for r in ExecutionAssessmentReason for a, rs in EXECUTION_REASONS.items() if r in rs]
+    assert len(owners) == len(ExecutionAssessmentReason) and set(EXECUTION_REASONS) == set(ExecutionAssessment)

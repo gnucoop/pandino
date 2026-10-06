@@ -104,6 +104,44 @@ class ExecutionAssessment(str, Enum):
     NEEDS_REVIEW = "NEEDS_REVIEW"
 
 
+class ExecutionAssessmentReason(str, Enum):
+    """Stable, scenario-agnostic reason for an ``ExecutionAssessment`` (one per derivation branch)."""
+
+    USABLE_OUTCOME = "USABLE_OUTCOME"
+    ERROR_OUTCOME = "ERROR_OUTCOME"
+    HTTP_5XX = "HTTP_5XX"
+    EMPTY_OUTCOME = "EMPTY_OUTCOME"
+    MISSING_RESPONSE = "MISSING_RESPONSE"
+    CONFLICTING_KINDS = "CONFLICTING_KINDS"
+    HTTP_NON_2XX = "HTTP_NON_2XX"
+    UNPARSEABLE_RESPONSE = "UNPARSEABLE_RESPONSE"
+    RUNTIME_STATUS_CONFLICT = "RUNTIME_STATUS_CONFLICT"
+    ADAPTER_FALLBACK = "ADAPTER_FALLBACK"
+
+
+_R = ExecutionAssessmentReason
+EXECUTION_REASONS: dict[ExecutionAssessment, frozenset[ExecutionAssessmentReason]] = {
+    ExecutionAssessment.OK: frozenset({_R.USABLE_OUTCOME}),
+    ExecutionAssessment.FAILED: frozenset({_R.ERROR_OUTCOME, _R.HTTP_5XX, _R.EMPTY_OUTCOME}),
+    ExecutionAssessment.NEEDS_REVIEW: frozenset({
+        _R.MISSING_RESPONSE, _R.CONFLICTING_KINDS, _R.HTTP_NON_2XX, _R.UNPARSEABLE_RESPONSE,
+        _R.RUNTIME_STATUS_CONFLICT, _R.ADAPTER_FALLBACK,
+    }),
+}
+
+
+def check_execution_provenance(
+    assessment: ExecutionAssessment | None, reason: ExecutionAssessmentReason | None
+) -> None:
+    """Both enums and a valid pair, or both None. Raises ``ValueError``."""
+    if assessment is None and reason is None:
+        return
+    if not isinstance(assessment, ExecutionAssessment) or not isinstance(reason, ExecutionAssessmentReason):
+        raise ValueError(f"execution assessment and reason must both be set: {assessment!r}, {reason!r}")
+    if reason not in EXECUTION_REASONS[assessment]:
+        raise ValueError(f"reason {reason.value} is not valid for execution assessment {assessment.value}")
+
+
 class Gate(str, Enum):
     """Whether a scenario may be analytically graded. Not a verdict."""
 
@@ -189,7 +227,13 @@ class ManualReviewItem(_Serializable):
 
 @dataclass(frozen=True)
 class ScenarioGrade(_Serializable):
-    """Grade of one scenario. ``verdict`` is null unless the gate is GRADEABLE."""
+    """Grade of one scenario. ``verdict`` is null unless the gate is GRADEABLE.
+
+    A GRADEABLE grade always records the execution assessment and its stable
+    reason; non-gradeable gates record neither (infrastructure is explained by
+    the gate, never by the execution vocabulary). The assessment is derived
+    from execution evidence only: human review files cannot change it in v1.
+    """
 
     scenario_id: str
     gate: Gate
@@ -199,13 +243,21 @@ class ScenarioGrade(_Serializable):
     caveats: tuple[str, ...] = ()
     checks: tuple[CheckResult, ...] = ()
     manual_reviews: tuple[ManualReviewItem, ...] = ()
+    execution_assessment: ExecutionAssessment | None = None
+    execution_assessment_reason: ExecutionAssessmentReason | None = None
     execution_sha256: str | None = None
     teardown_verified: bool | None = None
     schema_version: int = GRADING_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        if self.gate is not Gate.GRADEABLE and self.verdict is not None:
-            raise ValueError(f"gate {self.gate.value} admits no verdict")
+        check_execution_provenance(self.execution_assessment, self.execution_assessment_reason)
+        if self.gate is not Gate.GRADEABLE:
+            if self.verdict is not None:
+                raise ValueError(f"gate {self.gate.value} admits no verdict")
+            if self.execution_assessment is not None:
+                raise ValueError(f"gate {self.gate.value} admits no execution assessment")
+        elif self.execution_assessment is None:
+            raise ValueError("a GRADEABLE grade needs an execution assessment and reason")
 
 
 @dataclass(frozen=True)
