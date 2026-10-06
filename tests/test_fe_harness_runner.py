@@ -670,3 +670,11 @@ def test_successful_preflight_manifest(tmp_path):
     assert h.processes[0].env["DATACHAT_SQL_ENABLED"] == "false"
     assert h.processes[0].env["AGENT_RUNS_LOG_PATH"] == str(h.result.run_dir / "agent_runs.log")
     assert "OPENAI_API_KEY" not in os.environ or os.environ["OPENAI_API_KEY"] != "provider-secret"
+
+
+def test_official_subset_rejected_before_anything_runs(tmp_path):
+    h = Harness(tmp_path)
+    with pytest.raises(ValueError, match="full frozen scenario catalogue"):
+        h.run(SCENARIOS[:1], official=True)
+    assert h.processes == []
+    assert not (tmp_path / "runs").exists()

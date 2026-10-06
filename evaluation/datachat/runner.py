@@ -807,10 +807,16 @@ def run_suite(
     deps: RunnerDeps | None = None,
     scenarios: Sequence[Scenario] = SCENARIOS,
 ) -> RunResult:
-    """Run the frozen suite (or a prefix of it, for tests) and return the final run state."""
+    """Run the frozen suite (or a subset of it, in catalogue order) and return the final run state.
+
+    An official run must cover the whole frozen catalogue: a subset is a
+    caller error (``ValueError``), raised before anything is checked or written.
+    """
+    scenarios = tuple(scenarios)
+    if options.official and scenarios != SCENARIOS:
+        raise ValueError("official run requires the full frozen scenario catalogue")
     deps = deps or RunnerDeps()
     identity = Identity(api_key=api_key, user_email=options.email, user_name=options.username)
-    scenarios = tuple(scenarios)
 
     local = _local_preflight(options, deps, scenarios)
     if isinstance(local, Failure):
