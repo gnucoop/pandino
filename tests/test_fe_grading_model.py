@@ -16,6 +16,7 @@ from evaluation.datachat.grading.model import (
     Dimension,
     EvidenceClass,
     FailureCategory,
+    ExecutionAssessment,
     Gate,
     ManualReviewItem,
     RequirementLevel,
@@ -72,6 +73,7 @@ def test_frozen_vocabulary():
     assert [s.value for s in CheckStatus] == ["MET", "NOT_MET", "INDETERMINATE", "NOT_APPLICABLE"]
     assert [s.value for s in ReviewStatus] == ["PENDING", "SATISFIED", "FAILED", "NOT_APPLICABLE"]
     assert {g.value for g in Gate} == {"GRADEABLE", "NOT_RUN", "NOT_SCOREABLE_INFRA", "NOT_SCOREABLE"}
+    assert {e.value for e in ExecutionAssessment} == {"OK", "FAILED", "NEEDS_REVIEW"}
 
 
 def test_execution_is_a_failure_category_not_a_dimension():

@@ -91,6 +91,19 @@ class ReviewStatus(str, Enum):
     NOT_APPLICABLE = "NOT_APPLICABLE"
 
 
+class ExecutionAssessment(str, Enum):
+    """Generic usability of the DataChat outcome, derived outside the scenario catalogue.
+
+    - OK: the outcome is usable; grade checks and reviews normally;
+    - FAILED: the outcome itself is unusable → FAIL — EXECUTION (root);
+    - NEEDS_REVIEW: borderline execution evidence → NEEDS REVIEW unless a FAIL is established.
+    """
+
+    OK = "OK"
+    FAILED = "FAILED"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+
+
 class Gate(str, Enum):
     """Whether a scenario may be analytically graded. Not a verdict."""
 
