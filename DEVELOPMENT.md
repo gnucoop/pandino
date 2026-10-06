@@ -605,6 +605,21 @@ Exit codes: `0` completed, `1` aborted on an infrastructure/preflight condition,
 `2` usage/configuration error, `3` unexpected harness error, `130` interrupted.
 Offline tests: `pytest tests/test_fe_harness_*.py`.
 
+Grade a finished run offline (no Maui, DB, provider or API key):
+
+```bash
+python -m evaluation.datachat.grading <run-id>          # run under evaluation/datachat/runs/
+python -m evaluation.datachat.grading --run-dir <path>  # explicit run directory
+```
+
+Results are regenerated under `<run>/grading/results/` on every invocation.
+Human review answers live in `<run>/grading/reviews/FE-NN.json`; edit them and
+re-run the command. Runs executed under an older evaluation contract are refused.
+Exit codes: `0` grading complete (scenario FAIL verdicts are results, not
+errors), `1` reviews still pending, `2` usage/input error (including contract
+mismatch), `3` unexpected error, `130` interrupted.
+Offline tests: `pytest tests/test_fe_grading_*.py`.
+
 ---
 
 ## 7. Layered Architecture In Depth

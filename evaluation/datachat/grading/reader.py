@@ -49,6 +49,10 @@ class GradingInputError(Exception):
     """The run package cannot be graded: unfinished, inconsistent or corrupted."""
 
 
+class ContractMismatchError(GradingInputError):
+    """The run was executed under a different evaluation contract than the CURRENT one."""
+
+
 # --- Runtime log -------------------------------------------------------------
 
 _RUNTIME_LINE = re.compile(r"^(\S+) (\S+) (\S+) request_id=(\S+) app_id=(\S+) ?(.*)$")
@@ -415,7 +419,7 @@ def _verify_file(path: Path, sha256: str, size: int | None, what: str) -> None:
 def _verify_contract(run: EvaluationRun, repo_root: Path) -> dict[str, str]:
     recorded = {a.get("name"): a for a in run.evaluation_contract.get("artifacts", []) if isinstance(a, dict)}
     if run.evaluation_contract.get("required_match") is not True:
-        raise _refuse("run was executed against a non-matching evaluation contract")
+        raise ContractMismatchError("run was executed against a non-matching evaluation contract")
     hashes: dict[str, str] = {}
     for check in contract.verify_artifacts(repo_root):
         entry = recorded.get(check.name)
@@ -424,9 +428,9 @@ def _verify_contract(run: EvaluationRun, repo_root: Path) -> dict[str, str]:
                 hashes[check.name] = check.actual_sha256
             continue
         if not check.matches:
-            raise _refuse(f"evaluation contract artifact changed or missing: {check.name}")
+            raise ContractMismatchError(f"evaluation contract artifact changed or missing: {check.name}")
         if entry is None or entry.get("actual_sha256") != check.actual_sha256:
-            raise _refuse(f"run manifest does not record the current contract hash: {check.name}")
+            raise ContractMismatchError(f"run manifest does not record the current contract hash: {check.name}")
         hashes[check.name] = check.actual_sha256
     return hashes
 

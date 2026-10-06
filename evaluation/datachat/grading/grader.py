@@ -84,6 +84,10 @@ class RunGradingError(Exception):
     """The run cannot be graded or its results cannot be persisted. Never a scenario verdict."""
 
 
+class ResultPersistenceError(RunGradingError):
+    """Grading succeeded in memory but ``grading/results/`` could not be written."""
+
+
 # --- Execution assessment ---------------------------------------------------------
 
 
@@ -246,7 +250,7 @@ def persist_results(run_dir: Path, run_grade: RunGrade, grades: tuple[ScenarioGr
             write_json_atomic(safe_child(results, Path("scenarios") / f"{g.scenario_id}.json"), g.to_dict())
         write_json_atomic(results / RUN_GRADE_NAME, run_grade.to_dict())
     except (OSError, ValueError, TypeError) as exc:
-        raise RunGradingError(f"cannot persist grading results: {type(exc).__name__}: {exc}") from exc
+        raise ResultPersistenceError(f"cannot persist grading results: {type(exc).__name__}: {exc}") from exc
     return results
 
 
