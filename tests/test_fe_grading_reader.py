@@ -408,7 +408,7 @@ def test_agent_run_code_exposed_without_observations(tmp_path, repo_root):
     s = load_run_for_grading(build_run(tmp_path, repo_root, {"FE-01": {}}), repo_root).scenario("FE-01")
     a = s.agent_run
     assert a.parse_ok and (a.state, a.steps_count, a.response_kind) == ("success", 3, "text")
-    assert a.code_blocks[1].startswith("chart(") and s.tools.code_blocks == a.code_blocks
+    assert a.code_blocks[1].startswith("chart(")
     assert a.ref == "scenarios/FE-01/agent_runs/record.jsonl"
 
 
@@ -417,4 +417,3 @@ def test_usage_rows_exposed(tmp_path, repo_root):
     u = s.usage
     assert len(u.rows) == 2 and u.primary_log_id == 7 and u.primary_row_present
     assert [r["id"] for r in u.extra_rows] == [6]
-    assert s.tools.usage_extra_rows == 1

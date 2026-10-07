@@ -75,9 +75,9 @@ class RuntimeRecord:
 class ToolEvent:
     """A runtime ``tool_call_*`` event.
 
-    Proves that a tool invocation was logged, with the arguments the tool
-    chose to log. It is corroborating evidence for INFERRED tool-use claims,
-    not proof of the tool's output or of chaining.
+    Observed execution evidence: the tool ran and logged this outcome, with
+    the arguments it chose to log. It does not prove the tool's output or
+    chaining.
     """
 
     line_no: int
@@ -310,17 +310,13 @@ class ArtifactEvidence:
 
 @dataclass(frozen=True)
 class ToolEvidence:
-    """Tool-use evidence, kept epistemically separate by source.
+    """Runtime ``tool_call_*`` events: observed tool execution, where logged.
 
-    - ``code_blocks``: generated ``python_interpreter`` code (INFERRED);
-    - ``runtime_events``: runtime ``tool_call_*`` events (corroboration only);
-    - ``usage_extra_rows``: provider rows beyond the primary row (a semantic
-      provider call happened; which tool made it is not recorded).
+    Generated code (``AgentRunEvidence.code_blocks``) and provider Usage rows
+    (``UsageRows``) are read from their own evidence, not duplicated here.
     """
 
-    code_blocks: tuple[str, ...] = ()
     runtime_events: tuple[ToolEvent, ...] = ()
-    usage_extra_rows: int = 0
 
 
 # --- Scenario and run views --------------------------------------------------
@@ -628,11 +624,7 @@ def _load_scenario(root: Path, entry: dict[str, Any], run_id: str) -> ScenarioEv
 
     agent_run = _load_agent_run(execution, scenario_dir, run_rel)
     usage = _load_usage(execution, scenario_dir, run_rel)
-    tools = ToolEvidence(
-        code_blocks=agent_run.code_blocks,
-        runtime_events=runtime.tool_events if runtime else (),
-        usage_extra_rows=len(usage.extra_rows) if usage.primary_log_id is not None else len(usage.rows),
-    )
+    tools = ToolEvidence(runtime_events=runtime.tool_events if runtime else ())
     return ScenarioEvidence(
         **common,
         datachat_request_id=exchange.request_id if exchange else None,

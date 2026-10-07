@@ -7,10 +7,11 @@ a typed source model:
 
 Inputs: ``grading/results/run_grade.json``, ``grading/results/scenarios/*.json``,
 ``run_manifest.json``, ``scenarios/<id>/execution.json``, the ``/datachat``
-exchange and response body, and the delivered image/export artifacts. Never
-read: the repository scenario catalogue, the
-evaluation contract under ``docs/`` (recorded in ``RunGrade.contract``,
-verified by the grader), ``agent_runs``, runtime logs or Usage as answer.
+exchange and response body, and the delivered image/export artifacts. This
+module does not read the repository scenario catalogue, the evaluation
+contract under ``docs/`` (recorded in ``RunGrade.contract``, verified by the
+grader; pinned reference artifacts are checked separately by ``reference``),
+``agent_runs``, runtime logs or Usage as answer.
 
 Only grading schema 2 (technical outcomes) is accepted.
 

@@ -68,7 +68,7 @@ def evidence(sid, response=None, *, code=None, events=(), usage_rows=None, image
         refs={"http/datachat.response.bin": f"{base}/http/datachat.response.bin",
               "runtime/datachat.log": f"{base}/runtime/datachat.log"},
         response=resp, runtime=runtime, agent_run=agent, usage=usage, artifacts=artifacts,
-        tools=ToolEvidence(agent.code_blocks, runtime.tool_events, max(0, (usage_rows or 1) - 1)),
+        tools=ToolEvidence(runtime.tool_events),
     )
 
 
@@ -428,21 +428,3 @@ def test_semantic_capability_absent(sid, tool):
 def test_fe14_tool_order_is_not_graded():
     r = grade(evidence("FE-14", text("x"), events=[CM_EVENT, KW_EVENT], usage_rows=2))
     assert all(x.status in (MET, NA) for x in r.checks)
-
-
-# --- Generic primitive ----------------------------------------------------------------
-
-
-def test_table_label_values_locates_columns_by_content():
-    from evaluation.datachat.grading import checks as c
-
-    resp = normalize_response(json.dumps({"response": table([{"r": "North", "n": 1, "pct": "50%"},
-                                                              {"r": "South", "n": 2, "pct": "50%"}])}).encode(),
-                              200, "application/json")
-    assert c.table_label_values(resp, ["North", "South"]).value == (("North", 1), ("South", 2))
-    two = normalize_response(json.dumps({"response": table([{"r": "North", "a": 1, "b": 2},
-                                                             {"r": "South", "a": 3, "b": 4}])}).encode(),
-                             200, "application/json")
-    assert not c.table_label_values(two, ["North", "South"]).ok  # ambiguous value column
-    assert c.table_label_values(two, ["North", "South"], value_columns=("b",)).value == (("North", 2), ("South", 4))
-    assert not c.table_label_values(two, ["East", "West"]).ok

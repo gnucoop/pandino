@@ -33,8 +33,10 @@ Scenario requirements (grading design §9.2), failure on reliable violation:
 - FE-14: provider-backed classification (Usage extra rows) and
   ``classify_match`` activity → TOOL EXECUTION.
 
-Other scenarios carry no scenario-specific check. Tool activity from
-runtime events or generated code is INFERRED: an INFERRED negative never
+Other scenarios carry no scenario-specific check. The FE-13/FE-14 tool
+activity checks are classified INFERRED by grading policy, even when a
+runtime ``tool_call_*`` event (observed execution) satisfies them, because
+they may also be satisfied from generated code: an INFERRED negative never
 fails a scenario by itself (outcome rules).
 
 Only GRADEABLE scenarios are accepted. Output is deterministic.
