@@ -68,3 +68,6 @@ Thumbs.db
 
 # DataChat Functional Evaluation generated runs
 /evaluation/datachat/runs/
+
+
+evaluation/datachat/run_backups/
