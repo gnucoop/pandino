@@ -29,7 +29,9 @@ from evaluation.datachat.evidence import read_json
 from evaluation.datachat.model import InfraCode, SuiteStatus
 from evaluation.datachat.scenarios import SCENARIOS, Scenario
 
-DEFAULT_PORT = 5055  # operator default; 5000 is often taken (macOS AirPlay, make run-local)
+DEFAULT_PORT = (
+    5055  # operator default; 5000 is often taken (macOS AirPlay, make run-local)
+)
 EVAL_LABEL = "fe-eval-v1"
 ENV_EMAIL = "MAUI_FE_EMAIL"
 ENV_USERNAME = "MAUI_FE_USERNAME"
@@ -63,12 +65,27 @@ def _parser() -> argparse.ArgumentParser:
         description="Run frozen DataChat Functional Evaluation scenarios against a harness-owned Maui.",
         epilog=f"The API key is read from {ENV_API_KEY} or prompted for; it is never a command-line argument.",
     )
-    parser.add_argument("scenarios", nargs="*", metavar="FE-NN", help="frozen scenario IDs (e.g. FE-01)")
-    parser.add_argument("--all", action="store_true", help="run the full frozen catalogue")
-    parser.add_argument("--official", action="store_true", help="official run (requires --all and a clean tree)")
-    parser.add_argument("--port", type=_port, default=DEFAULT_PORT, help=f"Maui bind port (default {DEFAULT_PORT})")
+    parser.add_argument(
+        "scenarios", nargs="*", metavar="FE-NN", help="frozen scenario IDs (e.g. FE-01)"
+    )
+    parser.add_argument(
+        "--all", action="store_true", help="run the full frozen catalogue"
+    )
+    parser.add_argument(
+        "--official",
+        action="store_true",
+        help="official run (requires --all and a clean tree)",
+    )
+    parser.add_argument(
+        "--port",
+        type=_port,
+        default=DEFAULT_PORT,
+        help=f"Maui bind port (default {DEFAULT_PORT})",
+    )
     parser.add_argument("--email", help=f"evaluation user email (default ${ENV_EMAIL})")
-    parser.add_argument("--username", help=f"evaluation user name (default ${ENV_USERNAME})")
+    parser.add_argument(
+        "--username", help=f"evaluation user name (default ${ENV_USERNAME})"
+    )
     return parser
 
 
@@ -79,7 +96,9 @@ def select_scenarios(ids: Sequence[str], select_all: bool) -> tuple[Scenario, ..
     if select_all:
         return SCENARIOS
     if not ids:
-        raise _UsageError("no scenario selected: pass scenario IDs (e.g. FE-01) or --all")
+        raise _UsageError(
+            "no scenario selected: pass scenario IDs (e.g. FE-01) or --all"
+        )
     known = {s.scenario_id for s in SCENARIOS}
     unknown = sorted({i for i in ids if i not in known})
     if unknown:
@@ -88,14 +107,20 @@ def select_scenarios(ids: Sequence[str], select_all: bool) -> tuple[Scenario, ..
     return tuple(s for s in SCENARIOS if s.scenario_id in wanted)
 
 
-def _identity_value(flag: str | None, environ: Mapping[str, str], name: str, what: str) -> str:
+def _identity_value(
+    flag: str | None, environ: Mapping[str, str], name: str, what: str
+) -> str:
     value = (flag if flag is not None else environ.get(name, "")).strip()
     if not value:
         raise _UsageError(f"evaluation {what} missing: pass --{what} or set {name}")
     return value
 
 
-def _api_key(environ: Mapping[str, str], getpass_fn: Callable[[str], str], isatty_fn: Callable[[], bool]) -> str:
+def _api_key(
+    environ: Mapping[str, str],
+    getpass_fn: Callable[[str], str],
+    isatty_fn: Callable[[], bool],
+) -> str:
     key = environ.get(ENV_API_KEY, "")
     if not key.strip():
         if not isatty_fn():
@@ -134,10 +159,14 @@ def _scenario_rows(run_dir: Path) -> list[str]:
     for entry in manifest.get("scenarios", []):
         flags = {}
         try:
-            flags = read_json(run_dir / entry["dir"] / "execution.json").get("flags", {})
+            flags = read_json(run_dir / entry["dir"] / "execution.json").get(
+                "flags", {}
+            )
         except (OSError, ValueError, KeyError):
             pass
-        teardown = "verified" if flags.get("teardown_verified") is True else "not verified"
+        teardown = (
+            "verified" if flags.get("teardown_verified") is True else "not verified"
+        )
         rows.append(
             f"  {entry.get('scenario_id')}  {entry.get('status')}  "
             f"scoreable={_yes(flags.get('scoreable'))}  teardown={teardown}"
@@ -145,14 +174,19 @@ def _scenario_rows(run_dir: Path) -> list[str]:
     return rows
 
 
-def render(result: runner.RunResult, options: runner.RunnerOptions, out: TextIO) -> None:
+def render(
+    result: runner.RunResult, options: runner.RunnerOptions, out: TextIO
+) -> None:
     mode = "official" if options.official else "exploratory, not comparable"
     print(f"DataChat FE execution {result.status.value} ({mode})", file=out)
     print("", file=out)
     if result.run_id:
         print(f"Run:       {result.run_id}", file=out)
     if result.failure is not None:
-        print(f"Failure:   {result.failure.code.value} — {result.failure.summary}", file=out)
+        print(
+            f"Failure:   {result.failure.code.value} — {result.failure.summary}",
+            file=out,
+        )
         if (
             result.failure.code is InfraCode.INFRA_PREFLIGHT
             and result.failure.summary == f"port {options.port} already in use"
@@ -168,7 +202,7 @@ def render(result: runner.RunResult, options: runner.RunnerOptions, out: TextIO)
     else:
         print("Evidence:  none (failed before a run directory was created)", file=out)
     print("", file=out)
-    print("Note: execution status only — grading not implemented.", file=out)
+    print("Note: execution status only — grading is a separate offline step.", file=out)
 
 
 # --- Entry point -----------------------------------------------------------------
@@ -217,10 +251,15 @@ def main(
             result = run_fn(options, api_key, scenarios=scenarios)
         except Exception as exc:  # message may carry anything; only the type is shown
             print(f"Unexpected harness error: {type(exc).__name__}", file=err)
-            print("See persisted failure evidence for details (failures/ in the run directory, if one was created).", file=err)
+            print(
+                "See persisted failure evidence for details (failures/ in the run directory, if one was created).",
+                file=err,
+            )
             return EXIT_UNEXPECTED
         render(result, options, out)
-        return EXIT_COMPLETED if result.status is SuiteStatus.COMPLETED else EXIT_ABORTED
+        return (
+            EXIT_COMPLETED if result.status is SuiteStatus.COMPLETED else EXIT_ABORTED
+        )
     except KeyboardInterrupt:
         print("Interrupted.", file=err)
         return EXIT_INTERRUPTED

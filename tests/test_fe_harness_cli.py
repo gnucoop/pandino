@@ -42,8 +42,15 @@ def run(argv, environ=ENV, runner=None, tty=False, typed=""):
         prompts.append(prompt)
         return typed
 
-    code = cli.main(argv, environ=environ, getpass_fn=getpass_fn, isatty_fn=lambda: tty,
-                    run_fn=runner, out=out, err=err)
+    code = cli.main(
+        argv,
+        environ=environ,
+        getpass_fn=getpass_fn,
+        isatty_fn=lambda: tty,
+        run_fn=runner,
+        out=out,
+        err=err,
+    )
     return code, out.getvalue(), err.getvalue(), runner, prompts
 
 
@@ -178,39 +185,64 @@ def test_default_is_exploratory():
 def _write_run(tmp_path):
     run_dir = tmp_path / "runs" / "r1"
     (run_dir / "scenarios" / "FE-01").mkdir(parents=True)
-    (run_dir / "run_manifest.json").write_text(json.dumps(
-        {"scenarios": [{"scenario_id": "FE-01", "status": "EXECUTED", "dir": "scenarios/FE-01"}]}))
-    (run_dir / "scenarios" / "FE-01" / "execution.json").write_text(json.dumps(
-        {"flags": {"scoreable": True, "teardown_verified": True}}))
+    (run_dir / "run_manifest.json").write_text(
+        json.dumps(
+            {
+                "scenarios": [
+                    {
+                        "scenario_id": "FE-01",
+                        "status": "EXECUTED",
+                        "dir": "scenarios/FE-01",
+                    }
+                ]
+            }
+        )
+    )
+    (run_dir / "scenarios" / "FE-01" / "execution.json").write_text(
+        json.dumps({"flags": {"scoreable": True, "teardown_verified": True}})
+    )
     return run_dir
 
 
 def test_completed_summary(tmp_path):
     run_dir = _write_run(tmp_path)
-    code, out, _, _, _ = run(["FE-01"], runner=FakeRunner(RunResult("r1", SuiteStatus.COMPLETED, None, run_dir)))
+    code, out, _, _, _ = run(
+        ["FE-01"],
+        runner=FakeRunner(RunResult("r1", SuiteStatus.COMPLETED, None, run_dir)),
+    )
     assert code == 0
     assert "DataChat FE execution COMPLETED" in out
     assert "FE-01  EXECUTED  scoreable=yes  teardown=verified" in out
     assert str(run_dir) in out
-    assert "grading not implemented" in out
+    assert "grading is a separate offline step" in out
 
 
 def test_aborted_infra_exit_one_with_port_hint():
     failure = Failure(InfraCode.INFRA_PREFLIGHT, "port 5055 already in use")
-    code, out, _, _, _ = run(["FE-01"], runner=FakeRunner(RunResult(None, SuiteStatus.ABORTED_INFRA, failure, None)))
+    code, out, _, _, _ = run(
+        ["FE-01"],
+        runner=FakeRunner(RunResult(None, SuiteStatus.ABORTED_INFRA, failure, None)),
+    )
     assert code == 1
-    assert "ABORTED_INFRA" in out and "INFRA_PREFLIGHT — port 5055 already in use" in out
+    assert (
+        "ABORTED_INFRA" in out and "INFRA_PREFLIGHT — port 5055 already in use" in out
+    )
     assert "port 5055 in use; pass --port" in out and "Evidence:  none" in out
 
 
 def test_aborted_other_failure_has_no_port_hint():
     failure = Failure(InfraCode.INFRA_TOKEN_BUDGET, "token balance 1 < required 4")
-    code, out, _, _, _ = run(["FE-01"], runner=FakeRunner(RunResult(None, SuiteStatus.ABORTED_INFRA, failure, None)))
+    code, out, _, _, _ = run(
+        ["FE-01"],
+        runner=FakeRunner(RunResult(None, SuiteStatus.ABORTED_INFRA, failure, None)),
+    )
     assert code == 1 and "Hint" not in out
 
 
 def test_unexpected_exception_shows_type_only():
-    code, out, err, _, _ = run(["FE-01"], runner=FakeRunner(raises=RuntimeError(f"boom {KEY}")))
+    code, out, err, _, _ = run(
+        ["FE-01"], runner=FakeRunner(raises=RuntimeError(f"boom {KEY}"))
+    )
     assert code == 3
     assert "Unexpected harness error: RuntimeError" in err
     assert "boom" not in out + err and KEY not in out + err
@@ -231,7 +263,10 @@ def test_help_exits_zero():
 
 def test_key_never_in_output_options_or_child_env(tmp_path):
     run_dir = _write_run(tmp_path)
-    code, out, err, r, _ = run(["FE-01"], runner=FakeRunner(RunResult("r1", SuiteStatus.COMPLETED, None, run_dir)))
+    code, out, err, r, _ = run(
+        ["FE-01"],
+        runner=FakeRunner(RunResult("r1", SuiteStatus.COMPLETED, None, run_dir)),
+    )
     options, api_key, _ = r.calls[0]
     assert api_key == KEY
     assert KEY not in out and KEY not in err
