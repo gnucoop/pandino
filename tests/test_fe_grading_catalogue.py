@@ -134,10 +134,11 @@ def test_catalogue_takes_no_ground_truth():
 
 # --- Cross-cutting properties -----------------------------------------------------
 
+GENERIC = ["generic.charts_valid", "generic.dataframe_valid", "generic.image_valid", "generic.export_persisted"]
 TECHNICAL = {
     "FE-01": ["fe01.chart_present"],
     "FE-09": ["fe09.chart_present"],
-    "FE-11": ["fe11.image_delivered", "fe11.image_valid"],
+    "FE-11": ["fe11.image_delivered"],
     "FE-13": ["fe13.semantic_provider_call", "fe13.sentiment_analysis"],
     "FE-14": ["fe14.semantic_provider_call", "fe14.classify_match"],
 }
@@ -146,7 +147,7 @@ TECHNICAL = {
 @pytest.mark.parametrize("sid", SCENARIO_ORDER)
 def test_only_technical_checks(sid):
     result = grade(evidence(sid, text("Una risposta qualsiasi."), code=["x = 1"], usage_rows=1))
-    assert [x.check_id for x in result.checks] == TECHNICAL.get(sid, [])
+    assert [x.check_id for x in result.checks] == GENERIC + TECHNICAL.get(sid, [])
     assert not hasattr(result, "outcome")
     for check in result.checks:
         assert (check.failure is not None) == (check.status is NOT_MET)
@@ -194,7 +195,8 @@ def test_chart_present_regardless_of_kind_or_values(sid):
 @pytest.mark.parametrize("sid", ["FE-01", "FE-09"])
 def test_missing_chart_without_attempt_is_artifact_failure(sid):
     rows = [{"region": k, "count": v} for k, v in REGIONS.items()]
-    check = grade(evidence(sid, table(rows), code=["aggregate(group_by='region', op='count')"])).checks[0]
+    check = items(grade(evidence(sid, table(rows), code=["aggregate(group_by='region', op='count')"])))[
+        f"{sid.lower().replace('-', '')}.chart_present"]
     assert check.status is NOT_MET and check.failure is F.ARTIFACT
     assert check.evidence_class is EvidenceClass.DIRECT
     assert "no chart attempt" in check.note
@@ -202,8 +204,9 @@ def test_missing_chart_without_attempt_is_artifact_failure(sid):
 
 @pytest.mark.parametrize("sid", ["FE-01", "FE-09"])
 def test_chart_attempt_without_charts_is_still_artifact_failure(sid):
-    check = grade(evidence(sid, text("Ecco il grafico."),
-                           events=[("chart", "event=tool_call_result kind=bar")])).checks[0]
+    check = items(grade(evidence(sid, text("Ecco il grafico."),
+                                 events=[("chart", "event=tool_call_result kind=bar")])))[
+        f"{sid.lower().replace('-', '')}.chart_present"]
     assert check.status is NOT_MET and check.failure is F.ARTIFACT
     assert "attempted" in check.note
 
@@ -220,7 +223,7 @@ IMAGE = {"type": "image", "value": "b'iVBORw0KGgo='", "charts": []}
 def test_fe11_image_delivered():
     r = grade(evidence("FE-11", IMAGE, image_meta={"decode_status": "OK"}, image=True,
                        code=["chart(kind='bar', x='wait_days')"]))
-    assert [(x.check_id, x.status) for x in r.checks] == [("fe11.image_delivered", MET), ("fe11.image_valid", MET)]
+    assert (status(r, "fe11.image_delivered"), status(r, "generic.image_valid")) == (MET, MET)
     assert items(r)["fe11.image_delivered"].evidence_refs == (
         "scenarios/FE-11/http/datachat.response.bin", "scenarios/FE-11/artifacts/image.json")
 
@@ -232,21 +235,163 @@ def test_fe11_image_not_delivered_is_response_contract(answer):
     delivered = items(r)["fe11.image_delivered"]
     assert delivered.status is NOT_MET and delivered.failure is F.RESPONSE_CONTRACT
     assert delivered.evidence_class is EvidenceClass.DIRECT
-    assert status(r, "fe11.image_valid") is NA
+    assert status(r, "generic.image_valid") is NA
 
 
 def test_fe11_invalid_image_is_artifact():
     r = grade(evidence("FE-11", IMAGE, image_meta={"decode_status": "NOT_PNG"}))
     assert status(r, "fe11.image_delivered") is MET
-    valid = items(r)["fe11.image_valid"]
+    valid = items(r)["generic.image_valid"]
     assert valid.status is NOT_MET and valid.failure is F.ARTIFACT
 
 
 def test_fe11_ambiguous_evidence_is_indeterminate():
     r = grade(evidence("FE-11", IMAGE))  # image answer, no metadata
-    assert (status(r, "fe11.image_delivered"), status(r, "fe11.image_valid")) == (MET, IND)
+    assert (status(r, "fe11.image_delivered"), status(r, "generic.image_valid")) == (MET, IND)
     r = grade(evidence("FE-11", raw_body=b"not json"))
-    assert (status(r, "fe11.image_delivered"), status(r, "fe11.image_valid")) == (IND, NA)
+    assert (status(r, "fe11.image_delivered"), status(r, "generic.image_valid")) == (IND, IND)
+
+
+def test_fe11_reuses_generic_image_validity():
+    """One source of truth: FE-11 adds only the RESPONSE CONTRACT check."""
+    r = grade(evidence("FE-11", IMAGE, image_meta={"decode_status": "BASE64_INVALID"}))
+    assert [x.check_id for x in r.checks if x.check_id.startswith("fe11.")] == ["fe11.image_delivered"]
+    assert items(r)["generic.image_valid"].failure is F.ARTIFACT
+
+
+# --- Generic technical checks (grading design §9.1) ---------------------------------
+
+
+def _generic(response=None, sid="FE-03", **kw):
+    return items(grade(evidence(sid, response, **kw)))
+
+
+VALID_CHARTS = [chart("bar", ["a", "b"], [1, None]), chart("line", ["x"], [2.5]),
+                {"type": "scatter", "labels": None, "datasets": [{"label": "x / y", "data": [{"x": 1, "y": 2}]}]}]
+
+
+def test_valid_charts_are_met():
+    check = _generic(text("x", VALID_CHARTS))["generic.charts_valid"]
+    assert check.status is MET and check.observed == "3 valid"
+    assert check.evidence_refs == ("scenarios/FE-03/http/datachat.response.bin",)
+
+
+@pytest.mark.parametrize("bad", [
+    "not a chart",                                              # non-dict entry, dropped by ``charts``
+    chart("bar", ["a", "b"], [1]),                              # label/data length mismatch
+    chart("radar", ["a"], [1]),                                 # unsupported type
+    {"type": "bar", "labels": ["a"]},                           # no datasets
+    {"type": "bar", "datasets": [{"data": [1]}]},               # no labels
+    chart("bar", ["a"], ["12"]),                                # non-numeric value
+    chart("bar", ["a"], [True]),
+    {"type": "scatter", "datasets": [{"data": [{"x": 1}]}]},    # point without y
+])
+def test_malformed_chart_is_artifact_failure(bad):
+    check = _generic(text("x", [chart("bar", ["a"], [1]), bad]))["generic.charts_valid"]
+    assert check.status is NOT_MET and check.failure is F.ARTIFACT
+    assert check.evidence_class is EvidenceClass.DIRECT
+    assert check.observed.startswith("chart 2: ")
+
+
+def test_non_dict_chart_entry_is_not_hidden_by_normalization():
+    ev = evidence("FE-01", text("x", ["oops"]))
+    assert ev.response.charts == () and ev.response.chart_entries == ["oops"]
+    r = items(grade(ev))
+    assert r["generic.charts_valid"].status is NOT_MET
+    assert r["fe01.chart_present"].status is NOT_MET
+
+
+def test_charts_not_a_list_is_artifact_failure():
+    check = _generic({"type": "str", "value": "x", "charts": {"type": "bar"}})["generic.charts_valid"]
+    assert check.status is NOT_MET and check.failure is F.ARTIFACT
+
+
+def test_no_charts_is_not_applicable():
+    assert _generic(text("x"))["generic.charts_valid"].status is NA
+    assert _generic({"type": "str", "value": "x"})["generic.charts_valid"].status is NA
+
+
+def _df(rows, **meta):
+    return {"type": "dataframe", "value": rows, "charts": [], **meta}
+
+
+ROWS = [{"a": 1, "b": 2}, {"a": 3, "b": 4}]
+
+
+def test_valid_dataframe_is_met():
+    full = dict(result_rows=2, result_columns=2, preview_rows=2, preview_columns=2, truncated=False)
+    assert _generic(_df(ROWS, **full))["generic.dataframe_valid"].status is MET
+    cut = dict(result_rows=10, result_columns=2, preview_rows=2, preview_columns=2, truncated=True)
+    assert _generic(_df(ROWS, **cut))["generic.dataframe_valid"].status is MET
+    assert _generic(_df([], result_rows=0, result_columns=3, preview_rows=0, preview_columns=0,
+                        truncated=False))["generic.dataframe_valid"].status is MET
+    assert _generic(text("x"))["generic.dataframe_valid"].status is NA
+
+
+@pytest.mark.parametrize("response", [
+    _df("not rows"),
+    _df([{"a": 1}, ["b"]]),
+    _df(ROWS, preview_rows=3),
+    _df(ROWS, preview_columns=1),
+    _df(ROWS, preview_rows="2"),
+    _df(ROWS, truncated="no"),
+    _df(ROWS, preview_rows=2, result_rows=1),
+    _df(ROWS, result_rows=2, result_columns=2, preview_rows=2, preview_columns=2, truncated=True),
+])
+def test_malformed_dataframe_is_response_contract_failure(response):
+    check = _generic(response)["generic.dataframe_valid"]
+    assert check.status is NOT_MET and check.failure is F.RESPONSE_CONTRACT
+
+
+@pytest.mark.parametrize("sid", ["FE-03", "FE-11"])
+def test_generic_image_validity(sid):
+    ok = _generic(IMAGE, sid, image_meta={"decode_status": "OK"})["generic.image_valid"]
+    assert ok.status is MET and "scenarios/%s/artifacts/image.json" % sid in ok.evidence_refs
+    bad = _generic(IMAGE, sid, image_meta={"decode_status": "NOT_PNG"})["generic.image_valid"]
+    assert bad.status is NOT_MET and bad.failure is F.ARTIFACT
+    assert _generic(IMAGE, sid)["generic.image_valid"].status is IND
+    assert _generic(IMAGE, sid, image_meta={"other": 1})["generic.image_valid"].status is IND
+    assert _generic(text("x"), sid)["generic.image_valid"].status is NA
+
+
+def _export_evidence(availability=None, reason=None, locator=None, ref=None, url="/datachat/export/abc"):
+    ev = evidence("FE-03", {**text("x"), "download_url": url} if url else text("x"))
+    from dataclasses import replace
+    return replace(ev, artifacts=ArtifactEvidence(export_availability=availability, export_reason=reason,
+                                                   export_ref=ref, export_locator=locator or {}))
+
+
+def test_export_persisted_when_download_url():
+    check = items(grade(_export_evidence(Availability.PRESENT, ref="scenarios/FE-03/artifacts/export.csv",
+                                         locator={"http_status": 200})))["generic.export_persisted"]
+    assert check.status is MET
+    assert "scenarios/FE-03/artifacts/export.csv" in check.evidence_refs
+
+
+def test_failed_export_is_artifact_failure():
+    check = items(grade(_export_evidence(Availability.UNAVAILABLE, "export fetch returned HTTP 404",
+                                         {"http_status": 404})))["generic.export_persisted"]
+    assert check.status is NOT_MET and check.failure is F.ARTIFACT
+
+
+@pytest.mark.parametrize("availability,reason,locator", [
+    (None, None, None),                                                    # no export record
+    (Availability.UNAVAILABLE, "download_url rejected: unsafe", None),     # never fetched
+    (Availability.UNAVAILABLE, "no HTTP response: Timeout", {"request_id": "r"}),
+    (Availability.NOT_APPLICABLE, "no download_url", None),                # contradicts the response
+])
+def test_unclear_export_evidence_is_indeterminate(availability, reason, locator):
+    check = items(grade(_export_evidence(availability, reason, locator)))["generic.export_persisted"]
+    assert check.status is IND
+
+
+def test_no_download_url_is_not_applicable():
+    assert items(grade(_export_evidence(url=None)))["generic.export_persisted"].status is NA
+
+
+def test_generic_checks_on_unparsed_response_are_indeterminate():
+    r = _generic(raw_body=b"not json")
+    assert {r[i].status for i in GENERIC} == {IND}
 
 
 # --- FE-13 / FE-14: provider-backed semantic capability ------------------------------
@@ -282,7 +427,7 @@ def test_semantic_capability_absent(sid, tool):
 
 def test_fe14_tool_order_is_not_graded():
     r = grade(evidence("FE-14", text("x"), events=[CM_EVENT, KW_EVENT], usage_rows=2))
-    assert all(x.status is MET for x in r.checks)
+    assert all(x.status in (MET, NA) for x in r.checks)
 
 
 # --- Generic primitive ----------------------------------------------------------------

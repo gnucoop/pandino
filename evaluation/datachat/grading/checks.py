@@ -599,6 +599,89 @@ def chart_mapping(chart: Any, *, dataset_index: int = 0) -> Extracted:
     return Extracted(tuple(zip(labels, data)))
 
 
+# --- Structural validity (grading design §9.1) --------------------------------
+# Shape only, per the CURRENT DataChat contract: values are never compared to anything.
+
+CHART_KINDS = ("bar", "line", "pie", "doughnut", "scatter")
+_TABLE_COUNTS = ("result_rows", "result_columns", "preview_rows", "preview_columns")
+
+
+def _chart_value(value: Any) -> bool:
+    """A finite number, or null (a recorded gap)."""
+    return value is None or (isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value))
+
+
+def _coordinate(value: Any) -> bool:
+    return value is not None and _chart_value(value)
+
+
+def chart_structure_error(chart: Any) -> str | None:
+    """Why one ``charts[]`` entry is not a structurally usable chart spec; None when it is."""
+    if not isinstance(chart, dict):
+        return "entry is not an object"
+    kind = chart.get("type")
+    if kind not in CHART_KINDS:
+        return f"unsupported type {_small(kind)!r}"
+    datasets = chart.get("datasets")
+    if not isinstance(datasets, list) or not datasets:
+        return "datasets missing or empty"
+    if not all(isinstance(d, dict) and isinstance(d.get("data"), list) for d in datasets):
+        return "dataset without a data list"
+    if kind == "scatter":
+        for d in datasets:
+            if not all(isinstance(p, dict) and _coordinate(p.get("x")) and _coordinate(p.get("y")) for p in d["data"]):
+                return "scatter point without numeric x/y"
+        return None
+    labels = chart.get("labels")
+    if not isinstance(labels, list):
+        return "labels missing"
+    for i, d in enumerate(datasets, 1):
+        if len(d["data"]) != len(labels):
+            return f"dataset {i} has {len(d['data'])} values for {len(labels)} labels"
+        if not all(_chart_value(v) for v in d["data"]):
+            return f"dataset {i} has a non-numeric value"
+    return None
+
+
+def dataframe_structure_error(response: Any) -> str | None:
+    """Why a ``dataframe`` response's records and declared metadata disagree; None when consistent.
+
+    Mirrors the CURRENT table response: ``value`` is a list of records,
+    ``preview_*`` count them, ``result_*`` bound the preview and
+    ``truncated`` says the preview hides rows or columns. Absent metadata is
+    not checked.
+    """
+    if not isinstance(response, dict):
+        return "response is not an object"
+    rows = response.get("value")
+    if not isinstance(rows, list):
+        return "value is not a list of records"
+    if not all(isinstance(r, dict) for r in rows):
+        return "a row is not a record"
+    for key in _TABLE_COUNTS:
+        n = response.get(key)
+        if key in response and (isinstance(n, bool) or not isinstance(n, int) or n < 0):
+            return f"{key} is not a non-negative integer"
+    if "truncated" in response and not isinstance(response["truncated"], bool):
+        return "truncated is not a boolean"
+    columns = len(set().union(*rows)) if rows else 0
+    pr, pc = response.get("preview_rows"), response.get("preview_columns")
+    rr, rc = response.get("result_rows"), response.get("result_columns")
+    if pr is not None and pr != len(rows):
+        return f"preview_rows {pr} but {len(rows)} records"
+    if pc is not None and pc != columns:
+        return f"preview_columns {pc} but {columns} columns in records"
+    if None not in (pr, rr) and pr > rr:
+        return "preview_rows exceeds result_rows"
+    if None not in (pc, rc) and pc > rc:
+        return "preview_columns exceeds result_columns"
+    truncated = response.get("truncated")
+    if truncated is not None and None not in (pr, pc, rr, rc):
+        if truncated != (pr < rr or (pr > 0 and pc < rc)):
+            return "truncated contradicts the row/column counts"
+    return None
+
+
 def from_extracted(extracted: Extracted, compare, *args, **kwargs) -> Outcome:
     """Run ``compare(*args, extracted.value, **kwargs)``, or INDETERMINATE if extraction failed."""
     if not extracted.ok:

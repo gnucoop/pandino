@@ -18,7 +18,8 @@ def spec(kind="bar", **extra):
 
 @pytest.mark.parametrize("value", [
     spec(), spec(horizontal=True), spec("line"), spec("pie"), spec("doughnut"),
-    spec(stacked=True, datasets=[{"label": "a", "data": [1, 2, 3]}, {"label": "b", "data": [3, None, 1]}]),
+    spec(stacked=True, datasets=[{"label": "a", "data": [1, 2, 3]}, {"label": "b", "data": [3, 1, 1]}]),
+    spec("line", datasets=[{"label": "a", "data": [1, None, 3]}]),  # a line gap is faithful
     spec(datasets=[{"label": "a", "data": [1, 2, 3]}, {"label": "b", "data": [3, 2, 1]}]),
     {"type": "scatter", "labels": [], "datasets": [{"label": "pts", "data": [{"x": 1, "y": 2}, {"x": 3, "y": 1}]}],
      "title": None, "x_label": "wait_days", "y_label": "satisfaction", "stacked": False, "horizontal": False},
@@ -47,6 +48,9 @@ def test_no_timestamp_or_software_metadata():
     spec(datasets=[{"label": "count", "data": [1, float("nan"), 3]}]),
     spec("pie", datasets=[{"data": [1, 2, 3]}, {"data": [1, 2, 3]}]),  # pie with two series
     spec(datasets=[{"label": str(i), "data": [1, 2, 3]} for i in range(9)]),  # beyond fixed colours
+    spec(datasets=[{"label": "count", "data": [1, None, 3]}]),       # null bar: never drawn as zero
+    spec(stacked=True, datasets=[{"label": "a", "data": [1, 2, 3]}, {"label": "b", "data": [3, None, 1]}]),
+    spec(horizontal=True, datasets=[{"label": "count", "data": [None, 2, 3]}]),
 ])
 def test_specs_that_cannot_be_drawn_faithfully_are_refused(value):
     assert render_chart_png(value) is None

@@ -259,7 +259,8 @@ def test_fe05_technical_pass_and_stray_review_files_are_ignored(tmp_path, repo_r
     stray.write_text("{not json")
     rg = grade(root, repo_root)
     g = scenario_json(root, "FE-05")
-    assert (g["outcome"], g["failures"], g["checks"]) == ("TECHNICAL PASS", [], [])
+    assert (g["outcome"], g["failures"]) == ("TECHNICAL PASS", [])
+    assert {c["status"] for c in g["checks"]} == {"NOT_APPLICABLE"}  # generic checks only
     assert (
         "manual_reviews" not in g
         and "pending_reviews" not in rg.to_dict()["scenarios"][0]
@@ -279,7 +280,7 @@ def test_execution_failure_even_when_checks_pass(tmp_path, repo_root):
     grade(root, repo_root)
     g = scenario_json(root, "FE-01")
     assert (g["outcome"], g["failures"]) == ("FAIL", ["EXECUTION"])
-    assert all(c["status"] == "MET" for c in g["checks"])
+    assert all(c["status"] in ("MET", "NOT_APPLICABLE") for c in g["checks"])
 
 
 def test_multiple_technical_failures_are_all_recorded(tmp_path, repo_root):
@@ -315,8 +316,11 @@ def test_fe11_text_answer_is_response_contract_failure(tmp_path, repo_root):
     g = scenario_json(root, "FE-11")
     assert (g["outcome"], g["failures"]) == ("FAIL", ["RESPONSE CONTRACT"])
     assert [(c["check_id"], c["status"]) for c in g["checks"]] == [
+        ("generic.charts_valid", "NOT_APPLICABLE"),
+        ("generic.dataframe_valid", "NOT_APPLICABLE"),
+        ("generic.image_valid", "NOT_APPLICABLE"),
+        ("generic.export_persisted", "NOT_APPLICABLE"),
         ("fe11.image_delivered", "NOT_MET"),
-        ("fe11.image_valid", "NOT_APPLICABLE"),
     ]
 
 

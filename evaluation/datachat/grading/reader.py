@@ -197,6 +197,16 @@ class NormalizedResponse:
             return "error"
         return {"str": "text", "dataframe": "table", "image": "image", "dict": "dict"}.get(self.type or "")
 
+    @property
+    def chart_entries(self) -> Any:
+        """``response.charts`` exactly as returned (None when absent).
+
+        ``charts`` keeps only dict entries; structural checks read this so a
+        malformed entry is never silently dropped.
+        """
+        response = self.raw.get("response") if isinstance(self.raw, dict) else None
+        return response.get("charts") if isinstance(response, dict) else None
+
 
 def normalize_response(
     body: bytes,

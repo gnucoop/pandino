@@ -21,6 +21,7 @@ Records are listed by source (declaration order), then name, then outcome.
 """
 
 import re
+from functools import cache
 
 from evaluation.datachat.grading.model import ActivitySource, ObservedActivity
 from evaluation.datachat.grading.reader import ScenarioEvidence
@@ -35,8 +36,17 @@ DATACHAT_TOOLS = (
 
 PROVIDER_BACKED_CALL = "provider_backed_call"
 
-# A bare call: not an attribute (``df.plot(``) and not part of a longer identifier.
-_CALL = {tool: re.compile(rf"(?<![\w.]){re.escape(tool)}\s*\(") for tool in DATACHAT_TOOLS}
+
+
+@cache
+def _call_pattern(tool: str) -> re.Pattern[str]:
+    # A bare call: not an attribute (``df.plot(``) and not part of a longer identifier.
+    return re.compile(rf"(?<![\w.]){re.escape(tool)}\s*\(")
+
+
+def tool_call_count(code: str, tool: str) -> int:
+    """Calls to DataChat ``tool`` written in generated code. The one matcher grading and activity share."""
+    return len(_call_pattern(tool).findall(code))
 
 
 def _runtime(ev: ScenarioEvidence) -> list[ObservedActivity]:
@@ -51,8 +61,8 @@ def _generated_code(ev: ScenarioEvidence) -> list[ObservedActivity]:
     if ev.agent_run is None or not ev.agent_run.parse_ok:
         return []
     out = []
-    for tool, pattern in _CALL.items():
-        n = sum(len(pattern.findall(block)) for block in ev.agent_run.code_blocks)
+    for tool in DATACHAT_TOOLS:
+        n = sum(tool_call_count(block, tool) for block in ev.agent_run.code_blocks)
         if n:
             out.append(ObservedActivity(tool, ActivitySource.GENERATED_CODE, n))
     return out

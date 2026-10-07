@@ -12,10 +12,22 @@ free-form prose. Semantic correctness, ground-truth values, method choice,
 tool order, chart kind and wording are not graded here; semantic evaluation
 happens outside automatic grading.
 
+Generic requirements of every scenario (grading design §9.1), structural
+only, NOT_APPLICABLE when nothing of the kind was delivered:
+
+- every ``charts[]`` entry structurally usable → ARTIFACT;
+- a ``dataframe`` answer's records consistent with its declared metadata
+  → RESPONSE CONTRACT (the metadata is part of the response body itself);
+- a delivered image decodes (``decode_status == OK``) → ARTIFACT;
+- a declared ``download_url`` has a persisted export → ARTIFACT.
+
+The CURRENT envelope and known ``response.type`` are already enforced by the
+execution assessment (RESPONSE_CONTRACT_VIOLATION) and not repeated here.
+
 Scenario requirements (grading design §9.2), failure on reliable violation:
 
 - FE-01, FE-09: a chart recorded in ``charts[]`` → ARTIFACT;
-- FE-11: an image answer → RESPONSE CONTRACT; whose artifact decodes → ARTIFACT;
+- FE-11: an image answer → RESPONSE CONTRACT (its validity is the generic image check);
 - FE-13: provider-backed semantic work (Usage extra rows) and
   ``sentiment_analysis`` activity → TOOL EXECUTION;
 - FE-14: provider-backed classification (Usage extra rows) and
@@ -28,11 +40,11 @@ fails a scenario by itself (outcome rules).
 Only GRADEABLE scenarios are accepted. Output is deterministic.
 """
 
-import re
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Iterable
 
 from evaluation.datachat.grading import checks as c
+from evaluation.datachat.grading.activity import tool_call_count
 from evaluation.datachat.grading.model import (
     CheckResult,
     CheckStatus,
@@ -71,6 +83,7 @@ def grade_scenario_checks(evidence: ScenarioEvidence) -> ScenarioCheckSet:
     if evidence.gate is not Gate.GRADEABLE:
         raise CatalogueError(f"{sid}: gate {evidence.gate.value} is not gradeable")
     sheet = _Sheet(evidence)
+    _generic(sheet)
     CATALOGUE[sid](sheet)
     return sheet.result()
 
@@ -154,11 +167,6 @@ def _code(ev: ScenarioEvidence) -> str | None:
     return "\n".join(ev.agent_run.code_blocks)
 
 
-def _calls(code: str, tool: str) -> list[str]:
-    """Argument text of ``tool(...)`` calls up to the first closing parenthesis (best effort)."""
-    return re.findall(rf"\b{re.escape(tool)}\s*\(([^)]*)", code)
-
-
 def _tool_events(ev: ScenarioEvidence, tool: str, outcome: str = "result") -> list[Any]:
     events = ev.tools.runtime_events if ev.tools else ()
     return [e for e in events if e.tool == tool and e.outcome == outcome]
@@ -169,7 +177,7 @@ def _tool_use(ev: ScenarioEvidence, tool: str) -> c.Outcome:
     if _tool_events(ev, tool):
         return c.met(tool, "runtime tool_call_result")
     code = _code(ev)
-    if code is not None and _calls(code, tool):
+    if code is not None and tool_call_count(code, tool):
         return c.met(tool, "call in generated code")
     if code is not None or ev.runtime is not None:
         return c.not_met(tool, None, "no runtime event and no call in generated code")
@@ -186,6 +194,80 @@ def _usage_contribution(ev: ScenarioEvidence) -> c.Outcome:
         return c.indeterminate("primary log id unknown", ">= 1 extra row", len(usage.rows))
     extra = len(usage.extra_rows)
     return (c.met if extra >= 1 else c.not_met)(">= 1 extra row", extra)
+
+
+# --- Generic (every scenario) -------------------------------------------------------
+
+_UNPARSED = "response not parsed (execution assessment covers it)"
+
+
+def _charts_valid(ev: ScenarioEvidence) -> c.Outcome:
+    expected = "structurally valid charts[]"
+    if not _parsed(ev):
+        return c.indeterminate(_UNPARSED, expected)
+    entries = ev.response.chart_entries
+    if entries is None or entries == []:
+        return c.not_applicable("no charts delivered")
+    if not isinstance(entries, list):
+        return c.not_met(expected, type(entries).__name__, "charts is not a list")
+    for i, chart in enumerate(entries, 1):
+        error = c.chart_structure_error(chart)
+        if error:
+            return c.not_met(expected, f"chart {i}: {error}")
+    return c.met(expected, f"{len(entries)} valid")
+
+
+def _dataframe_valid(ev: ScenarioEvidence) -> c.Outcome:
+    expected = "records consistent with declared metadata"
+    if not _parsed(ev):
+        return c.indeterminate(_UNPARSED, expected)
+    if ev.response.type != "dataframe":
+        return c.not_applicable("no dataframe answer")
+    error = c.dataframe_structure_error(ev.response.raw["response"])
+    return c.not_met(expected, error) if error else c.met(expected, "consistent")
+
+
+def _image_valid(ev: ScenarioEvidence) -> c.Outcome:
+    if not _parsed(ev):
+        return c.indeterminate(_UNPARSED, "decode_status OK")
+    if ev.response.type != "image":
+        return c.not_applicable("no image answer")
+    meta = ev.artifacts.image_meta if ev.artifacts else None
+    status = meta.get("decode_status") if meta else None
+    if status is None:
+        return c.indeterminate("image metadata unavailable", "decode_status OK")
+    return c.compare_exact("OK", status)
+
+
+def _export_persisted(ev: ScenarioEvidence) -> c.Outcome:
+    expected = "persisted export"
+    if not _parsed(ev):
+        return c.indeterminate(_UNPARSED, expected)
+    if ev.response.download_url is None:
+        return c.not_applicable("no download_url")
+    art = ev.artifacts
+    availability = art.export_availability if art else None
+    if availability is Availability.PRESENT and art.export_ref:
+        return c.met(expected, "PRESENT")
+    http_status = art.export_locator.get("http_status") if art else None
+    if availability is Availability.UNAVAILABLE and isinstance(http_status, int) and http_status != 200:
+        return c.not_met(expected, f"HTTP {http_status}", art.export_reason)
+    # Not fetched (URL rejected, transport error) or no record: DataChat's export is not proven absent.
+    state = availability.value if availability else "no export record"
+    return c.indeterminate(f"export evidence unavailable: {art.export_reason if art and art.export_reason else state}",
+                           expected, state)
+
+
+def _generic(s: _Sheet) -> None:
+    ev = s.ev
+    response = (_response_ref(ev),)
+    art = ev.artifacts
+    s.check(_charts_valid(ev), "generic.charts_valid", DIRECT, response, F.ARTIFACT)
+    s.check(_dataframe_valid(ev), "generic.dataframe_valid", DIRECT, response, F.RESPONSE_CONTRACT)
+    s.check(_image_valid(ev), "generic.image_valid", DIRECT,
+            (*response, art.image_meta_ref if art else None), F.ARTIFACT)
+    s.check(_export_persisted(ev), "generic.export_persisted", DIRECT,
+            (*response, art.export_ref if art else None), F.ARTIFACT)
 
 
 # --- Scenarios --------------------------------------------------------------------
@@ -234,15 +316,7 @@ def _fe11(s: _Sheet) -> None:
     else:
         kind = c.not_met("image", ev.response.type, "no image answer")
     s.check(kind, "fe11.image_delivered", DIRECT, ref, F.RESPONSE_CONTRACT)
-
-    if kind.status is not MET:
-        valid = c.not_applicable("no image answer to validate")
-    else:
-        meta = art.image_meta if art else None
-        status = meta.get("decode_status") if meta else None
-        valid = (c.indeterminate("image metadata unavailable", "decode_status OK") if status is None
-                 else c.compare_exact("OK", status))
-    s.check(valid, "fe11.image_valid", DIRECT, ref, F.ARTIFACT)
+    # A delivered image's validity is ``generic.image_valid`` (ARTIFACT).
 
 
 def _semantic_capability(s: _Sheet, prefix: str, tool: str) -> None:

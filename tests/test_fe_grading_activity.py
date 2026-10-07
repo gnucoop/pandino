@@ -133,3 +133,24 @@ def test_unaggregated_activity_refused():
     dup = ObservedActivity("chart", CODE, 1)
     with pytest.raises(ValueError, match="aggregated"):
         ScenarioGrade("FE-01", Gate.NOT_RUN, activity=(dup, dup))
+
+
+@pytest.mark.parametrize("code,counted", [
+    ("r = classify_match(column='comment')", True),             # bare call
+    ("r = classify_match (column='comment')", True),
+    ("r = helpers.classify_match(column='comment')", False),    # qualified: not the DataChat tool
+    ("r = df.classify_match(column='comment')", False),
+    ("r = my_classify_match(column='comment')", False),         # similarly named functions
+    ("r = classify_match_v2(column='comment')", False),
+    ("name = 'classify_match'", False),
+])
+def test_grading_and_activity_share_one_tool_call_matcher(code, counted):
+    from evaluation.datachat.grading import catalogue as cat
+    from evaluation.datachat.grading.model import CheckStatus
+    from tests.test_fe_grading_catalogue import evidence
+
+    ev = evidence("FE-14", text("x"), code=[code], usage_rows=2)
+    graded = {c.check_id: c.status for c in cat.grade_scenario_checks(ev).checks}["fe14.classify_match"]
+    observed = any(a.name == "classify_match" for a in act.observed_activity(ev))
+    assert (graded is CheckStatus.MET) == observed == counted
+    assert (act.tool_call_count(code, "classify_match") == 1) == counted

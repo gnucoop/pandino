@@ -65,7 +65,7 @@ from evaluation.datachat.grading.reader import (
 from evaluation.datachat.grading.outcome import OutcomeBuildError, build_scenario_grade
 
 # Bump when grading logic changes in a way that can change results.
-GRADER_VERSION = 2
+GRADER_VERSION = 3
 GRADER_IMPLEMENTATION = "evaluation.datachat.grading"
 
 RESULTS_DIR = Path("grading") / "results"

@@ -238,6 +238,20 @@ def test_undrawable_chart_shows_values_only(tmp_path, ref_repo):
     assert "![" not in block and "non può essere disegnata fedelmente" in block and "| North |" in block
 
 
+def test_null_bar_value_is_not_drawn_and_stays_visible(tmp_path, ref_repo):
+    from evaluation.datachat.reporting.charts import render_chart_png
+
+    from tests.test_fe_grading_grader import body as make_body, chart, text
+
+    spec = chart("bar", ["North", "South"], [None, 110])
+    body = make_body(text("Ecco i conteggi.", [spec]))
+    assert render_chart_png(spec) is None
+    _, run = loaded(tmp_path, ref_repo, {"FE-01": {**FE01, "body": body}})
+    block = section(md(run, ref_repo, ()), "Artefatti")
+    assert "![" not in block and "non può essere disegnata fedelmente" in block
+    assert f"| {spec['labels'][0]} | null |" in block
+
+
 def test_no_artifact_stated_in_one_line(tmp_path, ref_repo):
     body = {"explanation": None, "log_id": 7, "response": {"type": "str", "value": "solo testo"}}
     _, run = loaded(tmp_path, ref_repo, {"FE-01": {**FE01, "body": body}})
@@ -285,7 +299,7 @@ def test_technical_pass_is_compact_and_technical(tmp_path, ref_repo):
     assert "**Esito tecnico:** **SUPERATO (`TECHNICAL PASS`)**" in block
     assert ("**Valutazione dell'esecuzione:** esito utilizzabile (`OK`) — la risposta finale è utilizzabile "
             "(`USABLE_OUTCOME`)") in block
-    assert "**Controlli soddisfatti (`MET`):** `fe01.chart_present`" in block
+    assert "**Controlli soddisfatti (`MET`):** `generic.charts_valid`, `fe01.chart_present`" in block
     assert "atteso:" not in block and "corrett" not in block
 
 

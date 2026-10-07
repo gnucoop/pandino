@@ -4,7 +4,7 @@
 spec (type, labels, datasets, title, axis labels, orientation, stacking) as
 PNG bytes. Nothing is added, inferred, sorted or corrected: a spec that
 cannot be drawn faithfully (unknown type, non-numeric values, mismatched
-lengths, more series than fixed colours) yields ``None`` and the report shows
+lengths, more series than fixed colours, a null bar or pie value) yields ``None`` and the report shows
 its values as data only.
 
 Matplotlib's object API is used with the Agg canvas (no pyplot global state)
@@ -73,8 +73,9 @@ def _bar(ax, spec, labels, names, values) -> None:
     n = len(values)
     width = 0.8 if stacked or n == 1 else 0.8 / n
     base = [0.0] * len(labels)
-    for i, (name, data) in enumerate(zip(names, values)):
-        heights = [0.0 if v is None else v for v in data]
+    if any(v is None for data in values for v in data):
+        raise ValueError("a null bar has no faithful height")  # never drawn as zero
+    for i, (name, heights) in enumerate(zip(names, values)):
         offset = 0.0 if stacked else (i - (n - 1) / 2) * width
         pos = [k + offset for k in range(len(labels))]
         draw = ax.barh if horizontal else ax.bar

@@ -356,7 +356,9 @@ def _chart(s: ScenarioReport, chart, drawn: frozenset[str]) -> list[str]:
     if tabular and spec.get("type") != "scatter":
         header = ["label"] + [_value(d.get("label")) or f"serie {i}" for i, d in enumerate(datasets, 1)]
         out += ["Valori registrati:", ""]
-        out += _table(header, ([lab, *(d["data"][i] for d in datasets)] for i, lab in enumerate(labels)))
+        # A recorded null stays visible as ``null``, never blank or zero.
+        out += _table(header, ([lab, *("null" if d["data"][i] is None else d["data"][i] for d in datasets)]
+                               for i, lab in enumerate(labels)))
         extra = [{k: v for k, v in d.items() if k not in ("label", "data")} for d in datasets]
         out += [f"- altri campi della serie {i}: `{_value(e)}`" for i, e in enumerate(extra, 1) if e]
         if any(extra):

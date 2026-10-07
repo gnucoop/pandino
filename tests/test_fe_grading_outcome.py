@@ -201,7 +201,7 @@ def test_scenario_without_technical_requirement_passes():
     ev = evidence("FE-05", text("Associazione negativa moderata (Spearman -0,58)."),
                   code=["correlation(col_x='wait_days', col_y='satisfaction', method='spearman')"])
     g = grade_from_catalogue(ev)
-    assert g.checks == () and g.outcome is T.TECHNICAL_PASS
+    assert all(c.check_id.startswith("generic.") for c in g.checks) and g.outcome is T.TECHNICAL_PASS
 
 
 IMAGE = {"type": "image", "value": "b'iVBORw0KGgo='", "charts": []}
