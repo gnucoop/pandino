@@ -189,3 +189,29 @@ def test_ungraded_run_refused_without_grading(tmp_path, repo_root):
     with pytest.raises(ReportingInputError, match="not graded"):
         load_run_for_reporting(root)
     assert not (root / "grading").exists()
+
+
+# --- Observed activity --------------------------------------------------------------
+
+
+def test_observed_activity_is_carried_from_the_grade(tmp_path, repo_root):
+    from evaluation.datachat.grading.model import ActivitySource
+
+    root = graded(tmp_path, repo_root, {"FE-01": FE01})
+    grade_json = json.loads(results(root, "FE-01").read_text())
+    s = load_run_for_reporting(root).scenario("FE-01")
+    assert [a.to_dict() for a in s.grade.activity] == grade_json["activity"]
+    assert {a.source for a in s.grade.activity} == set(ActivitySource)
+
+
+@pytest.mark.parametrize("change", [
+    lambda d: d.pop("activity"),
+    lambda d: d["activity"][0].update(source="OBSERVED"),
+    lambda d: d["activity"][1].update(outcome="result"),  # generated code cannot claim an outcome
+    lambda d: d["activity"][0].update(extra=1),
+])
+def test_malformed_activity_refused(tmp_path, repo_root, change):
+    root = graded(tmp_path, repo_root, {"FE-01": FE01})
+    edit_json(results(root, "FE-01"), change)
+    with pytest.raises(ReportingInputError, match="malformed"):
+        load_run_for_reporting(root)

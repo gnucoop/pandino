@@ -43,6 +43,7 @@ from typing import Any, Callable
 from evaluation.datachat import contract
 from evaluation.datachat.evidence import safe_child, write_json_atomic
 from evaluation.datachat.grading import catalogue
+from evaluation.datachat.grading.activity import observed_activity
 from evaluation.datachat.grading.model import (
     GRADING_SCHEMA_VERSION,
     ExecutionAssessment,
@@ -162,6 +163,7 @@ def _grade_scenario(ev: ScenarioEvidence) -> ScenarioGrade:
         execution_sha256=ev.execution_sha256,
         teardown_verified=ev.teardown_verified,
         checks=check_set.checks,
+        activity=observed_activity(ev),
     )
 
 

@@ -175,7 +175,8 @@ def test_deterministic_and_non_mutating():
     assert [c.to_dict() for c in checks] == snapshot
     g = first.to_dict()
     assert set(g) == {"scenario_id", "gate", "outcome", "failures", "checks", "execution_assessment",
-                      "execution_assessment_reason", "execution_sha256", "teardown_verified", "schema_version"}
+                      "execution_assessment_reason", "execution_sha256", "teardown_verified", "activity",
+                      "schema_version"}
     assert g["schema_version"] == 2 and g["outcome"] == "FAIL" and g["failures"] == ["ARTIFACT"]
 
 

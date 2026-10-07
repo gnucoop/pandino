@@ -27,12 +27,14 @@ from typing import Any, Callable
 from evaluation.datachat.evidence import RunLayout, read_json, safe_child, sha256_file
 from evaluation.datachat.grading.grader import RESULTS_DIR, RUN_GRADE_NAME
 from evaluation.datachat.grading.model import (
+    ActivitySource,
     CheckResult,
     CheckStatus,
     EvidenceClass,
     ExecutionAssessment,
     ExecutionAssessmentReason,
     Gate,
+    ObservedActivity,
     RunGrade,
     ScenarioGrade,
     ScenarioIndexEntry,
@@ -136,6 +138,11 @@ def _check_result(d: dict) -> CheckResult:
     )
 
 
+def _activity(d: dict) -> ObservedActivity:
+    return ObservedActivity(name=d["name"], source=ActivitySource(d["source"]), count=d["count"],
+                            outcome=d["outcome"])
+
+
 def _scenario_grade(d: dict) -> ScenarioGrade:
     return ScenarioGrade(
         scenario_id=d["scenario_id"], gate=Gate(d["gate"]), outcome=_opt(TechnicalOutcome, d["outcome"]),
@@ -144,6 +151,7 @@ def _scenario_grade(d: dict) -> ScenarioGrade:
         execution_assessment=_opt(ExecutionAssessment, d["execution_assessment"]),
         execution_assessment_reason=_opt(ExecutionAssessmentReason, d["execution_assessment_reason"]),
         execution_sha256=d["execution_sha256"], teardown_verified=d["teardown_verified"],
+        activity=tuple(_activity(a) for a in d["activity"]),
         schema_version=d["schema_version"],
     )
 

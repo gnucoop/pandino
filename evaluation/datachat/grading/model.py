@@ -173,6 +173,42 @@ class CheckResult(_Serializable):
             raise ValueError(f"{self.check_id}: a failure category is set exactly on NOT_MET")
 
 
+class ActivitySource(str, Enum):
+    """Where an observed activity comes from (grading design §5.1). Declaration order is the listing order.
+
+    - RUNTIME: a runtime ``tool_call_*`` event — observed invocation with its logged outcome;
+    - GENERATED_CODE: a call written in generated agent code — inferred, not proof of execution;
+    - USAGE: Usage rows beyond the primary one — provider-backed work, tool not identified.
+    """
+
+    RUNTIME = "RUNTIME"
+    GENERATED_CODE = "GENERATED_CODE"
+    USAGE = "USAGE"
+
+
+@dataclass(frozen=True)
+class ObservedActivity(_Serializable):
+    """Aggregated, source-labelled activity of one scenario. Descriptive only: never graded.
+
+    ``outcome`` is the logged ``tool_call_<outcome>`` suffix and exists only for RUNTIME.
+    """
+
+    name: str
+    source: ActivitySource
+    count: int
+    outcome: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError(f"activity name must be a non-empty string: {self.name!r}")
+        if not isinstance(self.source, ActivitySource):
+            raise ValueError(f"activity source must be an ActivitySource: {self.source!r}")
+        if isinstance(self.count, bool) or not isinstance(self.count, int) or self.count < 1:
+            raise ValueError(f"{self.name}: activity count must be a positive integer")
+        if (self.outcome is not None) != (self.source is ActivitySource.RUNTIME):
+            raise ValueError(f"{self.name}: an outcome is recorded exactly for RUNTIME activity")
+
+
 def _check_outcome(outcome: TechnicalOutcome | None, failures: tuple[TechnicalFailure, ...]) -> None:
     if len(set(failures)) != len(failures):
         raise ValueError(f"duplicate technical failures: {failures}")
@@ -188,6 +224,8 @@ class ScenarioGrade(_Serializable):
     assessment and its stable reason; non-gradeable gates record none of them
     (infrastructure is explained by the gate, never by the execution
     vocabulary). ``failures`` lists every established failure, unranked.
+    ``activity`` is the observed-activity summary (descriptive, never an
+    input to the outcome); non-gradeable gates carry none.
     """
 
     scenario_id: str
@@ -199,14 +237,18 @@ class ScenarioGrade(_Serializable):
     execution_assessment_reason: ExecutionAssessmentReason | None = None
     execution_sha256: str | None = None
     teardown_verified: bool | None = None
+    activity: tuple[ObservedActivity, ...] = ()
     schema_version: int = GRADING_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
         check_execution_provenance(self.execution_assessment, self.execution_assessment_reason)
         _check_outcome(self.outcome, self.failures)
+        keys = [(a.source, a.name, a.outcome) for a in self.activity]
+        if len(set(keys)) != len(keys):
+            raise ValueError("activity records must be aggregated: duplicate (source, name, outcome)")
         if self.gate is not Gate.GRADEABLE:
-            if self.outcome is not None or self.checks:
-                raise ValueError(f"gate {self.gate.value} admits no outcome and no checks")
+            if self.outcome is not None or self.checks or self.activity:
+                raise ValueError(f"gate {self.gate.value} admits no outcome, no checks and no activity")
             if self.execution_assessment is not None:
                 raise ValueError(f"gate {self.gate.value} admits no execution assessment")
         elif self.outcome is None or self.execution_assessment is None:

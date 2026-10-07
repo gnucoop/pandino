@@ -29,6 +29,7 @@ from evaluation.datachat.grading.model import (
     ExecutionAssessment,
     ExecutionAssessmentReason,
     Gate,
+    ObservedActivity,
     ScenarioGrade,
     TechnicalFailure,
     TechnicalOutcome,
@@ -61,6 +62,7 @@ def build_scenario_grade(
     execution_sha256: str | None,
     teardown_verified: bool | None,
     checks: Sequence[CheckResult] = (),
+    activity: Sequence[ObservedActivity] = (),
 ) -> ScenarioGrade:
     """One ``ScenarioGrade``. Non-gradeable gates get no outcome and must carry no checks.
 
@@ -76,6 +78,8 @@ def build_scenario_grade(
             raise OutcomeBuildError(f"{scenario_id}: gate {gate.value} admits no execution assessment")
         if checks:
             raise OutcomeBuildError(f"{scenario_id}: gate {gate.value} cannot carry checks")
+        if activity:
+            raise OutcomeBuildError(f"{scenario_id}: gate {gate.value} cannot carry activity")
         return ScenarioGrade(scenario_id=scenario_id, gate=gate, execution_sha256=execution_sha256,
                              teardown_verified=teardown_verified)
 
@@ -108,4 +112,5 @@ def build_scenario_grade(
         execution_assessment_reason=execution_assessment_reason,
         execution_sha256=execution_sha256,
         teardown_verified=teardown_verified,
+        activity=tuple(activity),
     )
