@@ -16,8 +16,8 @@ from evaluation.datachat.grading.model import (
     CheckStatus,
     ExecutionAssessment,
     ExecutionAssessmentReason,
-    FailureCategory,
-    Verdict,
+    TechnicalFailure,
+    TechnicalOutcome,
 )
 from evaluation.datachat.model import Availability, EvidenceSourceRecord, FileRef, ScenarioStatus, SuiteStatus
 from evaluation.datachat.reporting import cli
@@ -25,9 +25,11 @@ from evaluation.datachat.reporting.operator_report import build_operator_report
 from evaluation.datachat.reporting.reader import load_run_for_reporting
 from evaluation.datachat.reporting.renderer import render_markdown
 from tests.test_fe_grading_catalogue import table
-from tests.test_fe_grading_grader import FE01, FE05, agent, grade, repo_root, snapshot  # noqa: F401
+from tests.test_fe_grading_grader import FE01, agent, grade, repo_root, snapshot  # noqa: F401
 from tests.test_fe_grading_reader import RID, RUN_ID, build_run
-from tests.test_fe_reporting_operator import REAL_RUN, SHOULD, check, loaded, regraded, review
+from tests.test_fe_reporting_operator import REAL_RUN, check, loaded, regraded, regraded_real_copy
+
+F, T = TechnicalFailure, TechnicalOutcome
 
 PNG = b"\x89PNG\r\n\x1a\nfake"
 
@@ -68,20 +70,23 @@ def refs(files):
 # --- PASS / fidelity ---------------------------------------------------------------------
 
 
-def test_pass_report_shows_triad_identity_and_no_run_verdict(tmp_path, repo_root):
+def test_pass_report_shows_triad_identity_and_no_run_outcome(tmp_path, repo_root):
     _, run = loaded(tmp_path, repo_root, {"FE-01": FE01})
     text = md(run)
     assert f"**Run:** `{RUN_ID}`" in text
-    assert "**Official:** no" in text and "**Comparable:** no" in text and "**Grading complete:** yes" in text
+    assert "**Official:** no" in text and "**Comparable:** no" in text
+    for gone in ("Grading complete", "Verdict", "review", "caveat", "Pending", "Dimension", "Requirement"):
+        assert gone not in text, gone
+    assert "| TECHNICAL PASS | 1 |" in text and "| ARTIFACT | 0 |" in text
     assert "## FE-01" in text
     assert "```text\ndomanda?\n```" in section(text, "### Question")
     assert "```text\nEcco i conteggi.\n```" in section(text, "### Agent Result")
     grading = section(text, "### Grading")
-    assert "**Verdict:** **PASS**" in grading and "**Execution assessment:** OK" in grading
+    assert "**Technical outcome:** **TECHNICAL PASS**" in grading and "**Execution assessment:** OK" in grading
     assert f"{len(run.scenario('FE-01').grade.checks)} MET" in grading
-    assert "| fe01.region_counts |" in grading
+    assert "| fe01.chart_present |" in grading
     assert run.run_grade_sha256 in text
-    body = text.replace("There is no run-level verdict or score.", "")
+    body = text.replace("There is no run-level outcome or score.", "")
     for forbidden in ("overall", "quality score", "pass rate", "%", "severity", "priority"):
         assert forbidden not in body.lower()
     assert text.index("### Question") < text.index("### Agent Result") < text.index("### Grading")
@@ -171,76 +176,48 @@ def test_error_body_rendered_verbatim(tmp_path, repo_root):
     assert "**Error body** — HTTP 500" in result and raw.decode() in result
 
 
-# --- Exceptional verdicts ----------------------------------------------------------------
+# --- Exceptional outcomes ----------------------------------------------------------------
 
 
-def test_pass_with_caveat_surfaces_caveat_items(tmp_path, repo_root):
+def test_fail_lists_every_failure_without_ranking_or_causation(tmp_path, repo_root):
     _, run = loaded(tmp_path, repo_root, {"FE-01": FE01})
-    miss = check("fe01.chart_bar", CheckStatus.NOT_MET, SHOULD, expected=["bar"], observed="pie")
-    run = regraded(run, "FE-01", verdict=Verdict.PASS_WITH_CAVEAT, caveats=("fe01.chart_bar",),
-                   checks=(check("fe01.region_counts", CheckStatus.MET), miss))
-    grading = section(md(run), "### Grading")
-    assert "**Verdict:** **PASS WITH CAVEAT**" in grading
-    caveats = grading[grading.index("#### Caveats"):]
-    assert "`fe01.chart_bar` — status **NOT_MET**" in caveats and 'expected: `["bar"]`' in caveats
-    assert "yes — PASS WITH CAVEAT" in grading
-
-
-def test_fail_foregrounds_root_failure_without_causation(tmp_path, repo_root):
-    _, run = loaded(tmp_path, repo_root, {"FE-01": FE01})
-    counts = check("fe01.region_counts", CheckStatus.NOT_MET, category=FailureCategory.ANALYTICAL,
-                   expected={"north": 140}, observed={"north": 141})
-    run = regraded(run, "FE-01", verdict=Verdict.FAIL_ANALYTICAL, root_failure=FailureCategory.ANALYTICAL,
-                   other_failures=(FailureCategory.HONESTY,),
-                   checks=(counts, check("fe01.chart_present", CheckStatus.MET)))
+    chart = check("fe01.chart_present", CheckStatus.NOT_MET, F.ARTIFACT, expected=">= 1 chart", observed=0)
+    provider = check("fe01.provider", CheckStatus.NOT_MET, F.TOOL_EXECUTION, expected=">= 1 extra row", observed=0)
+    run = regraded(run, "FE-01", outcome=T.FAIL, failures=(F.TOOL_EXECUTION, F.ARTIFACT), checks=(provider, chart))
     text = md(run)
     grading = section(text, "### Grading")
-    assert "**Verdict:** **FAIL — ANALYTICAL**" in grading
-    assert f"**Root failure: {FailureCategory.ANALYTICAL.value}**" in grading
-    assert "Checks carrying this failure category: `fe01.region_counts`" in grading
-    assert "**Other failure: " in grading
+    assert "**Technical outcome:** **FAIL — TOOL EXECUTION, ARTIFACT**" in grading
+    assert "**TOOL EXECUTION**" in grading and "**ARTIFACT**" in grading
+    assert "Checks carrying this failure category: `fe01.chart_present`" in grading
+    assert "Root" not in grading and "Other failure" not in grading
     attention = grading[grading.index("#### Checks requiring attention"):]
-    assert 'expected: `{"north": 140}`' in attention and 'observed: `{"north": 141}`' in attention
+    assert "expected: `>= 1 chart`" in attention and "observed: `0`" in attention
+    assert "failure category: ARTIFACT" in attention
     assert "caused" not in text.lower() and "because" not in text.lower()
+    assert "yes — technical FAIL" in grading
 
 
-def test_pending_review_shown_and_never_written(tmp_path, repo_root):
-    root, run = loaded(tmp_path, repo_root, {"FE-05": FE05})
-    before = snapshot(root, exclude=("reports/",))
-    text = md(run)
-    pending = [r for r in run.scenario("FE-05").grade.manual_reviews if r.status.value == "PENDING"]
-    assert "**Grading complete:** no" in text and "**Grading incomplete**" in text
-    section_ = text[text.index("#### Pending manual reviews"):]
-    assert "(../grading/reviews/FE-05.json)" in section_
-    for r in pending:
-        assert r.question in section_ and r.dimension.value in section_
-        assert r.requirement_level.value in section_ and "status **PENDING**" in section_
-    cli.write_report(root, text)
-    assert snapshot(root, exclude=("reports/",)) == before
-    assert not (root / "grading" / "reviews").exists()
-
-
-def test_execution_needs_review_is_distinct_from_review_items(tmp_path, repo_root):
+def test_indeterminate_execution_issue(tmp_path, repo_root):
     _, run = loaded(tmp_path, repo_root, {"FE-01": FE01})
-    run = regraded(run, "FE-01", (ExecutionAssessment.NEEDS_REVIEW, ExecutionAssessmentReason.ADAPTER_FALLBACK),
-                   verdict=Verdict.NEEDS_REVIEW, checks=(check("fe01.region_counts", CheckStatus.MET),))
+    run = regraded(run, "FE-01", (ExecutionAssessment.INDETERMINATE, ExecutionAssessmentReason.ADAPTER_FALLBACK),
+                   outcome=T.INDETERMINATE, checks=(check("fe01.chart_present", CheckStatus.MET),))
     grading = section(md(run), "### Grading")
+    assert "**Technical outcome:** **INDETERMINATE**" in grading
     assert "#### Execution issue" in grading and "`ADAPTER_FALLBACK`" in grading
-    assert "not resolvable through review files" in grading
-    assert "#### Pending manual reviews" not in grading
+    assert "review" not in grading.lower()
 
 
 # --- Non-gradeable -----------------------------------------------------------------------
 
 
-def test_not_run_has_no_verdict_and_absent_result(tmp_path, repo_root):
+def test_not_run_has_no_outcome_and_absent_result(tmp_path, repo_root):
     _, run = loaded(tmp_path, repo_root, {"FE-01": {"status": ScenarioStatus.NOT_RUN}},
                     status=SuiteStatus.ABORTED_INFRA)
     text = md(run)
     assert "_Not sent to DataChat._" in section(text, "### Question")
     assert "No Agent Result" in section(text, "### Agent Result")
     grading = section(text, "### Grading")
-    assert "**Gate:** NOT_RUN" in grading and "no analytical verdict" in grading
+    assert "**Gate:** NOT_RUN" in grading and "**Technical outcome:** none (gate NOT_RUN)" in grading
     assert "FAIL" not in grading
     assert "| NOT_RUN | 1 |" in text
 
@@ -251,7 +228,7 @@ def test_not_scoreable_shows_gate_and_captured_result(tmp_path, repo_root):
     run = regraded(run, "FE-01", (None, None), gate=Gate.NOT_SCOREABLE_INFRA)
     text = md(run)
     grading = section(text, "### Grading")
-    assert "**Gate:** NOT_SCOREABLE_INFRA" in grading and "no analytical verdict" in grading
+    assert "**Gate:** NOT_SCOREABLE_INFRA" in grading and "**Technical outcome:** none" in grading
     assert "FAIL" not in grading and "Ecco i conteggi." in section(text, "### Agent Result")
 
 
@@ -290,14 +267,15 @@ def _repo(repo_root: Path) -> Path:
     return repo_root
 
 
-# --- Real FE-01 (read-only render, no write) ---------------------------------------------
+# --- Real FE-01 (regraded scratch copy, render only) -------------------------------------
 
 
 @pytest.mark.skipif(not REAL_RUN.is_dir(), reason="real FE-01 run package not present locally")
-def test_real_fe01_markdown():
-    text = md(load_run_for_reporting(REAL_RUN))
+def test_real_fe01_markdown(tmp_path):
+    text = md(load_run_for_reporting(regraded_real_copy(tmp_path)))
     assert "Quante richieste ci sono per regione? Mostramele anche in un grafico." in text
     for line in ("- North: 140 richieste", "- Central: 12 richieste", "**title:** Numero di richieste per regione",
-                 "| Central | 12 |", "**Verdict:** **PASS**", "**Execution assessment:** OK", "4 MET"):
+                 "| Central | 12 |", "**Technical outcome:** **TECHNICAL PASS**",
+                 "**Execution assessment:** OK", "1 MET"):
         assert line in text
-    assert "#### Caveats" not in text and "#### Pending manual reviews" not in text
+    assert "Caveats" not in text and "manual review" not in text

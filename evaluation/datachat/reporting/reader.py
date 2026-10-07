@@ -8,13 +8,14 @@ a typed source model:
 Inputs: ``grading/results/run_grade.json``, ``grading/results/scenarios/*.json``,
 ``run_manifest.json``, ``scenarios/<id>/execution.json``, the ``/datachat``
 exchange and response body, and the delivered image/export artifacts. Never
-read: ``grading/reviews/`` (review state is the persisted
-``ScenarioGrade.manual_reviews``), the repository scenario catalogue, the
+read: the repository scenario catalogue, the
 evaluation contract under ``docs/`` (recorded in ``RunGrade.contract``,
 verified by the grader), ``agent_runs``, runtime logs or Usage as answer.
 
+Only grading schema 2 (technical outcomes) is accepted.
+
 Any inconsistency or unsupported schema raises ``ReportingInputError``: an
-input error, never a scenario verdict. The reader never writes, repairs,
+input error, never a scenario outcome. The reader never writes, repairs,
 reconciles or regrades, and recomputes no judgment: grading values are
 deserialized verbatim and only compared for identity across files.
 """
@@ -28,19 +29,15 @@ from evaluation.datachat.grading.grader import RESULTS_DIR, RUN_GRADE_NAME
 from evaluation.datachat.grading.model import (
     CheckResult,
     CheckStatus,
-    Dimension,
     EvidenceClass,
     ExecutionAssessment,
     ExecutionAssessmentReason,
-    FailureCategory,
     Gate,
-    ManualReviewItem,
-    RequirementLevel,
-    ReviewStatus,
     RunGrade,
     ScenarioGrade,
     ScenarioIndexEntry,
-    Verdict,
+    TechnicalFailure,
+    TechnicalOutcome,
 )
 from evaluation.datachat.grading.reader import ParseStatus, normalize_response
 from evaluation.datachat.model import (
@@ -61,7 +58,7 @@ from evaluation.datachat.reporting.model import (
 )
 
 # Schema versions this reader understands. Anything else is refused, never best-effort parsed.
-SUPPORTED_GRADING_SCHEMAS = frozenset({1})
+SUPPORTED_GRADING_SCHEMAS = frozenset({2})
 SUPPORTED_EXECUTION_SCHEMAS = frozenset({1})
 
 
@@ -127,35 +124,23 @@ def _opt(enum, value):
     return None if value is None else enum(value)
 
 
+def _failures(values: list) -> tuple[TechnicalFailure, ...]:
+    return tuple(TechnicalFailure(f) for f in values)
+
+
 def _check_result(d: dict) -> CheckResult:
     return CheckResult(
-        check_id=d["check_id"], dimension=Dimension(d["dimension"]),
-        requirement_level=RequirementLevel(d["requirement_level"]),
-        evidence_class=EvidenceClass(d["evidence_class"]), status=CheckStatus(d["status"]),
-        expected=d["expected"], observed=d["observed"], evidence_refs=tuple(d["evidence_refs"]),
-        failure_category=_opt(FailureCategory, d["failure_category"]), note=d["note"],
-    )
-
-
-def _review_item(d: dict) -> ManualReviewItem:
-    return ManualReviewItem(
-        check_id=d["check_id"], dimension=Dimension(d["dimension"]),
-        requirement_level=RequirementLevel(d["requirement_level"]), question=d["question"],
-        evidence_refs=tuple(d["evidence_refs"]),
-        failure_category_if_failed=_opt(FailureCategory, d["failure_category_if_failed"]),
-        evidence_sha256=d["evidence_sha256"], status=ReviewStatus(d["status"]),
-        reviewer=d["reviewer"], note=d["note"],
+        check_id=d["check_id"], evidence_class=EvidenceClass(d["evidence_class"]),
+        status=CheckStatus(d["status"]), expected=d["expected"], observed=d["observed"],
+        evidence_refs=tuple(d["evidence_refs"]), failure=_opt(TechnicalFailure, d["failure"]), note=d["note"],
     )
 
 
 def _scenario_grade(d: dict) -> ScenarioGrade:
     return ScenarioGrade(
-        scenario_id=d["scenario_id"], gate=Gate(d["gate"]), verdict=_opt(Verdict, d["verdict"]),
-        root_failure=_opt(FailureCategory, d["root_failure"]),
-        other_failures=tuple(FailureCategory(f) for f in d["other_failures"]),
-        caveats=tuple(d["caveats"]),
+        scenario_id=d["scenario_id"], gate=Gate(d["gate"]), outcome=_opt(TechnicalOutcome, d["outcome"]),
+        failures=_failures(d["failures"]),
         checks=tuple(_check_result(c) for c in d["checks"]),
-        manual_reviews=tuple(_review_item(r) for r in d["manual_reviews"]),
         execution_assessment=_opt(ExecutionAssessment, d["execution_assessment"]),
         execution_assessment_reason=_opt(ExecutionAssessmentReason, d["execution_assessment_reason"]),
         execution_sha256=d["execution_sha256"], teardown_verified=d["teardown_verified"],
@@ -168,9 +153,10 @@ def _run_grade(d: dict) -> RunGrade:
         run_id=d["run_id"], official=d["official"], comparable=d["comparable"],
         grader=d["grader"], contract=d["contract"],
         scenarios=tuple(
-            ScenarioIndexEntry(e["scenario_id"], Gate(e["gate"]), _opt(Verdict, e["verdict"]), e["pending_reviews"])
+            ScenarioIndexEntry(e["scenario_id"], Gate(e["gate"]), _opt(TechnicalOutcome, e["outcome"]),
+                               _failures(e["failures"]))
             for e in d["scenarios"]),
-        counts_by_verdict=d["counts_by_verdict"], grading_complete=d["grading_complete"],
+        counts_by_outcome=d["counts_by_outcome"], counts_by_failure=d["counts_by_failure"],
         schema_version=d["schema_version"],
     )
 
@@ -294,11 +280,9 @@ def _load_scenario(
     data = _read(grade_path, f"{sid} scenario grade")
     _check_schema(data, SUPPORTED_GRADING_SCHEMAS, f"{sid} scenario grade")
     grade = _parse(data, _scenario_grade, f"{sid} scenario grade")
-    if (grade.scenario_id, grade.gate, grade.verdict) != (sid, entry.gate, entry.verdict):
-        raise ReportingInputError(f"{sid}: scenario grade does not match run_grade.json (id/gate/verdict)")
-    pending = sum(r.status is ReviewStatus.PENDING for r in grade.manual_reviews)
-    if pending != entry.pending_reviews:
-        raise ReportingInputError(f"{sid}: pending_reviews {entry.pending_reviews} != {pending} PENDING items")
+    if (grade.scenario_id, grade.gate, grade.outcome, grade.failures) != (
+            sid, entry.gate, entry.outcome, entry.failures):
+        raise ReportingInputError(f"{sid}: scenario grade does not match run_grade.json (id/gate/outcome/failures)")
 
     manifest_entries = [e for e in manifest.scenarios if e.get("scenario_id") == sid]
     if len(manifest_entries) > 1:

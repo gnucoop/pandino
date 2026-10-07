@@ -8,8 +8,8 @@ Offline; never grades (run ``python -m evaluation.datachat.grading`` first),
 never writes anywhere else in the run package. The report is derived and is
 overwritten on every run.
 
-Exit codes: 0 report written (whatever the scenario verdicts or grading
-completeness — they are content, not command failures), 2 usage/input error
+Exit codes: 0 report written (whatever the scenario technical outcomes —
+they are content, not command failures), 2 usage/input error
 or reporting refusal (missing run, ungraded or inconsistent package), 3
 unexpected or persistence error, 130 interrupted.
 """

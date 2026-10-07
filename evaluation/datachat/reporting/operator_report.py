@@ -16,15 +16,17 @@ metadata:
 - top-level fields of ``OperatorRunReport`` / ``ScenarioReport`` are MUST SHOW.
   Conditional elements (§9.1) are empty / None in their normal state and
   populated only from an exceptional persisted state;
-- ``detail`` holds USEFUL DETAIL (all checks, resolved reviews, timing, ...);
+- ``detail`` holds USEFUL DETAIL (all checks, timing, ...);
 - ``provenance`` holds PROVENANCE / DEBUG (hashes, refs, request IDs, grader).
 
+Grading input is schema 2: one technical outcome per gradeable scenario and
+every established failure category, unranked.
+
 Allowed derivations (§12) only: selection by persisted status, ID or category
-equality, counts of persisted values, splitting ``counts_by_verdict`` into
-verdict and gate groups, structural classification of the Agent result.
-Forbidden (§13): new verdicts, gates, assessments, check or review outcomes,
-failure order, caveats, severity, scores, rates, or a stated basis for a
-``NEEDS REVIEW`` verdict the grader did not persist.
+equality, counts of persisted values, splitting ``counts_by_outcome`` into
+outcome and gate groups, structural classification of the Agent result.
+Forbidden (§13): new outcomes, gates, assessments, check statuses, failure
+order or primary failure, severity, scores or rates.
 """
 
 from collections import Counter
@@ -37,12 +39,11 @@ from evaluation.datachat.grading.model import (
     CheckStatus,
     ExecutionAssessment,
     ExecutionAssessmentReason,
-    FailureCategory,
     Gate,
-    ManualReviewItem,
-    ReviewStatus,
     ScenarioIndexEntry,
-    Verdict,
+    TechnicalFailure,
+    TechnicalOutcome,
+    outcome_label,
 )
 from evaluation.datachat.grading.reader import ParseStatus
 from evaluation.datachat.model import EvidenceSourceRecord, Failure, ScenarioStatus, SuiteStatus
@@ -53,13 +54,9 @@ from evaluation.datachat.reporting.model import (
     ReportingScenarioInput,
 )
 
-# Where pending review answers are recorded (grading §review workflow); shown, never written.
-REVIEW_FILE_TEMPLATE = "grading/reviews/{scenario_id}.json"
-
 # Manifest config keys rendered as provider/model provenance (design §6.2); nothing else is copied.
 _DATACHAT_IDENTITY_KEYS = ("DATACHAT_PROVIDER", "DATACHAT_MODEL", "DATACHAT_ENGINE")
 
-_FAIL_VERDICTS = frozenset(c.verdict for c in FailureCategory)
 _ATTENTION_CHECK_STATUSES = (CheckStatus.NOT_MET, CheckStatus.INDETERMINATE)
 
 
@@ -137,11 +134,9 @@ class AttentionReason(str, Enum):
     Declaration order is a fixed listing order, not a severity ranking.
     """
 
-    FAIL_VERDICT = "FAIL_VERDICT"
-    NEEDS_REVIEW_VERDICT = "NEEDS_REVIEW_VERDICT"
-    PASS_WITH_CAVEAT = "PASS_WITH_CAVEAT"
+    FAIL_OUTCOME = "FAIL_OUTCOME"
+    INDETERMINATE_OUTCOME = "INDETERMINATE_OUTCOME"
     NOT_GRADEABLE = "NOT_GRADEABLE"
-    PENDING_REVIEWS = "PENDING_REVIEWS"
     EXECUTION_NOT_OK = "EXECUTION_NOT_OK"
     TEARDOWN_NOT_VERIFIED = "TEARDOWN_NOT_VERIFIED"
 
@@ -157,14 +152,12 @@ class Attention:
         return bool(self.reasons)
 
 
-def _attention(entry: ScenarioIndexEntry, s: ReportingScenarioInput) -> Attention:
+def _attention(s: ReportingScenarioInput) -> Attention:
     g = s.grade
     held = {
-        AttentionReason.FAIL_VERDICT: g.verdict in _FAIL_VERDICTS,
-        AttentionReason.NEEDS_REVIEW_VERDICT: g.verdict is Verdict.NEEDS_REVIEW,
-        AttentionReason.PASS_WITH_CAVEAT: g.verdict is Verdict.PASS_WITH_CAVEAT,
+        AttentionReason.FAIL_OUTCOME: g.outcome is TechnicalOutcome.FAIL,
+        AttentionReason.INDETERMINATE_OUTCOME: g.outcome is TechnicalOutcome.INDETERMINATE,
         AttentionReason.NOT_GRADEABLE: g.gate is not Gate.GRADEABLE,
-        AttentionReason.PENDING_REVIEWS: entry.pending_reviews > 0,
         AttentionReason.EXECUTION_NOT_OK: (g.execution_assessment is not None
                                            and g.execution_assessment is not ExecutionAssessment.OK),
         AttentionReason.TEARDOWN_NOT_VERIFIED: g.teardown_verified is False,
@@ -177,48 +170,24 @@ def _attention(entry: ScenarioIndexEntry, s: ReportingScenarioInput) -> Attentio
 
 @dataclass(frozen=True)
 class ExecutionIssue:
-    """A persisted execution assessment other than OK, foregrounded with its reason.
-
-    ``resolvable_by_review`` is False in v1: review files cannot change the
-    execution assessment (grading design; reporting design §8.3).
-    """
+    """A persisted execution assessment other than OK, foregrounded with its reason."""
 
     assessment: ExecutionAssessment
     reason: ExecutionAssessmentReason
-    resolvable_by_review: bool = False
 
 
 @dataclass(frozen=True)
 class FailureView:
-    """One persisted failure category with the items carrying that category.
+    """One persisted technical failure category with the checks carrying that category.
 
-    ``items_carrying_category`` are checks whose persisted ``failure_category``
-    and FAILED reviews whose ``failure_category_if_failed`` equal ``category``.
-    Equality only: this is not a recorded cause. For EXECUTION the explanation
-    is the execution assessment/reason, so no item is associated by design.
+    ``checks_carrying_category`` are NOT_MET checks whose persisted ``failure``
+    equals ``category``. Equality only: this is not a recorded cause. For
+    EXECUTION (and a RESPONSE CONTRACT established by the execution
+    assessment) the explanation is the execution assessment/reason.
     """
 
-    category: FailureCategory
-    is_root: bool
+    category: TechnicalFailure
     checks_carrying_category: tuple[CheckResult, ...] = ()
-    reviews_carrying_category: tuple[ManualReviewItem, ...] = ()
-
-
-@dataclass(frozen=True)
-class CaveatItem:
-    """A persisted caveat ID resolved to exactly one check or review item."""
-
-    check_id: str
-    check: CheckResult | None = None
-    review: ManualReviewItem | None = None
-
-
-@dataclass(frozen=True)
-class PendingReview:
-    """A PENDING review item and where its answer is recorded (never answered here)."""
-
-    item: ManualReviewItem
-    answer_file: str  # run-relative
 
 
 @dataclass(frozen=True)
@@ -227,7 +196,6 @@ class ScenarioDetail:
 
     checks: tuple[CheckResult, ...]
     normal_checks: tuple[CheckResult, ...]
-    resolved_reviews: tuple[ManualReviewItem, ...]
     execution_assessment_reason: ExecutionAssessmentReason | None
     execution_status: ScenarioStatus | None
     execution_failure: Failure | None
@@ -242,9 +210,8 @@ class ScenarioProvenance:
     execution_sha256: str | None
     question_sha256: str | None
     evidence: tuple[EvidenceSourceRecord, ...]  # execution.json evidence records with FileRefs
-    evidence_refs: tuple[str, ...]  # run-relative, from checks and reviews, first-seen order
+    evidence_refs: tuple[str, ...]  # run-relative, from checks, first-seen order
     request_ids: tuple[str, ...]
-    review_evidence_sha256: tuple[tuple[str, str], ...]  # (check_id, evidence_sha256)
     teardown_verified: bool | None
 
 
@@ -252,8 +219,8 @@ class ScenarioProvenance:
 class ScenarioReport:
     """One scenario for the operator. Top-level fields are MUST SHOW.
 
-    Question, Agent result and Grading stay separate. ``verdict`` None means
-    no analytical verdict exists (non-gradeable gate). Conditional fields are
+    Question, Agent result and Grading stay separate. ``outcome`` None means
+    no technical outcome exists (non-gradeable gate). Conditional fields are
     empty/None in the normal state.
     """
 
@@ -266,13 +233,10 @@ class ScenarioReport:
     agent_result: OperatorAgentResult
     # Grading
     gate: Gate
-    verdict: Verdict | None
+    outcome: TechnicalOutcome | None
     execution_assessment: ExecutionAssessment | None
     execution_issue: ExecutionIssue | None
-    root_failure: FailureCategory | None
-    failures: tuple[FailureView, ...]  # root first, then other_failures, in persisted order
-    caveats: tuple[CaveatItem, ...]
-    pending_reviews: tuple[PendingReview, ...]
+    failures: tuple[FailureView, ...]  # persisted order, unranked
     attention_checks: tuple[CheckResult, ...]  # persisted NOT_MET / INDETERMINATE
     check_status_counts: tuple[tuple[CheckStatus, int], ...]  # compact summary, CheckStatus order
     gate_execution_failure: Failure | None  # execution.json failure, non-gradeable gates only
@@ -280,51 +244,27 @@ class ScenarioReport:
     provenance: ScenarioProvenance
 
     @property
-    def has_verdict(self) -> bool:
-        return self.verdict is not None
+    def has_outcome(self) -> bool:
+        return self.outcome is not None
 
     @property
-    def other_failures(self) -> tuple[FailureCategory, ...]:
-        return tuple(f.category for f in self.failures if not f.is_root)
+    def label(self) -> str | None:
+        """``TECHNICAL PASS``, ``INDETERMINATE`` or ``FAIL — A, B`` from persisted values."""
+        return outcome_label(self.outcome, tuple(f.category for f in self.failures))
 
 
 def _failures(s: ReportingScenarioInput) -> tuple[FailureView, ...]:
     g = s.grade
-    if g.root_failure is None:
-        if g.other_failures:
-            raise OperatorReportError(f"{s.scenario_id}: other_failures without a root_failure")
-        return ()
-    views = []
-    for category in (g.root_failure, *g.other_failures):
-        views.append(FailureView(
-            category=category,
-            is_root=category is g.root_failure,
-            checks_carrying_category=tuple(c for c in g.checks if c.failure_category is category),
-            reviews_carrying_category=tuple(
-                r for r in g.manual_reviews
-                if r.status is ReviewStatus.FAILED and r.failure_category_if_failed is category),
-        ))
-    return tuple(views)
-
-
-def _caveats(s: ReportingScenarioInput) -> tuple[CaveatItem, ...]:
-    g = s.grade
-    items = []
-    for check_id in g.caveats:
-        checks = [c for c in g.checks if c.check_id == check_id]
-        reviews = [r for r in g.manual_reviews if r.check_id == check_id]
-        if len(checks) + len(reviews) != 1:
-            raise OperatorReportError(
-                f"{s.scenario_id}: caveat {check_id!r} resolves to {len(checks) + len(reviews)} items")
-        items.append(CaveatItem(check_id, checks[0] if checks else None, reviews[0] if reviews else None))
-    return tuple(items)
+    return tuple(
+        FailureView(category, tuple(c for c in g.checks if c.failure is category))
+        for category in g.failures)
 
 
 def _unique(values) -> tuple:
     return tuple(dict.fromkeys(v for v in values if v is not None))
 
 
-def _scenario(entry: ScenarioIndexEntry, s: ReportingScenarioInput) -> ScenarioReport:
+def _scenario(s: ReportingScenarioInput) -> ScenarioReport:
     g = s.grade
     execution = s.execution
     gradeable = g.gate is Gate.GRADEABLE
@@ -339,27 +279,21 @@ def _scenario(entry: ScenarioIndexEntry, s: ReportingScenarioInput) -> ScenarioR
     ])
     return ScenarioReport(
         scenario_id=s.scenario_id,
-        attention=_attention(entry, s),
+        attention=_attention(s),
         question=s.question,
         question_sent=bool(result and result.attempts),
         agent_result=_agent_result(result),
         gate=g.gate,
-        verdict=g.verdict,
+        outcome=g.outcome,
         execution_assessment=g.execution_assessment,
         execution_issue=issue,
-        root_failure=g.root_failure,
         failures=_failures(s),
-        caveats=_caveats(s),
-        pending_reviews=tuple(
-            PendingReview(r, REVIEW_FILE_TEMPLATE.format(scenario_id=s.scenario_id))
-            for r in g.manual_reviews if r.status is ReviewStatus.PENDING),
         attention_checks=tuple(c for c in g.checks if c.status in _ATTENTION_CHECK_STATUSES),
         check_status_counts=tuple((st, statuses[st]) for st in CheckStatus if statuses[st]),
         gate_execution_failure=execution.failure if execution and not gradeable else None,
         detail=ScenarioDetail(
             checks=g.checks,
             normal_checks=tuple(c for c in g.checks if c.status not in _ATTENTION_CHECK_STATUSES),
-            resolved_reviews=tuple(r for r in g.manual_reviews if r.status is not ReviewStatus.PENDING),
             execution_assessment_reason=g.execution_assessment_reason,
             execution_status=execution.status if execution else None,
             execution_failure=execution.failure if execution else None,
@@ -370,9 +304,8 @@ def _scenario(entry: ScenarioIndexEntry, s: ReportingScenarioInput) -> ScenarioR
             execution_sha256=s.execution_sha256,
             question_sha256=s.question_sha256,
             evidence=tuple(execution.evidence.values()) if execution else (),
-            evidence_refs=_unique(ref for item in (*g.checks, *g.manual_reviews) for ref in item.evidence_refs),
+            evidence_refs=_unique(ref for c in g.checks for ref in c.evidence_refs),
             request_ids=request_ids,
-            review_evidence_sha256=tuple((r.check_id, r.evidence_sha256) for r in g.manual_reviews),
             teardown_verified=g.teardown_verified,
         ),
     )
@@ -409,17 +342,18 @@ class RunProvenance:
 class OperatorRunReport:
     """One graded run for the operator. Top-level fields are MUST SHOW.
 
-    There is no run verdict, score or rate. ``verdict_counts`` and
-    ``gate_counts`` are the persisted ``counts_by_verdict`` split by key kind,
-    in persisted order, zeros included.
+    There is no run outcome, score or rate. ``outcome_counts`` and
+    ``gate_counts`` are the persisted ``counts_by_outcome`` split by key kind;
+    ``failure_counts`` is the persisted ``counts_by_failure``; all in
+    persisted order, zeros included.
     """
 
     run_id: str
     official: bool
     comparable: bool
-    grading_complete: bool
     inventory: tuple[ScenarioIndexEntry, ...]  # frozen run order
-    verdict_counts: tuple[tuple[Verdict, int], ...]
+    outcome_counts: tuple[tuple[TechnicalOutcome, int], ...]
+    failure_counts: tuple[tuple[TechnicalFailure, int], ...]
     gate_counts: tuple[tuple[Gate, int], ...]
     scenarios: tuple[ScenarioReport, ...]  # frozen run order
     detail: RunDetail
@@ -429,22 +363,24 @@ class OperatorRunReport:
     def attention_scenarios(self) -> tuple[str, ...]:
         return tuple(s.scenario_id for s in self.scenarios if s.attention.required)
 
-    @property
-    def incomplete_scenarios(self) -> tuple[str, ...]:
-        """Scenarios keeping grading incomplete (persisted NEEDS REVIEW); empty when complete."""
-        return tuple(s.scenario_id for s in self.scenarios if s.verdict is Verdict.NEEDS_REVIEW)
-
 
 def _split_counts(counts: dict[str, int]) -> tuple[tuple, tuple]:
-    verdicts, gates = [], []
+    outcomes, gates = [], []
     for key, value in counts.items():
-        if key in Verdict._value2member_map_:
-            verdicts.append((Verdict(key), value))
+        if key in TechnicalOutcome._value2member_map_:
+            outcomes.append((TechnicalOutcome(key), value))
         elif key in Gate._value2member_map_ and key != Gate.GRADEABLE.value:
             gates.append((Gate(key), value))
         else:
-            raise OperatorReportError(f"counts_by_verdict has an unknown key {key!r}")
-    return tuple(verdicts), tuple(gates)
+            raise OperatorReportError(f"counts_by_outcome has an unknown key {key!r}")
+    return tuple(outcomes), tuple(gates)
+
+
+def _failure_counts(counts: dict[str, int]) -> tuple[tuple[TechnicalFailure, int], ...]:
+    try:
+        return tuple((TechnicalFailure(key), value) for key, value in counts.items())
+    except ValueError as exc:
+        raise OperatorReportError(f"counts_by_failure has an unknown key: {exc}") from exc
 
 
 def build_operator_report(run_input: ReportingRunInput) -> OperatorRunReport:
@@ -452,17 +388,17 @@ def build_operator_report(run_input: ReportingRunInput) -> OperatorRunReport:
     rg, manifest = run_input.run_grade, run_input.manifest
     if [e.scenario_id for e in rg.scenarios] != [s.scenario_id for s in run_input.scenarios]:
         raise OperatorReportError("scenario inputs do not follow RunGrade.scenarios")
-    verdict_counts, gate_counts = _split_counts(rg.counts_by_verdict)
+    outcome_counts, gate_counts = _split_counts(rg.counts_by_outcome)
     config = manifest.datachat_config.get("values", {})
     return OperatorRunReport(
         run_id=rg.run_id,
         official=rg.official,
         comparable=rg.comparable,
-        grading_complete=rg.grading_complete,
         inventory=rg.scenarios,
-        verdict_counts=verdict_counts,
+        outcome_counts=outcome_counts,
+        failure_counts=_failure_counts(rg.counts_by_failure),
         gate_counts=gate_counts,
-        scenarios=tuple(_scenario(e, s) for e, s in zip(rg.scenarios, run_input.scenarios)),
+        scenarios=tuple(_scenario(s) for s in run_input.scenarios),
         detail=RunDetail(
             status=manifest.status,
             failure=manifest.failure,

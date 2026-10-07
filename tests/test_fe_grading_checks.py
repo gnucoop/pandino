@@ -12,10 +12,8 @@ import pytest
 from evaluation.datachat.grading import checks as c
 from evaluation.datachat.grading.model import (
     CheckStatus,
-    Dimension,
     EvidenceClass,
-    FailureCategory,
-    RequirementLevel,
+    TechnicalFailure,
 )
 from evaluation.datachat.grading.reader import normalize_response, parse_runtime_log
 
@@ -270,14 +268,13 @@ def test_chart_mapping_to_comparison():
 
 
 def _policy(**extra):
-    return dict(check_id="x.counts", dimension=Dimension.ANALYTICAL, requirement_level=RequirementLevel.MUST,
-                evidence_class=EvidenceClass.DIRECT, failure_category=FailureCategory.ANALYTICAL, **extra)
+    return dict(check_id="x.counts", evidence_class=EvidenceClass.DIRECT, failure=TechnicalFailure.ARTIFACT, **extra)
 
 
 def test_make_check_attaches_policy_and_keeps_refs():
     refs = ("scenarios/X/http/datachat.response.bin",)
     result = c.make_check(c.compare_mapping(EXPECTED, {"North": 1}), evidence_refs=refs, **_policy())
-    assert result.status is NOT_MET and result.failure_category is FailureCategory.ANALYTICAL
+    assert result.status is NOT_MET and result.failure is TechnicalFailure.ARTIFACT
     assert result.evidence_refs == refs
     assert json.loads(json.dumps(result.to_dict()))["observed"] == {"north": 1.0}
 
@@ -286,7 +283,7 @@ def test_make_check_attaches_policy_and_keeps_refs():
     c.compare_number(1, "?"), c.compare_exact(1, None), c.not_applicable("caller says so"), c.compare_number(1, 1),
 ])
 def test_failure_category_only_on_not_met(outcome):
-    assert c.make_check(outcome, **_policy()).failure_category is None
+    assert c.make_check(outcome, **_policy()).failure is None
 
 
 # --- INDETERMINATE safety and Slice 1 integration ----------------------------------------
@@ -312,4 +309,4 @@ def test_normalized_response_flow_end_to_end():
     chart = c.charts(resp).value[0]
     outcome = c.from_extracted(c.chart_mapping(chart), c.compare_mapping, {"North": 140, "South": 110})
     result = c.make_check(outcome, evidence_refs=("scenarios/X/http/datachat.response.bin",), **_policy())
-    assert result.status is MET and result.failure_category is None
+    assert result.status is MET and result.failure is None

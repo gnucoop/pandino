@@ -6,7 +6,7 @@ normalized, integrity-checked, scenario-agnostic view:
     run package → integrity verification → RunForGrading
 
 The reader never writes, repairs, retries or queries anything live (Maui,
-database, providers). It decides no verdict: parse problems are represented
+database, providers). It decides no outcome: parse problems are represented
 faithfully (``ParseStatus``) for later checks.
 
 Two failure kinds are kept apart:
@@ -17,14 +17,13 @@ Two failure kinds are kept apart:
 - integrity corruption (a referenced file missing, a hash or size mismatch, a
   path escaping the run, an inconsistent manifest, an unfinished run, a
   changed evaluation contract) raises ``GradingInputError``. It is never a
-  scenario verdict.
+  scenario outcome.
 
 Epistemics: runtime ``tool_call_*`` events and generated agent code are
 evidence about tool *use* only. Exact tool outputs and agent observations are
 not persisted by the execution layer and are not reconstructed here.
 """
 
-import hashlib
 import json
 import re
 from enum import Enum
@@ -634,21 +633,6 @@ def _load_scenario(root: Path, entry: dict[str, Any], run_id: str) -> ScenarioEv
         artifacts=_load_artifacts(execution, scenario_dir, run_rel),
         tools=tools,
     )
-
-
-def evidence_digest(run_dir: Path, refs: tuple[str, ...] | list[str]) -> str:
-    """SHA-256 binding a manual-review answer to the evidence it was made against.
-
-    Combines each run-relative ref and its file SHA-256, in ``refs`` order.
-    """
-    root = Path(run_dir)
-    digest = hashlib.sha256()
-    for ref in refs:
-        path = _safe(root, ref, "evidence ref")
-        if not path.is_file():
-            raise _refuse(f"evidence ref missing: {ref}")
-        digest.update(f"{ref}\0{sha256_file(path)}\n".encode("utf-8"))
-    return digest.hexdigest()
 
 
 def load_run_for_grading(run_dir: Path, repo_root: Path = contract.REPO_ROOT) -> RunForGrading:

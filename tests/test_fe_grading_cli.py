@@ -16,13 +16,18 @@ import pytest
 from evaluation.datachat import contract
 from evaluation.datachat.grading import cli
 from evaluation.datachat.grading import grader as gr
-from evaluation.datachat.grading.model import Gate, RunGrade, ScenarioIndexEntry, Verdict
+from evaluation.datachat.grading.model import (
+    Gate,
+    RunGrade,
+    ScenarioIndexEntry,
+    TechnicalFailure,
+    TechnicalOutcome,
+)
 from evaluation.datachat.grading.reader import ContractMismatchError, GradingInputError
-from evaluation.datachat.grading.verdict import ReviewInputError
 from tests.test_fe_grading_grader import FE01, FE05, IDENTITY, repo_root  # noqa: F401  (fixture)
 from tests.test_fe_grading_reader import RUN_ID, build_run
 
-V = Verdict
+T, F = TechnicalOutcome, TechnicalFailure
 
 
 @pytest.fixture
@@ -37,12 +42,12 @@ def repo(tmp_path):
     return root
 
 
-def entry(sid, verdict=None, gate=Gate.GRADEABLE, pending=0):
-    return ScenarioIndexEntry(sid, gate, verdict, pending)
+def entry(sid, outcome=None, *failures, gate=Gate.GRADEABLE):
+    return ScenarioIndexEntry(sid, gate, outcome, failures)
 
 
-def run_grade(*entries, complete=True):
-    return RunGrade(run_id=RUN_ID, official=False, comparable=False, scenarios=entries, grading_complete=complete)
+def run_grade(*entries):
+    return RunGrade(run_id=RUN_ID, official=False, comparable=False, scenarios=entries)
 
 
 def invoke(argv, repo_root, grade_fn=None, result=None):
@@ -51,7 +56,7 @@ def invoke(argv, repo_root, grade_fn=None, result=None):
 
     def fake(run_dir, root):
         calls.append((run_dir, root))
-        return result or run_grade(entry("FE-01", V.PASS))
+        return result or run_grade(entry("FE-01", T.TECHNICAL_PASS))
 
     code = cli.main(argv, grade_fn=grade_fn or fake, repo_root=repo_root, out=out, err=err)
     return code, out.getvalue(), err.getvalue(), calls
@@ -69,7 +74,7 @@ def write_scenario_result(repo_root, sid, assessment, reason):
 def test_help(repo):
     code, out, _, calls = invoke(["--help"], repo)
     out = " ".join(out.split())
-    assert code == 0 and "offline" in out and "grading/reviews/" in out and "grading/results/" in out
+    assert code == 0 and "offline" in out and "grading/results/" in out and "review" not in out
     assert "Does not execute DataChat" in out and not calls
 
 
@@ -119,30 +124,25 @@ def test_bad_repo_root(tmp_path):
 # --- Summary and exit codes ---------------------------------------------------------
 
 
-def test_complete_run_exit_0(repo):
-    code, out, _, _ = invoke([RUN_ID], repo, result=run_grade(entry("FE-01", V.PASS), entry("FE-02", V.PASS_WITH_CAVEAT)))
-    assert code == 0
+def test_graded_run_exit_0(repo):
+    code, out, _, _ = invoke([RUN_ID], repo, result=run_grade(entry("FE-01", T.TECHNICAL_PASS)))
+    assert code == cli.EXIT_GRADED == 0
     assert f"Run:         {RUN_ID}" in out and "Official:    no" in out and "Comparable:  no" in out
-    assert "FE-01  PASS\n" in out and "FE-02  PASS WITH CAVEAT" in out
-    assert "Grading complete: yes" in out
+    assert "FE-01  TECHNICAL PASS\n" in out
+    assert "Grading complete" not in out and "review" not in out.lower()
     assert f"Results: {cli.RUNS_DIR_RELATIVE.as_posix()}/{RUN_ID}/grading/results" in out
 
 
-def test_analytical_fail_is_a_result_not_a_command_failure(repo):
-    code, out, _, _ = invoke([RUN_ID], repo, result=run_grade(entry("FE-04", V.FAIL_ANALYTICAL)))
-    assert code == 0 and "FE-04  FAIL — ANALYTICAL" in out
-
-
-def test_incomplete_run_exit_1_with_review_path(repo):
-    result = run_grade(entry("FE-05", V.NEEDS_REVIEW, pending=3), complete=False)
+def test_fail_and_indeterminate_are_results_not_command_failures(repo):
+    result = run_grade(entry("FE-04", T.FAIL, F.TOOL_EXECUTION, F.ARTIFACT), entry("FE-05", T.INDETERMINATE))
     code, out, _, _ = invoke([RUN_ID], repo, result=result)
-    assert code == 1
-    assert "Grading complete: no" in out and "Pending manual reviews: 3" in out
-    assert f"{RUN_ID}/grading/reviews/<FE-NN>.json" in out and "(3 pending reviews)" in out
+    assert code == 0
+    assert "FE-04  FAIL — TOOL EXECUTION, ARTIFACT\n" in out and "FE-05  INDETERMINATE\n" in out
+    assert not hasattr(cli, "EXIT_INCOMPLETE")
 
 
 def test_non_gradeable_shown_as_gates(repo):
-    result = run_grade(entry("FE-01", V.PASS), entry("FE-02", gate=Gate.NOT_RUN),
+    result = run_grade(entry("FE-01", T.TECHNICAL_PASS), entry("FE-02", gate=Gate.NOT_RUN),
                        entry("FE-03", gate=Gate.NOT_SCOREABLE_INFRA), entry("FE-04", gate=Gate.NOT_SCOREABLE))
     code, out, _, _ = invoke([RUN_ID], repo, result=result)
     assert code == 0
@@ -152,16 +152,17 @@ def test_non_gradeable_shown_as_gates(repo):
 
 def test_execution_reasons_shown(repo):
     write_scenario_result(repo, "FE-01", "FAILED", "ERROR_OUTCOME")
-    write_scenario_result(repo, "FE-02", "NEEDS_REVIEW", "ADAPTER_FALLBACK")
+    write_scenario_result(repo, "FE-02", "INDETERMINATE", "ADAPTER_FALLBACK")
     write_scenario_result(repo, "FE-03", "OK", "USABLE_OUTCOME")
-    result = run_grade(entry("FE-01", V.FAIL_EXECUTION), entry("FE-02", V.NEEDS_REVIEW), entry("FE-03", V.PASS),
-                       complete=False)
+    write_scenario_result(repo, "FE-04", "RESPONSE_CONTRACT_VIOLATION", "HTTP_NON_2XX")
+    result = run_grade(entry("FE-01", T.FAIL, F.EXECUTION), entry("FE-02", T.INDETERMINATE),
+                       entry("FE-03", T.TECHNICAL_PASS), entry("FE-04", T.FAIL, F.RESPONSE_CONTRACT))
     code, out, _, _ = invoke([RUN_ID], repo, result=result)
-    assert code == 1
+    assert code == 0
     assert "FE-01  FAIL — EXECUTION  [execution: ERROR_OUTCOME]" in out
-    assert "FE-02  NEEDS REVIEW  [execution: ADAPTER_FALLBACK]" in out
-    assert "FE-03  PASS\n" in out and "USABLE_OUTCOME" not in out
-    assert "Execution needs review: 1 scenario(s)" in out
+    assert "FE-02  INDETERMINATE  [execution: ADAPTER_FALLBACK]" in out
+    assert "FE-03  TECHNICAL PASS\n" in out and "USABLE_OUTCOME" not in out
+    assert "FE-04  FAIL — RESPONSE CONTRACT  [execution: HTTP_NON_2XX]" in out
 
 
 # --- Errors ----------------------------------------------------------------------------
@@ -183,7 +184,6 @@ def _wrapped(cause):
 @pytest.mark.parametrize("exc,expected", [
     (_wrapped(ContractMismatchError("run manifest does not record the current contract hash: x")),
      "evaluation contract does not match the CURRENT FE contract"),
-    (_wrapped(ReviewInputError("FE-05.json: duplicate keys")), "Cannot grade run: FE-05.json"),
     (_wrapped(GradingInputError("FE-01 http body: sha256 mismatch")), "sha256 mismatch"),
 ])
 def test_expected_errors_exit_2(repo, exc, expected):
@@ -240,9 +240,9 @@ def test_real_grading_end_to_end(tmp_path, repo_root):  # noqa: F811  (fixture f
     grade_fn = functools.partial(gr.grade_run, grader_identity=lambda _: dict(IDENTITY))
     out, err = io.StringIO(), io.StringIO()
     code = cli.main(["--run-dir", str(run_dir)], grade_fn=grade_fn, repo_root=repo_root, out=out, err=err)
-    assert code == 1, err.getvalue()
+    assert code == 0, err.getvalue()
     text = out.getvalue()
-    assert "FE-01  PASS\n" in text and "FE-05  NEEDS REVIEW" in text and "Grading complete: no" in text
+    assert "FE-01  TECHNICAL PASS\n" in text and "FE-05  TECHNICAL PASS\n" in text
     assert (run_dir / "grading" / "results" / "run_grade.json").is_file()
     assert (run_dir / "grading" / "results" / "scenarios" / "FE-05.json").is_file()
     assert not (run_dir / "grading" / "reviews").exists()

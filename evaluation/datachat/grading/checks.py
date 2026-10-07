@@ -2,7 +2,7 @@
 
 Pure functions only: no files, no run loading, no live systems, no scenario
 knowledge. Each comparison returns an ``Outcome``; the caller (which owns the
-policy: check ID, dimension, requirement level, evidence class, failure
+policy: check ID, evidence class, failure
 category) turns it into a ``CheckResult`` with ``make_check``.
 
 Status discipline:
@@ -24,10 +24,8 @@ from typing import Any, Iterable, Mapping, Sequence
 from evaluation.datachat.grading.model import (
     CheckResult,
     CheckStatus,
-    Dimension,
     EvidenceClass,
-    FailureCategory,
-    RequirementLevel,
+    TechnicalFailure,
 )
 from evaluation.datachat.grading.reader import NormalizedResponse, ParseStatus
 
@@ -69,23 +67,19 @@ def make_check(
     outcome: Outcome,
     *,
     check_id: str,
-    dimension: Dimension,
-    requirement_level: RequirementLevel,
     evidence_class: EvidenceClass,
+    failure: TechnicalFailure,
     evidence_refs: Sequence[str] = (),
-    failure_category: FailureCategory | None = None,
 ) -> CheckResult:
-    """Attach caller-owned policy. ``failure_category`` is kept only on NOT_MET."""
+    """Attach caller-owned policy. ``failure`` is kept only on NOT_MET."""
     return CheckResult(
         check_id=check_id,
-        dimension=dimension,
-        requirement_level=requirement_level,
         evidence_class=evidence_class,
         status=outcome.status,
         expected=outcome.expected,
         observed=outcome.observed,
         evidence_refs=tuple(evidence_refs),
-        failure_category=failure_category if outcome.status is CheckStatus.NOT_MET else None,
+        failure=failure if outcome.status is CheckStatus.NOT_MET else None,
         note=outcome.note,
     )
 

@@ -8,7 +8,8 @@ levels apart:
 - Agent result: what ``/datachat`` returned to the user (persisted HTTP
   response plus delivered artifacts), never ``agent_runs``, runtime logs or
   Usage;
-- Grading: the persisted ``ScenarioGrade``, an opaque authoritative judgment.
+- Grading: the persisted schema-2 ``ScenarioGrade`` (technical outcome),
+  an opaque authoritative judgment.
 
 Persisted domain records (``RunGrade``, ``ScenarioGrade``, ``EvaluationRun``,
 ``ScenarioExecution``, ``HttpExchange``, ``FileRef``, ``ArtifactRecord``) are

@@ -6,8 +6,8 @@
     OperatorRunReport → Markdown
 
 Pure: no I/O, no clock, no environment. It trusts the typed operator model:
-every status, verdict, gate, assessment, caveat, failure and attention reason
-shown is a persisted or Slice 2 value; nothing is compared, ranked or
+every status, technical outcome, gate, assessment, failure and attention
+reason shown is a persisted or Slice 2 value; nothing is compared, ranked or
 recomputed here. The Agent result is shown verbatim from the Slice 1 source
 (text in a fenced block, tables and chart specs structurally). Links to
 persisted artifacts are relative to ``reports/report.md`` so the run package
@@ -17,7 +17,7 @@ stays portable.
 import json
 from typing import Any, Iterable
 
-from evaluation.datachat.grading.model import CheckResult, ExecutionAssessment, ManualReviewItem
+from evaluation.datachat.grading.model import CheckResult, ExecutionAssessment
 from evaluation.datachat.model import Availability
 from evaluation.datachat.reporting.operator_report import (
     AttentionReason,
@@ -35,11 +35,9 @@ _UP = "../"
 
 # One-to-one labels of the Slice 2 attention reasons; listing order is the enum order, not a rank.
 _ATTENTION_LABELS = {
-    AttentionReason.FAIL_VERDICT: "FAIL verdict",
-    AttentionReason.NEEDS_REVIEW_VERDICT: "NEEDS REVIEW verdict",
-    AttentionReason.PASS_WITH_CAVEAT: "PASS WITH CAVEAT",
+    AttentionReason.FAIL_OUTCOME: "technical FAIL",
+    AttentionReason.INDETERMINATE_OUTCOME: "technical INDETERMINATE",
     AttentionReason.NOT_GRADEABLE: "non-gradeable gate",
-    AttentionReason.PENDING_REVIEWS: "pending manual review",
     AttentionReason.EXECUTION_NOT_OK: "execution assessment not OK",
     AttentionReason.TEARDOWN_NOT_VERIFIED: "teardown not verified",
 }
@@ -102,7 +100,6 @@ def _overview(r: OperatorRunReport) -> list[str]:
            _field("Run", f"`{r.run_id}`"),
            _field("Official", _yes(r.official)),
            _field("Comparable", _yes(r.comparable)),
-           _field("Grading complete", _yes(r.grading_complete)),
            _field("Run status", r.detail.status)]
     if r.detail.failure is not None:
         f = r.detail.failure
@@ -113,14 +110,14 @@ def _overview(r: OperatorRunReport) -> list[str]:
     else:
         out.append("**Scenarios requiring operator attention:** none")
     out.append("")
-    if not r.grading_complete:
-        pending = sum(e.pending_reviews for e in r.inventory)
-        out.append(f"**Grading incomplete** — scenarios with NEEDS REVIEW: {', '.join(r.incomplete_scenarios) or 'none'}; "
-                   f"pending manual review items: {pending}.")
-        out.append("")
-    out += ["### Verdict counts", ""] + _table(("Verdict", "Scenarios"), ((v, n) for v, n in r.verdict_counts))
+    out += ["### Technical outcome counts", "",
+            "A TECHNICAL PASS says nothing about semantic correctness.", ""]
+    out += _table(("Outcome", "Scenarios"), r.outcome_counts)
+    out += ["### Technical failure counts", "",
+            "A FAIL scenario counts once per established failure category.", ""]
+    out += _table(("Failure", "Scenarios"), r.failure_counts)
     out += ["### Non-gradeable gate counts", "",
-            "Gates are not verdicts and are not counted as FAIL.", ""]
+            "Gates are not outcomes and are not counted as FAIL.", ""]
     out += _table(("Gate", "Scenarios"), ((g, n) for g, n in r.gate_counts))
     return out
 
@@ -131,9 +128,9 @@ def _inventory(r: OperatorRunReport) -> list[str]:
     for e in r.inventory:
         a = attention[e.scenario_id]
         rows.append((f"[{e.scenario_id}](#{e.scenario_id.lower()})", e.gate,
-                     e.verdict if e.verdict is not None else "no analytical verdict",
-                     e.pending_reviews, ", ".join(_ATTENTION_LABELS[x] for x in a.reasons) if a.required else ""))
-    return ["## Scenario summary", ""] + _table(("Scenario", "Gate", "Verdict", "Pending reviews", "Attention"), rows)
+                     e.label if e.outcome is not None else "no technical outcome",
+                     ", ".join(_ATTENTION_LABELS[x] for x in a.reasons) if a.required else ""))
+    return ["## Scenario summary", ""] + _table(("Scenario", "Gate", "Technical outcome", "Attention"), rows)
 
 
 def _run_provenance(r: OperatorRunReport) -> list[str]:
@@ -281,19 +278,18 @@ def _agent_result(s: ScenarioReport) -> list[str]:
 
 
 def _check_rows(checks: Iterable[CheckResult]) -> list[str]:
-    return _table(("Check", "Requirement", "Dimension", "Evidence class", "Status", "Expected", "Observed", "Note"),
-                  ((c.check_id, c.requirement_level, c.dimension, c.evidence_class, c.status,
-                    c.expected, c.observed, c.note) for c in checks))
+    return _table(("Check", "Evidence class", "Status", "Expected", "Observed", "Failure", "Note"),
+                  ((c.check_id, c.evidence_class, c.status, c.expected, c.observed, c.failure, c.note)
+                   for c in checks))
 
 
 def _check_detail(c: CheckResult) -> list[str]:
     out = [f"- `{c.check_id}` — status **{c.status.value}**",
-           f"  - requirement {c.requirement_level.value}, dimension {c.dimension.value}, "
-           f"evidence class {c.evidence_class.value}",
+           f"  - evidence class {c.evidence_class.value}",
            f"  - expected: `{_value(c.expected)}`",
            f"  - observed: `{_value(c.observed)}`"]
-    if c.failure_category is not None:
-        out.append(f"  - failure category: {c.failure_category.value}")
+    if c.failure is not None:
+        out.append(f"  - failure category: {c.failure.value}")
     if c.note:
         out.append(f"  - note: {c.note}")
     if c.evidence_refs:
@@ -301,24 +297,12 @@ def _check_detail(c: CheckResult) -> list[str]:
     return out
 
 
-def _review_detail(r: ManualReviewItem) -> list[str]:
-    out = [f"- `{r.check_id}` — status **{r.status.value}**",
-           f"  - question: {r.question}",
-           f"  - requirement {r.requirement_level.value}, dimension {r.dimension.value}"]
-    if r.reviewer:
-        out.append(f"  - reviewer: {r.reviewer}")
-    if r.note:
-        out.append(f"  - note: {r.note}")
-    out.append(f"  - evidence: {', '.join(_link(x) for x in r.evidence_refs)}")
-    return out
-
-
 def _grading(s: ScenarioReport) -> list[str]:
     out = ["### Grading", "", _field("Gate", s.gate)]
-    if s.has_verdict:
-        out.append(f"- **Verdict:** **{s.verdict.value}**")
+    if s.has_outcome:
+        out.append(f"- **Technical outcome:** **{s.label}**")
     else:
-        out.append(f"- **Verdict:** no analytical verdict (gate {s.gate.value})")
+        out.append(f"- **Technical outcome:** none (gate {s.gate.value})")
     if s.execution_assessment is not None:
         reason = s.detail.execution_assessment_reason
         text = s.execution_assessment.value
@@ -337,10 +321,7 @@ def _grading(s: ScenarioReport) -> list[str]:
     if s.execution_issue is not None:
         i = s.execution_issue
         out += ["#### Execution issue", "",
-                f"Execution assessment **{i.assessment.value}**, reason `{i.reason.value}`."]
-        if not i.resolvable_by_review:
-            out.append("This is not resolvable through review files in v1.")
-        out.append("")
+                f"Execution assessment **{i.assessment.value}**, reason `{i.reason.value}`.", ""]
     if s.gate_execution_failure is not None:
         f = s.gate_execution_failure
         out += ["#### Execution context", "",
@@ -350,45 +331,25 @@ def _grading(s: ScenarioReport) -> list[str]:
         if f.detail:
             out.append(_field("Detail", f.detail))
         out.append("")
-    elif not s.has_verdict and s.detail.execution_status is not None:
+    elif not s.has_outcome and s.detail.execution_status is not None:
         out += [_field("Execution status", s.detail.execution_status), ""]
     if s.failures:
         out += ["#### Failures", ""]
         for f in s.failures:
-            out += [f"**{'Root failure' if f.is_root else 'Other failure'}: {f.category.value}**", ""]
+            out += [f"**{f.category.value}**", ""]
             if f.checks_carrying_category:
                 out.append("Checks carrying this failure category: "
                            + ", ".join(f"`{c.check_id}`" for c in f.checks_carrying_category))
-            if f.reviews_carrying_category:
-                out.append("Failed reviews carrying this failure category: "
-                           + ", ".join(f"`{r.check_id}`" for r in f.reviews_carrying_category))
-            if not (f.checks_carrying_category or f.reviews_carrying_category):
-                out.append("No check or review item carries this failure category.")
+            else:
+                out.append("No check carries this failure category (see the execution assessment).")
             out.append("")
-    if s.caveats:
-        out += ["#### Caveats", ""]
-        for c in s.caveats:
-            out += _check_detail(c.check) if c.check is not None else _review_detail(c.review)
-        out.append("")
     if s.attention_checks:
         out += ["#### Checks requiring attention (NOT_MET / INDETERMINATE)", ""]
         for c in s.attention_checks:
             out += _check_detail(c)
         out.append("")
-    if s.pending_reviews:
-        out += ["#### Pending manual reviews", "",
-                f"Answers belong in {_link(s.pending_reviews[0].answer_file)}; re-run grading afterwards. "
-                "This report does not answer or predict them.", ""]
-        for p in s.pending_reviews:
-            out += _review_detail(p.item)
-        out.append("")
     if s.detail.checks:
         out += ["#### All checks", ""] + _check_rows(s.detail.checks)
-    if s.detail.resolved_reviews:
-        out += ["#### Resolved manual reviews", ""]
-        for r in s.detail.resolved_reviews:
-            out += _review_detail(r)
-        out.append("")
     return out
 
 
@@ -425,9 +386,7 @@ def _scenario_provenance(s: ScenarioReport) -> list[str]:
         if src.body_file:
             out.append(_field("Response body", _link(_artifact_path(s, src.body_file))))
     if p.evidence_refs:
-        out.append(_field("Evidence refs (checks/reviews)", ", ".join(_link(x) for x in p.evidence_refs)))
-    for check_id, sha in p.review_evidence_sha256:
-        out.append(_field(f"Review evidence SHA-256 ({check_id})", f"`{sha}`"))
+        out.append(_field("Evidence refs (checks)", ", ".join(_link(x) for x in p.evidence_refs)))
     out.append("")
     if p.evidence:
         rows = ((e.source, e.availability, e.reason,
@@ -455,7 +414,7 @@ def render_markdown(report: OperatorRunReport) -> str:
     """The Markdown report for one run. Pure and deterministic for a given model."""
     lines = ["# DataChat Functional Evaluation Report", "",
              f"Derived from `grading/results/run_grade.json` (SHA-256 `{report.provenance.run_grade_sha256}`). "
-             "Regenerable; not a source of truth. There is no run-level verdict or score.", ""]
+             "Regenerable; not a source of truth. There is no run-level outcome or score.", ""]
     lines += _overview(report)
     lines += _inventory(report)
     for s in report.scenarios:

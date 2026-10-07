@@ -3,15 +3,13 @@
 ``python -m evaluation.datachat.grading RUN_ID | --run-dir PATH``
 
 A thin layer over ``grader.grade_run``: it resolves one explicit run, grades
-it offline (reading immutable evidence and durable reviews from
-``grading/reviews/``), regenerates ``grading/results/`` and prints a short
-summary. No Maui, no HTTP, no DB, no provider, no API key. It is a separate
+it offline (reading immutable evidence only), regenerates
+``grading/results/`` and prints a short summary. No Maui, no HTTP, no DB, no provider, no API key. It is a separate
 entry point because the execution CLI treats every positional as a scenario ID.
 
-Exit codes: 0 grading complete (scenario FAIL verdicts included — they are
-results, not command failures), 1 grading written but incomplete (NEEDS REVIEW
-remains), 2 usage/input error (missing run, contract mismatch, malformed
-review, corrupted package), 3 unexpected error, 130 interrupted.
+Exit codes: 0 graded (technical FAIL and INDETERMINATE outcomes included —
+they are results, not command failures), 2 usage/input error (missing run,
+contract mismatch, corrupted package), 3 unexpected error, 130 interrupted.
 """
 
 import argparse
@@ -24,11 +22,10 @@ from typing import Callable, Sequence, TextIO
 from evaluation.datachat import contract
 from evaluation.datachat.evidence import _check_run_id, safe_child
 from evaluation.datachat.grading import grader
-from evaluation.datachat.grading.model import Gate, RunGrade, Verdict
+from evaluation.datachat.grading.model import ExecutionAssessment, Gate, RunGrade
 from evaluation.datachat.grading.reader import ContractMismatchError
 
-EXIT_COMPLETE = 0
-EXIT_INCOMPLETE = 1
+EXIT_GRADED = 0
 EXIT_USAGE = 2
 EXIT_UNEXPECTED = 3
 EXIT_INTERRUPTED = 130
@@ -44,8 +41,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m evaluation.datachat.grading",
         description="Grade an existing DataChat Functional Evaluation run offline. "
-                    "Does not execute DataChat. Reads human reviews from <run>/grading/reviews/ "
-                    "and (re)writes results under <run>/grading/results/.",
+                    "Does not execute DataChat. (Re)writes results under <run>/grading/results/.",
     )
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("run_id", nargs="?", metavar="RUN_ID", help=f"run directory name under {RUNS_DIR_RELATIVE}/")
@@ -87,12 +83,12 @@ def _display(path: Path, repo_root: Path) -> str:
 
 
 def _execution_reason(results_dir: Path, scenario_id: str) -> str | None:
-    """Stable execution reason from the persisted scenario grade, when it matters for display."""
+    """Stable execution reason from the persisted scenario grade, when the assessment is not OK."""
     try:
         data = json.loads((results_dir / "scenarios" / f"{scenario_id}.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if data.get("execution_assessment") in ("FAILED", "NEEDS_REVIEW"):
+    if data.get("execution_assessment") != ExecutionAssessment.OK.value:
         return data.get("execution_assessment_reason")
     return None
 
@@ -106,30 +102,16 @@ def render(run_grade: RunGrade, run_dir: Path, repo_root: Path, out: TextIO) -> 
     print(f"Comparable:  {_yes(run_grade.comparable)}", file=out)
     print("", file=out)
     print("Scenarios:", file=out)
-    execution_review = 0
     for entry in run_grade.scenarios:
         if entry.gate is not Gate.GRADEABLE:
             print(f"  {entry.scenario_id}  {entry.gate.value}", file=out)
             continue
-        row = f"  {entry.scenario_id}  {entry.verdict.value}"
+        row = f"  {entry.scenario_id}  {entry.label}"
         reason = _execution_reason(results, entry.scenario_id)
         if reason:
             row += f"  [execution: {reason}]"
-            execution_review += entry.verdict is Verdict.NEEDS_REVIEW
-        if entry.pending_reviews:
-            row += f"  ({entry.pending_reviews} pending review{'s' if entry.pending_reviews != 1 else ''})"
         print(row, file=out)
-    pending = sum(e.pending_reviews for e in run_grade.scenarios)
     print("", file=out)
-    print(f"Grading complete: {_yes(run_grade.grading_complete)}", file=out)
-    if not run_grade.grading_complete:
-        if pending:
-            print(f"Pending manual reviews: {pending}", file=out)
-            print(f"Review files: {_display(run_dir / grader.REVIEWS_DIR, repo_root)}/<FE-NN>.json "
-                  "(edit, then re-run this command)", file=out)
-        if execution_review:
-            print(f"Execution needs review: {execution_review} scenario(s) "
-                  "(not resolvable through review files in v1)", file=out)
     print(f"Results: {_display(results, repo_root)}", file=out)
 
 
@@ -174,10 +156,10 @@ def main(
             return EXIT_USAGE
         except Exception as exc:  # message may carry anything; only the type is shown
             print(f"Unexpected grading error: {type(exc).__name__}", file=err)
-            print(f"Run directory: {_display(run_dir, root)} (raw evidence and reviews are never modified)", file=err)
+            print(f"Run directory: {_display(run_dir, root)} (raw evidence is never modified)", file=err)
             return EXIT_UNEXPECTED
         render(run_grade, run_dir, root, out)
-        return EXIT_COMPLETE if run_grade.grading_complete else EXIT_INCOMPLETE
+        return EXIT_GRADED
     except KeyboardInterrupt:
         print("Interrupted.", file=err)
         return EXIT_INTERRUPTED

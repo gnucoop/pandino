@@ -1,14 +1,16 @@
 """Grading domain model of the DataChat Functional Evaluation.
 
-Frozen vocabulary (dimensions, verdicts, requirement levels, evidence
-classes) and the derived result records. No I/O and no grading logic happen
-here: nothing in this module decides a verdict.
+Frozen technical vocabulary (outcomes, failure categories, evidence classes,
+check statuses, execution assessment) and the derived result records. No I/O
+and no grading logic happen here: nothing in this module decides an outcome.
 
 Records serialize with ``to_dict()`` to plain JSON-compatible values, using
 the same convention as the execution model (enums become their string
 value). Top-level persisted records carry ``schema_version``.
 
-There is deliberately no numeric score and no run-level verdict.
+There is deliberately no numeric score and no run-level outcome. Grading
+schema 2 is technical only: no semantic dimension, verdict, caveat or
+manual-review record exists.
 """
 
 from dataclasses import dataclass, field
@@ -17,64 +19,39 @@ from typing import Any
 
 from evaluation.datachat.model import _Serializable
 
-GRADING_SCHEMA_VERSION = 1
+GRADING_SCHEMA_VERSION = 2
 
 
 # --- Frozen vocabulary -------------------------------------------------------
 
 
-class Dimension(str, Enum):
-    UNDERSTANDING = "Understanding"
-    TOOL_SELECTION = "Tool selection"
-    ANALYTICAL = "Analytical correctness"
-    CHAINING = "Chaining"
-    HONESTY = "Honesty / coverage"
-    INTERPRETATION = "Final interpretation"
-    BACKEND_CONTRACT = "Backend contract"
+class TechnicalOutcome(str, Enum):
+    """Technical outcome of one GRADEABLE scenario (grading design §3).
+
+    ``FAIL`` always comes with one or more ``TechnicalFailure``; they are
+    recorded together, unranked. A TECHNICAL PASS says nothing about semantic
+    correctness.
+    """
+
+    TECHNICAL_PASS = "TECHNICAL PASS"
+    FAIL = "FAIL"
+    INDETERMINATE = "INDETERMINATE"
 
 
-class FailureCategory(str, Enum):
-    """FAIL verdict categories. EXECUTION is a category, not a dimension."""
+class TechnicalFailure(str, Enum):
+    """Category of a reliably established technical failure. Declaration order is a listing order, not a rank."""
 
     EXECUTION = "EXECUTION"
-    UNDERSTANDING = "UNDERSTANDING"
-    TOOL_SELECTION = "TOOL SELECTION"
-    CHAINING = "CHAINING"
-    ANALYTICAL = "ANALYTICAL"
-    HONESTY = "HONESTY"
-    INTERPRETATION = "INTERPRETATION"
-    BACKEND_CONTRACT = "BACKEND CONTRACT"
-
-    @property
-    def verdict(self) -> "Verdict":
-        return Verdict(f"FAIL — {self.value}")
-
-
-class Verdict(str, Enum):
-    PASS = "PASS"
-    PASS_WITH_CAVEAT = "PASS WITH CAVEAT"
-    FAIL_UNDERSTANDING = "FAIL — UNDERSTANDING"
-    FAIL_TOOL_SELECTION = "FAIL — TOOL SELECTION"
-    FAIL_ANALYTICAL = "FAIL — ANALYTICAL"
-    FAIL_CHAINING = "FAIL — CHAINING"
-    FAIL_HONESTY = "FAIL — HONESTY"
-    FAIL_INTERPRETATION = "FAIL — INTERPRETATION"
-    FAIL_BACKEND_CONTRACT = "FAIL — BACKEND CONTRACT"
-    FAIL_EXECUTION = "FAIL — EXECUTION"
-    NEEDS_REVIEW = "NEEDS REVIEW"
-
-
-class RequirementLevel(str, Enum):
-    MUST = "MUST"
-    SHOULD = "SHOULD"
-    MAY = "MAY"
+    RESPONSE_CONTRACT = "RESPONSE CONTRACT"
+    TOOL_EXECUTION = "TOOL EXECUTION"
+    ARTIFACT = "ARTIFACT"
 
 
 class EvidenceClass(str, Enum):
+    """DIRECT: observed fact. INFERRED: best-effort reading; its negative never fails a scenario."""
+
     DIRECT = "DIRECT"
     INFERRED = "INFERRED"
-    MANUAL_REVIEW_ONLY = "MANUAL_REVIEW_ONLY"
-    NOT_SCOREABLE_IN_V1 = "NOT_SCOREABLE_IN_V1"
 
 
 class CheckStatus(str, Enum):
@@ -84,24 +61,19 @@ class CheckStatus(str, Enum):
     NOT_APPLICABLE = "NOT_APPLICABLE"
 
 
-class ReviewStatus(str, Enum):
-    PENDING = "PENDING"
-    SATISFIED = "SATISFIED"
-    FAILED = "FAILED"
-    NOT_APPLICABLE = "NOT_APPLICABLE"
-
-
 class ExecutionAssessment(str, Enum):
     """Generic usability of the DataChat outcome, derived outside the scenario catalogue.
 
-    - OK: the outcome is usable; grade checks and reviews normally;
-    - FAILED: the outcome itself is unusable → FAIL — EXECUTION (root);
-    - NEEDS_REVIEW: borderline execution evidence → NEEDS REVIEW unless a FAIL is established.
+    - OK: the outcome is usable; scenario checks decide the outcome;
+    - FAILED: the outcome itself is unusable → FAIL — EXECUTION;
+    - RESPONSE_CONTRACT_VIOLATION: non-2xx (non-5xx) status or unparseable body → FAIL — RESPONSE CONTRACT;
+    - INDETERMINATE: contradictory or missing execution markers → INDETERMINATE unless a FAIL is established.
     """
 
     OK = "OK"
     FAILED = "FAILED"
-    NEEDS_REVIEW = "NEEDS_REVIEW"
+    RESPONSE_CONTRACT_VIOLATION = "RESPONSE_CONTRACT_VIOLATION"
+    INDETERMINATE = "INDETERMINATE"
 
 
 class ExecutionAssessmentReason(str, Enum):
@@ -123,9 +95,9 @@ _R = ExecutionAssessmentReason
 EXECUTION_REASONS: dict[ExecutionAssessment, frozenset[ExecutionAssessmentReason]] = {
     ExecutionAssessment.OK: frozenset({_R.USABLE_OUTCOME}),
     ExecutionAssessment.FAILED: frozenset({_R.ERROR_OUTCOME, _R.HTTP_5XX, _R.EMPTY_OUTCOME}),
-    ExecutionAssessment.NEEDS_REVIEW: frozenset({
-        _R.MISSING_RESPONSE, _R.CONFLICTING_KINDS, _R.HTTP_NON_2XX, _R.UNPARSEABLE_RESPONSE,
-        _R.RUNTIME_STATUS_CONFLICT, _R.ADAPTER_FALLBACK,
+    ExecutionAssessment.RESPONSE_CONTRACT_VIOLATION: frozenset({_R.HTTP_NON_2XX, _R.UNPARSEABLE_RESPONSE}),
+    ExecutionAssessment.INDETERMINATE: frozenset({
+        _R.MISSING_RESPONSE, _R.CONFLICTING_KINDS, _R.RUNTIME_STATUS_CONFLICT, _R.ADAPTER_FALLBACK,
     }),
 }
 
@@ -143,7 +115,7 @@ def check_execution_provenance(
 
 
 class Gate(str, Enum):
-    """Whether a scenario may be analytically graded. Not a verdict."""
+    """Whether a scenario may be technically graded. Not an outcome."""
 
     GRADEABLE = "GRADEABLE"
     NOT_RUN = "NOT_RUN"
@@ -178,17 +150,18 @@ def _check_refs(refs: tuple[str, ...]) -> None:
 
 @dataclass(frozen=True)
 class CheckResult(_Serializable):
-    """One automatic check. ``expected``/``observed`` are small JSON values."""
+    """One mandatory technical check. ``expected``/``observed`` are small JSON values.
+
+    ``failure`` is the category a reliable NOT_MET establishes; it is set only on NOT_MET.
+    """
 
     check_id: str
-    dimension: Dimension
-    requirement_level: RequirementLevel
     evidence_class: EvidenceClass
     status: CheckStatus
     expected: Any = None
     observed: Any = None
     evidence_refs: tuple[str, ...] = ()
-    failure_category: FailureCategory | None = None
+    failure: TechnicalFailure | None = None
     note: str | None = None
 
     def __post_init__(self) -> None:
@@ -196,53 +169,32 @@ class CheckResult(_Serializable):
             if not _is_small_value(getattr(self, name)):
                 raise ValueError(f"{name} must be a scalar or a flat list/dict of scalars")
         _check_refs(self.evidence_refs)
+        if (self.failure is not None) != (self.status is CheckStatus.NOT_MET):
+            raise ValueError(f"{self.check_id}: a failure category is set exactly on NOT_MET")
 
 
-@dataclass(frozen=True)
-class ManualReviewItem(_Serializable):
-    """A targeted human question about specific evidence.
-
-    An answer is valid only for ``evidence_sha256``, the hash of the evidence
-    the question was asked against.
-    """
-
-    check_id: str
-    dimension: Dimension
-    requirement_level: RequirementLevel
-    question: str
-    evidence_refs: tuple[str, ...]
-    failure_category_if_failed: FailureCategory | None
-    evidence_sha256: str
-    status: ReviewStatus = ReviewStatus.PENDING
-    reviewer: str | None = None
-    note: str | None = None
-
-    def __post_init__(self) -> None:
-        if not self.question.strip():
-            raise ValueError("a review item needs a specific question")
-        if not self.evidence_refs:
-            raise ValueError("a review item needs specific evidence")
-        _check_refs(self.evidence_refs)
+def _check_outcome(outcome: TechnicalOutcome | None, failures: tuple[TechnicalFailure, ...]) -> None:
+    if len(set(failures)) != len(failures):
+        raise ValueError(f"duplicate technical failures: {failures}")
+    if (outcome is TechnicalOutcome.FAIL) != bool(failures):
+        raise ValueError(f"outcome {outcome} inconsistent with failures {failures}")
 
 
 @dataclass(frozen=True)
 class ScenarioGrade(_Serializable):
-    """Grade of one scenario. ``verdict`` is null unless the gate is GRADEABLE.
+    """Grade of one scenario. ``outcome`` is null unless the gate is GRADEABLE.
 
-    A GRADEABLE grade always records the execution assessment and its stable
-    reason; non-gradeable gates record neither (infrastructure is explained by
-    the gate, never by the execution vocabulary). The assessment is derived
-    from execution evidence only: human review files cannot change it in v1.
+    A GRADEABLE grade always records the technical outcome, the execution
+    assessment and its stable reason; non-gradeable gates record none of them
+    (infrastructure is explained by the gate, never by the execution
+    vocabulary). ``failures`` lists every established failure, unranked.
     """
 
     scenario_id: str
     gate: Gate
-    verdict: Verdict | None = None
-    root_failure: FailureCategory | None = None
-    other_failures: tuple[FailureCategory, ...] = ()
-    caveats: tuple[str, ...] = ()
+    outcome: TechnicalOutcome | None = None
+    failures: tuple[TechnicalFailure, ...] = ()
     checks: tuple[CheckResult, ...] = ()
-    manual_reviews: tuple[ManualReviewItem, ...] = ()
     execution_assessment: ExecutionAssessment | None = None
     execution_assessment_reason: ExecutionAssessmentReason | None = None
     execution_sha256: str | None = None
@@ -251,29 +203,50 @@ class ScenarioGrade(_Serializable):
 
     def __post_init__(self) -> None:
         check_execution_provenance(self.execution_assessment, self.execution_assessment_reason)
+        _check_outcome(self.outcome, self.failures)
         if self.gate is not Gate.GRADEABLE:
-            if self.verdict is not None:
-                raise ValueError(f"gate {self.gate.value} admits no verdict")
+            if self.outcome is not None or self.checks:
+                raise ValueError(f"gate {self.gate.value} admits no outcome and no checks")
             if self.execution_assessment is not None:
                 raise ValueError(f"gate {self.gate.value} admits no execution assessment")
-        elif self.execution_assessment is None:
-            raise ValueError("a GRADEABLE grade needs an execution assessment and reason")
+        elif self.outcome is None or self.execution_assessment is None:
+            raise ValueError("a GRADEABLE grade needs an outcome, an execution assessment and reason")
+
+    @property
+    def label(self) -> str | None:
+        return outcome_label(self.outcome, self.failures)
+
+
+def outcome_label(outcome: TechnicalOutcome | None, failures: tuple[TechnicalFailure, ...]) -> str | None:
+    """``TECHNICAL PASS``, ``INDETERMINATE`` or ``FAIL — A, B`` (failures in recorded order)."""
+    if outcome is TechnicalOutcome.FAIL:
+        return f"FAIL — {', '.join(f.value for f in failures)}"
+    return outcome.value if outcome is not None else None
 
 
 @dataclass(frozen=True)
 class ScenarioIndexEntry(_Serializable):
     scenario_id: str
     gate: Gate
-    verdict: Verdict | None
-    pending_reviews: int
+    outcome: TechnicalOutcome | None
+    failures: tuple[TechnicalFailure, ...] = ()
+
+    def __post_init__(self) -> None:
+        _check_outcome(self.outcome, self.failures)
+
+    @property
+    def label(self) -> str | None:
+        return outcome_label(self.outcome, self.failures)
 
 
 @dataclass(frozen=True)
 class RunGrade(_Serializable):
-    """Run-level grading index. No run verdict and no aggregate score.
+    """Run-level grading index. No run outcome and no aggregate score.
 
     - ``grader``: implementation identity, git SHA and dirty state at grading time;
-    - ``contract``: evaluation contract hashes the grade was computed against.
+    - ``contract``: evaluation contract hashes the grade was computed against;
+    - ``counts_by_outcome``: every technical outcome and non-gradeable gate, zeros included;
+    - ``counts_by_failure``: scenarios establishing each failure category (a FAIL may count in several).
     """
 
     run_id: str
@@ -282,6 +255,6 @@ class RunGrade(_Serializable):
     grader: dict[str, Any] = field(default_factory=dict)
     contract: dict[str, Any] = field(default_factory=dict)
     scenarios: tuple[ScenarioIndexEntry, ...] = ()
-    counts_by_verdict: dict[str, int] = field(default_factory=dict)
-    grading_complete: bool = False
+    counts_by_outcome: dict[str, int] = field(default_factory=dict)
+    counts_by_failure: dict[str, int] = field(default_factory=dict)
     schema_version: int = GRADING_SCHEMA_VERSION

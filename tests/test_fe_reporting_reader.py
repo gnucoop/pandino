@@ -11,7 +11,7 @@ import socket
 import pytest
 
 from evaluation.datachat.evidence import sha256_bytes, sha256_file
-from evaluation.datachat.grading.model import ExecutionAssessment, Gate, ReviewStatus, Verdict
+from evaluation.datachat.grading.model import ExecutionAssessment, Gate, TechnicalOutcome
 from evaluation.datachat.grading.reader import ParseStatus
 from evaluation.datachat.model import Availability, EvidenceSourceRecord, FileRef, SuiteStatus
 from evaluation.datachat.reporting.reader import (
@@ -20,7 +20,7 @@ from evaluation.datachat.reporting.reader import (
     load_run_for_reporting,
 )
 from tests.test_fe_grading_catalogue import table
-from tests.test_fe_grading_grader import FE01, FE05, agent, grade, repo_root, snapshot  # noqa: F401
+from tests.test_fe_grading_grader import FE01, agent, grade, repo_root, snapshot  # noqa: F401
 from tests.test_fe_grading_reader import RID, RUN_ID, build_run
 
 
@@ -59,7 +59,7 @@ def test_valid_package_exposes_question_agent_result_and_grading(tmp_path, repo_
     run = load_run_for_reporting(root)
 
     assert run.run_id == RUN_ID and run.manifest.status is SuiteStatus.COMPLETED
-    assert (run.run_grade.official, run.run_grade.comparable, run.run_grade.grading_complete) == (False, False, True)
+    assert (run.run_grade.official, run.run_grade.comparable, run.run_grade.schema_version) == (False, False, 2)
     assert run.run_grade_sha256 == sha256_file(results(root))
     assert [s.scenario_id for s in run.scenarios] == ["FE-01"]
 
@@ -76,7 +76,8 @@ def test_valid_package_exposes_question_agent_result_and_grading(tmp_path, repo_
     assert a.image.availability is Availability.NOT_APPLICABLE and a.export.reason == "no download_url"
 
     g = s.grade
-    assert (g.gate, g.verdict, g.execution_assessment) == (Gate.GRADEABLE, Verdict.PASS, ExecutionAssessment.OK)
+    assert (g.gate, g.outcome, g.failures, g.execution_assessment) == (
+        Gate.GRADEABLE, TechnicalOutcome.TECHNICAL_PASS, (), ExecutionAssessment.OK)
     assert g.to_dict() == json.loads(results(root, "FE-01").read_text())
     assert snapshot(root, exclude=()) == before
     assert not (root / "reports").exists()
@@ -124,34 +125,31 @@ def test_table_export_and_image_failure_are_preserved(tmp_path, repo_root):
     assert a.image.file is None and a.image.metadata.decode_status == "NOT_PNG"
 
 
-def test_unwritten_scenario_keeps_its_gate_and_has_no_verdict(tmp_path, repo_root):
+def test_unwritten_scenario_keeps_its_gate_and_has_no_outcome(tmp_path, repo_root):
     root = graded(tmp_path, repo_root, {}, status=SuiteStatus.ABORTED_INFRA, order=["FE-01"])
     s = load_run_for_reporting(root).scenario("FE-01")
-    assert (s.grade.gate, s.grade.verdict, s.index.verdict) == (Gate.NOT_RUN, None, None)
+    assert (s.grade.gate, s.grade.outcome, s.index.outcome) == (Gate.NOT_RUN, None, None)
     assert (s.execution, s.question, s.agent_result) == (None, None, None)
-
-
-def test_pending_reviews_are_read_from_the_persisted_grade(tmp_path, repo_root):
-    root = graded(tmp_path, repo_root, {"FE-05": FE05})
-    (root / "grading/reviews").mkdir(parents=True)
-    (root / "grading/reviews/FE-05.json").write_text("not read by reporting")
-    s = load_run_for_reporting(root).scenario("FE-05")
-    assert s.grade.verdict is Verdict.NEEDS_REVIEW
-    assert s.index.pending_reviews == sum(r.status is ReviewStatus.PENDING for r in s.grade.manual_reviews) > 0
 
 
 # --- Refusals --------------------------------------------------------------------------
 
 
-def _set_verdict(d):
-    d["verdict"] = "FAIL — ANALYTICAL"
-    d["root_failure"] = "ANALYTICAL"
+def _set_failure(d):
+    d["outcome"] = "FAIL"
+    d["failures"] = ["ARTIFACT"]
 
 
 @pytest.mark.parametrize("tamper,match", [
     (lambda root: results(root, "FE-01").unlink(), "scenario grade missing"),
-    (lambda root: edit_json(results(root, "FE-01"), _set_verdict), "does not match run_grade.json"),
-    (lambda root: edit_json(results(root), lambda d: d["scenarios"][0].update(pending_reviews=1)), "pending_reviews"),
+    (lambda root: edit_json(results(root, "FE-01"), _set_failure), "does not match run_grade.json"),
+    (lambda root: edit_json(results(root), lambda d: d["scenarios"][0].update(outcome="FAIL", failures=["EXECUTION",
+                                                                                                         "ARTIFACT"])),
+     "does not match run_grade.json"),
+    (lambda root: edit_json(results(root), lambda d: d["scenarios"][0].update(failures=["ARTIFACT"])),
+     "run_grade.json malformed"),
+    (lambda root: edit_json(results(root, "FE-01"), lambda d: d.update(manual_reviews=[])), "malformed"),
+    (lambda root: edit_json(results(root), lambda d: d["scenarios"][0].update(pending_reviews=0)), "malformed"),
 ])
 def test_inconsistent_scenario_grade_refused(tmp_path, repo_root, tamper, match):
     root = graded(tmp_path, repo_root, {"FE-01": FE01})
@@ -177,8 +175,12 @@ def test_tampered_agent_result_body_refused(tmp_path, repo_root):
 
 def test_unsupported_schema_refused(tmp_path, repo_root):
     root = graded(tmp_path, repo_root, {"FE-01": FE01})
-    edit_json(results(root), lambda d: d.update(schema_version=2))
-    with pytest.raises(UnsupportedSchemaError, match="schema_version 2"):
+    edit_json(results(root), lambda d: d.update(schema_version=1))
+    with pytest.raises(UnsupportedSchemaError, match="schema_version 1"):
+        load_run_for_reporting(root)
+    root = graded(tmp_path / "second", repo_root, {"FE-01": FE01})
+    edit_json(results(root, "FE-01"), lambda d: d.update(schema_version=1))
+    with pytest.raises(UnsupportedSchemaError, match="schema_version 1"):
         load_run_for_reporting(root)
 
 
