@@ -1,40 +1,36 @@
+from typing import Any, Callable
+
 from datachat.engine_factory import create_engine
 from datachat.engine_interface import DataChatEngine
 
+# Agent kinds sharing the registry. A user may hold one session of each kind
+# at the same time under the same Api Key, so the kind is part of the key.
+DATACHAT = "datachat"
+INTERVIEWER = "interviewer"
 
-# Dictionary of active agents associated to an Api Key
-activeEngines: dict[str, DataChatEngine] = {}
+
+# Dictionary of active agents associated to an (agent kind, Api Key) pair
+activeEngines: dict[tuple[str, str], Any] = {}
 
 
-# Retrieves an active agent associated with an Api Key
-def getAgent(api_key) -> DataChatEngine | None:
+def _get(kind: str, api_key) -> Any | None:
     if not api_key:
         return None
-    return activeEngines.get(str(api_key))
+    return activeEngines.get((kind, str(api_key)))
 
 
-
-# Retrieves an active agents or creates a new one, adding it to the activeAgents dictionary.
-def createAgent(api_key, data, llm, user_name, engine_type: str, open_charts=False) -> DataChatEngine | None:
-    key = str(api_key)
+def _get_or_create(kind: str, api_key, factory: Callable[[], Any]) -> Any:
+    key = (kind, str(api_key))
     if activeEngines.get(key):
         return activeEngines.get(key)
 
-    engine = create_engine(
-        engine_type= engine_type,
-        api_key=key,
-        user_name=user_name,
-        llm=llm,
-        data=data,
-        open_charts=open_charts,
-    )
+    engine = factory()
     activeEngines[key] = engine
     return engine
 
 
-# Deletes an agent from active agents.
-def deleteAgent(api_key, user_name) -> DataChatEngine | None:
-    key = str(api_key)
+def _delete(kind: str, api_key, user_name) -> Any | None:
+    key = (kind, str(api_key))
     engine = activeEngines.get(key)
     if not api_key or not engine or not user_name:
         return None
@@ -43,7 +39,51 @@ def deleteAgent(api_key, user_name) -> DataChatEngine | None:
     return activeEngines.pop(key)
 
 
+# Retrieves an active agent associated with an Api Key
+def getAgent(api_key) -> DataChatEngine | None:
+    return _get(DATACHAT, api_key)
+
+
+# Retrieves an active agents or creates a new one, adding it to the activeAgents dictionary.
+def createAgent(api_key, data, llm, user_name, engine_type: str, open_charts=False) -> DataChatEngine | None:
+    key = str(api_key)
+    return _get_or_create(
+        DATACHAT,
+        key,
+        lambda: create_engine(
+            engine_type=engine_type,
+            api_key=key,
+            user_name=user_name,
+            llm=llm,
+            data=data,
+            open_charts=open_charts,
+        ),
+    )
+
+
+# Deletes an agent from active agents.
+def deleteAgent(api_key, user_name) -> DataChatEngine | None:
+    return _delete(DATACHAT, api_key, user_name)
+
+
+# Retrieves the active interviewer associated with an Api Key
+def getInterviewer(api_key) -> Any | None:
+    return _get(INTERVIEWER, api_key)
+
+
+# Retrieves the active interviewer or creates one with the given factory.
+def createInterviewer(api_key, factory: Callable[[], Any]) -> Any:
+    return _get_or_create(INTERVIEWER, api_key, factory)
+
+
+# Deletes the interviewer from active agents.
+def deleteInterviewer(api_key, user_name) -> Any | None:
+    return _delete(INTERVIEWER, api_key, user_name)
+
+
 # Lists all active agents
 def listAgents():
-    return {k: "engine_active" for k in activeEngines.keys()}
-
+    return {
+        (api_key if kind == DATACHAT else f"{kind}:{api_key}"): "engine_active"
+        for kind, api_key in activeEngines.keys()
+    }

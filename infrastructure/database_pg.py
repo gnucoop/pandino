@@ -56,6 +56,9 @@ from infrastructure.database_methods import (
     build_get_rag_file_for_delete_query,
     build_delete_rag_file_query,
     build_delete_pgvector_by_file_id_query,
+    build_insert_analysis_brief_query,
+    build_get_analysis_brief_query,
+    build_list_analysis_briefs_query,
 )
 
 KEY: Optional[bytes] = None
@@ -160,6 +163,19 @@ def init_db():
             namespace TEXT NOT NULL,
             chunk_count INTEGER NOT NULL CHECK (chunk_count >= 0),
             language TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS analysis_briefs (
+            id SERIAL PRIMARY KEY,
+            user_email TEXT NOT NULL,
+            name TEXT NOT NULL,
+            brief JSONB NOT NULL,
+            prompt_text TEXT NOT NULL,
+            transcript JSONB,
+            model TEXT,
+            provider TEXT,
+            status TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'consumed', 'archived')),
+            approved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
     """
@@ -772,6 +788,120 @@ def save_feedback(
     finally:
         cursor.close()
         conn.close()
+
+
+def save_analysis_brief(
+    user_email: str,
+    name: str,
+    brief: dict,
+    prompt_text: str,
+    transcript: Optional[list] = None,
+    model: Optional[str] = None,
+    provider: Optional[str] = None,
+) -> int:
+    """
+    Persists a user-approved analysis brief.
+
+    :param user_email: Username (email) of the user who approved the brief.
+    :param name: Human-readable brief name.
+    :param brief: The structured brief.
+    :param prompt_text: The rendered prompt for the data analyst.
+    :param transcript: The interview transcript, if any.
+    :param model: Model that conducted the interview.
+    :param provider: Provider of that model.
+    :return: The generated brief ID.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_insert_analysis_brief_query(
+            user_email=user_email,
+            name=name,
+            brief=brief,
+            prompt_text=prompt_text,
+            transcript=transcript,
+            model=model,
+            provider=provider,
+        )
+        cursor.execute(query, params)
+
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError("Failed to retrieve brief_id after insert")
+
+        conn.commit()
+        return row[0]
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_analysis_brief(
+    brief_id: int, user_email: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves one analysis brief by ID.
+
+    :param brief_id: ID of the brief.
+    :param user_email: When given, the brief must also belong to this user.
+    :return: The brief row as a dictionary, or None if not found.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_get_analysis_brief_query(brief_id, user_email)
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        if row is None or cursor.description is None:
+            return None
+        columns = [desc[0] for desc in cursor.description]
+        return dict(zip(columns, row))
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def list_analysis_briefs(
+    user_email: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+) -> list:
+    """
+    Lists analysis briefs, newest first.
+
+    :param user_email: Optional filter on the owning user.
+    :param status: Optional filter on the brief status.
+    :param limit: Maximum number of rows returned.
+    :return: List of dictionaries with id, user_email, name, status, approved_at.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_list_analysis_briefs_query(user_email, status, limit)
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+    return [
+        {
+            "id": brief_id,
+            "user_email": owner,
+            "name": name,
+            "status": status_value,
+            "approved_at": approved_at.isoformat() if hasattr(approved_at, "isoformat") else approved_at,
+        }
+        for brief_id, owner, name, status_value, approved_at in rows
+    ]
 
 
 def get_users_for_admin(page=1, limit=50, search=None):
