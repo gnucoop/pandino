@@ -5,6 +5,8 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.result_provenance import inherits_more_rows_available, record_trusted_result
+from datachat.tools.limits import InvalidLimit, invalid_limit_error, optional_limit
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +51,7 @@ class MissingValuesTool(Tool):
         },
         "n": {
             "type": "integer",
-            "description": "Max number of columns to return (max 50).",
+            "description": "Optional max number of columns to return. If omitted, all columns are returned.",
             "nullable": True,
         },
     }
@@ -62,7 +64,7 @@ class MissingValuesTool(Tool):
         self,
         data: list[dict[str, Any]] | None = None,
         columns: Optional[list[str]] = None,
-        n: Optional[int] = 50,
+        n: Optional[int] = None,
     ) -> dict[str, Any]:
         try:
             
@@ -104,10 +106,10 @@ class MissingValuesTool(Tool):
                 if cols:
                     df = df[cols]
 
-            n_int = max(1, min(int(n or 50), 50))
+            limit = optional_limit(n)
 
             rows: list[dict[str, Any]] = []
-            for col in list(df.columns)[:n_int]:
+            for col in list(df.columns)[:limit]:
                 s = df[col]
                 missing = int(s.isna().sum())
                 total = int(len(s))
@@ -124,8 +126,10 @@ class MissingValuesTool(Tool):
             rows = replace_nan(rows)
 
             logger.info("event=tool_call_result cols=%s", len(rows))
-            return {"kind": "table", "data": rows}
+            return record_trusted_result({"kind": "table", "data": rows}, more_rows_available=inherits_more_rows_available(data))
 
+        except InvalidLimit as e:
+            return invalid_limit_error(e)
         except Exception as e:
             logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}

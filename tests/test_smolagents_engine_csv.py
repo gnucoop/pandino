@@ -23,8 +23,14 @@ EXPECTED_TOOLS = [
     "filter_rows",
     "row_count",
     "aggregate",
+    "crosstab",
+    "compare_groups",
+    "keywords",
     "plot",
     "trend",
+    "chart",
+    "sentiment_analysis",
+    "classify_match",
 ]
 
 

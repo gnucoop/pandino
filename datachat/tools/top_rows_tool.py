@@ -5,6 +5,8 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.result_provenance import inherits_more_rows_available, record_trusted_result
+from datachat.tools.date_parsing import date_error, parse_date_series
 
 logger = logging.getLogger(__name__)
 
@@ -59,25 +61,32 @@ def _truncate_cell(v: Any, max_chars: int) -> Any:
     return v
 
 
-def _coerce_sort_key(series: pd.Series) -> pd.Series:
+def _coerce_sort_key(series: pd.Series) -> tuple[Optional[pd.Series], Optional[str]]:
     """
-    Build a robust sort key:
-    1) try datetime
-    2) else try numeric
-    3) else string (case-insensitive)
+    Build a robust sort key, returning (key, date error code):
+    1) numeric/boolean dtype -> as is
+    2) native datetime dtype -> as is
+    3) text where most values are dates -> datetime under the column-level date policy
+       (ambiguous day/month order or mixed timezones -> error code, never a guess)
+    4) else try numeric
+    5) else string (case-insensitive)
     """
-    # Datetime attempt
-    dt = pd.to_datetime(series, errors="coerce", utc=False)
-    if dt.notna().any():
-        return dt
+    if pd.api.types.is_numeric_dtype(series) or pd.api.types.is_datetime64_any_dtype(series):
+        return series, None
+
+    parsed = parse_date_series(series)
+    if parsed.present and parsed.date_like * 2 > parsed.present:
+        if parsed.error:
+            return None, parsed.error
+        return parsed.values, None
 
     # Numeric attempt
     num = pd.to_numeric(series, errors="coerce")
     if num.notna().any():
-        return num
+        return num, None
 
     # String fallback (stable-ish)
-    return series.astype(str).str.strip().str.lower()
+    return series.astype(str).str.strip().str.lower(), None
 
 
 class TopRowsTool(Tool):
@@ -123,7 +132,7 @@ class TopRowsTool(Tool):
         },
         "columns": {
             "type": "array",
-            "description": "Optional list of columns to include. If omitted, a subset will be chosen.",
+            "description": "Optional list of columns to include. If omitted, all columns are included.",
             "items": {"type": "string"},
             "nullable": True,
         },
@@ -203,16 +212,13 @@ class TopRowsTool(Tool):
                 return {"kind": "error", "message": f"Invalid sort_by column: {sort_by_clean}", "code": "INVALID_SORT_COLUMN"}
 
             # --- choose columns to return ---
-            if columns:
-                chosen = [c for c in columns if c in df.columns]
-                df_view = df[chosen] if chosen else df
-            else:
-                # If we're operating on tool-produced data, keep all columns (already "small").
-                # If session dataset, cap to first 10 columns for safety.
-                df_view = df if data is not None else df[list(df.columns)[:10]]
+            chosen = [c for c in (columns or []) if c in df.columns]
+            df_view = df[chosen] if chosen else df
 
             # --- sorting (robust) ---
-            sort_key = _coerce_sort_key(df[sort_by_clean])
+            sort_key, date_code = _coerce_sort_key(df[sort_by_clean])
+            if date_code:
+                return date_error(date_code, sort_by_clean)
             df_sorted = (
                 df_view.assign(__sort_key=sort_key)
                 .sort_values(by="__sort_key", ascending=asc, na_position="last")
@@ -248,17 +254,20 @@ class TopRowsTool(Tool):
                 "tool_data" if data is not None else "session_df",
             )
 
-            return {
-                "kind": "table",
-                "data": safe_records,
-                "meta": {
-                    "offset": offset_int,
-                    "returned": len(safe_records),
-                    "total_matches": total,
-                    "sort_by": sort_by_clean,
-                    "ascending": asc,
+            return record_trusted_result(
+                {
+                    "kind": "table",
+                    "data": safe_records,
+                    "meta": {
+                        "offset": offset_int,
+                        "returned": len(safe_records),
+                        "total_matches": total,
+                        "sort_by": sort_by_clean,
+                        "ascending": asc,
+                    },
                 },
-            }
+                more_rows_available=inherits_more_rows_available(data),
+            )
 
         except Exception as e:
             logger.exception("event=tool_call_failed")

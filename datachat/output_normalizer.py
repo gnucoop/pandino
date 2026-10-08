@@ -1,9 +1,10 @@
 import math
 import os
-from typing import Any
+from typing import Any, Callable, Iterable, Optional
 
 import pandas as pd
 
+from datachat.result_provenance import TrustedResult
 from infrastructure.file_manager import fileToBase64, isImageFilePath
 
 # ---------------------------------------------------------------------------
@@ -54,10 +55,8 @@ def _sanitize_table_records(
     """
     sanitized: list[dict[str, Any]] = []
 
-    for row in data[:max_rows]:
-        if not isinstance(row, dict):
-            continue
-
+    dict_rows = [row for row in data if isinstance(row, dict)]
+    for row in dict_rows[:max_rows]:
         clean_row: dict[str, Any] = {}
         for k, v in row.items():
             if len(clean_row) >= max_columns:
@@ -78,12 +77,80 @@ def _sanitize_table_records(
     return sanitized
 
 
+# Receives the complete table (column names in order, then its rows) and
+# returns extra response fields, or None when nothing should be added.
+TableExporter = Callable[[list[str], Iterable[dict[str, Any]]], Optional[dict[str, Any]]]
+
+
+def _column_names(rows: list[Any]) -> list[str]:
+    """Distinct column names across the dict rows, in first-seen order."""
+    columns: dict[str, None] = {}
+    for row in rows:
+        if isinstance(row, dict):
+            columns.update(dict.fromkeys(str(k) for k in row))
+    return list(columns)
+
+
+def _column_count(rows: list[Any]) -> int:
+    """Number of distinct column names across the dict rows."""
+    return len(_column_names(rows))
+
+
+def _table_response(
+    data: list[Any],
+    *,
+    columns: Optional[list[str]] = None,
+    trusted: Optional[TrustedResult] = None,
+    exporter: Optional[TableExporter] = None,
+) -> dict[str, Any]:
+    """
+    Build a "dataframe" response whose value is a bounded preview of ``data``.
+
+    The preview metadata describes the table handed to this function; it says
+    nothing about how many rows the original source holds. Only ``trusted``
+    facts recorded by a tool can add source-level claims or a note. When the
+    preview hides part of the table, ``exporter`` receives the whole of it.
+    """
+    value = replace_nan(_sanitize_table_records(data))
+    result_rows = sum(1 for row in data if isinstance(row, dict))
+    if columns is None:
+        columns = _column_names(data)
+    result_columns = len(columns)
+    preview_rows = len(value)
+    preview_columns = _column_count(value)
+    # With no rows nothing is hidden, even when the result names its columns.
+    columns_cut = preview_rows > 0 and preview_columns < result_columns
+
+    response: dict[str, Any] = {
+        "type": "dataframe",
+        "value": value,
+        "result_rows": result_rows,
+        "result_columns": result_columns,
+        "preview_rows": preview_rows,
+        "preview_columns": preview_columns,
+        "truncated": preview_rows < result_rows or columns_cut,
+    }
+    if trusted is not None:
+        if trusted.more_rows_available:
+            response["more_rows_available"] = True
+        if trusted.note:
+            response["note"] = trusted.note
+    if response["truncated"] and exporter is not None:
+        rows = ({str(k): v for k, v in row.items()} for row in data if isinstance(row, dict))
+        response.update(exporter(columns, rows) or {})
+    return response
+
+
 # ---------------------------------------------------------------------------
 # Main normalizer
 # ---------------------------------------------------------------------------
 
 
-def normalize_datachat_response(response: Any) -> dict[str, Any]:
+def normalize_datachat_response(
+    response: Any,
+    trusted: Optional[TrustedResult] = None,
+    exporter: Optional[TableExporter] = None,
+) -> dict[str, Any]:
     """
     Normalize outputs into the *exact* "response_dict" structure expected by Dino (AS-IS).
 
@@ -143,13 +210,16 @@ def normalize_datachat_response(response: Any) -> dict[str, Any]:
 
             # Accept pandas DataFrame directly
             if isinstance(data, pd.DataFrame):
-                records = data.to_dict(orient="records")
-                return {"type": "dataframe", "value": replace_nan(records)}
+                return _table_response(
+                    data.to_dict(orient="records"),
+                    columns=[str(c) for c in data.columns],
+                    trusted=trusted,
+                    exporter=exporter,
+                )
 
             # Preferred: list-of-dicts (records)
             if isinstance(data, list):
-                records = _sanitize_table_records(data)
-                return {"type": "dataframe", "value": replace_nan(records)}
+                return _table_response(data, trusted=trusted, exporter=exporter)
 
             # Rare: dict (already structured). Keep as dict to avoid guessing shape.
             if isinstance(data, dict):

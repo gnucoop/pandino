@@ -24,6 +24,11 @@ There are two consumption shapes, distinguished by who resolves the money::
         cost=...,
     )
 
+Token consumption made alongside a request's primary one - e.g. a
+provider call inside a DataChat tool - is recorded with
+``record_additional_token_consumption``, which takes exactly the
+arguments of ``record_token_consumption``.
+
 An adopter supplies consumption facts only, and receives a plain ``bool``
 saying whether a Usage row was persisted.
 
@@ -40,10 +45,18 @@ What this boundary owns, so no adopter has to
 * **The Usage row id.** The id is received here, used here, and never
   returned. A caller cannot hold one, so it cannot forget to do anything
   with one.
-* **Row-id registration, and therefore duration linkage.** The id is
-  handed to ``usage.request_state.set_usage_log_id``, which both
-  registers it for end-of-request duration finalization *and* keeps the
-  latest-id compatibility slot current. Registration happens here, so
+* **Row-id registration, and therefore duration linkage.** Which
+  ``usage.request_state`` function receives the id follows from the
+  operation. ``record_token_consumption`` and
+  ``record_resolved_consumption`` record a request's primary consumption
+  and hand the id to ``set_usage_log_id``, which both registers it for
+  end-of-request duration finalization *and* keeps the latest-id
+  compatibility slot - the response-facing ``log_id`` - current.
+  ``record_additional_token_consumption`` records consumption made
+  alongside the primary one and hands the id to
+  ``register_usage_log_id``, which registers it for duration
+  finalization only, so an additional row never replaces the primary
+  ``log_id``, whatever the write order. Registration happens here, so
   ``logs.duration_ms`` does not depend on adopter bookkeeping.
 * **Request correlation.** ``request_id`` comes from the ambient runtime
   logging context. There is deliberately no keyword for it, so an attempt
@@ -91,6 +104,7 @@ raising.
 """
 
 import logging
+from typing import Callable
 
 from infrastructure.database_pg import (
     get_user_by_id,
@@ -100,11 +114,15 @@ from infrastructure.database_pg import (
 )
 from utils.logging_config import get_request_id
 from usage.attribution_state import get_usage_attribution
-from usage.request_state import set_usage_log_id
+from usage.request_state import register_usage_log_id, set_usage_log_id
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["record_token_consumption", "record_resolved_consumption"]
+__all__ = [
+    "record_token_consumption",
+    "record_additional_token_consumption",
+    "record_resolved_consumption",
+]
 
 
 def _require_int(name: str, value) -> int:
@@ -194,6 +212,66 @@ def _derive_source(user_id: int) -> "str | None":
     return client if isinstance(client, str) else None
 
 
+def _persist_token_consumption(
+    register: "Callable[[int], None]",
+    *,
+    user_id: int,
+    provider: str,
+    model: str,
+    service: str,
+    token_input: int,
+    token_output: int,
+) -> bool:
+    """Validate, price and write one token Usage row, then ``register`` its id.
+
+    The persistence path shared by the primary and the additional token
+    writers; they differ only in which ``usage.request_state`` function
+    registers the new row id.
+    """
+    # Validation runs before the fail-open guard, so misuse raises rather
+    # than being absorbed as an accounting failure.
+    user_id = _require_int("user_id", user_id)
+    provider = _require_non_empty_str("provider", provider)
+    model = _require_non_empty_str("model", model)
+    service = _require_non_empty_str("service", service)
+    token_input = _require_non_negative_int("token_input", token_input)
+    token_output = _require_non_negative_int("token_output", token_output)
+
+    try:
+        request_id = get_request_id()
+        source = _derive_source(user_id)
+
+        log_id = log_token_usage(
+            user_id=user_id,
+            token_input=token_input,
+            token_output=token_output,
+            model=model,
+            provider=provider,
+            service=service,
+            request_id=request_id,
+            source=source,
+        )
+
+        # Internal bookkeeping, never the adopter's: registers the row for
+        # end-of-request duration finalization.
+        register(log_id)
+        return True
+    except Exception as exc:  # noqa: BLE001 - accounting must stay fail-open
+        # One diagnostic, naming only configuration identities, the
+        # endpoint, the correlation id and the failure type. Never the
+        # prompt, the completion, the user identity or the exception text,
+        # any of which can carry request content.
+        logger.warning(
+            "event=usage_token_recording_failed service=%s provider=%s "
+            "model=%s error_type=%s",
+            service,
+            provider,
+            model,
+            type(exc).__name__,
+        )
+        return False
+
+
 def record_token_consumption(
     *,
     user_id: int,
@@ -222,49 +300,44 @@ def record_token_consumption(
     makes supplying them impossible rather than merely discouraged. No
     Usage row id is returned, ever.
     """
-    # Validation runs before the fail-open guard, so misuse raises rather
-    # than being absorbed as an accounting failure.
-    user_id = _require_int("user_id", user_id)
-    provider = _require_non_empty_str("provider", provider)
-    model = _require_non_empty_str("model", model)
-    service = _require_non_empty_str("service", service)
-    token_input = _require_non_negative_int("token_input", token_input)
-    token_output = _require_non_negative_int("token_output", token_output)
+    # set_usage_log_id also keeps the latest-id compatibility slot current.
+    return _persist_token_consumption(
+        set_usage_log_id,
+        user_id=user_id,
+        provider=provider,
+        model=model,
+        service=service,
+        token_input=token_input,
+        token_output=token_output,
+    )
 
-    try:
-        request_id = get_request_id()
-        source = _derive_source(user_id)
 
-        log_id = log_token_usage(
-            user_id=user_id,
-            token_input=token_input,
-            token_output=token_output,
-            model=model,
-            provider=provider,
-            service=service,
-            request_id=request_id,
-            source=source,
-        )
+def record_additional_token_consumption(
+    *,
+    user_id: int,
+    provider: str,
+    model: str,
+    service: str,
+    token_input: int,
+    token_output: int,
+) -> bool:
+    """Record a token consumption made alongside the request's primary one.
 
-        # Internal bookkeeping, never the adopter's: registers the row for
-        # end-of-request duration finalization and keeps the latest-id
-        # compatibility slot current.
-        set_usage_log_id(log_id)
-        return True
-    except Exception as exc:  # noqa: BLE001 - accounting must stay fail-open
-        # One diagnostic, naming only configuration identities, the
-        # endpoint, the correlation id and the failure type. Never the
-        # prompt, the completion, the user identity or the exception text,
-        # any of which can carry request content.
-        logger.warning(
-            "event=usage_token_recording_failed service=%s provider=%s "
-            "model=%s error_type=%s",
-            service,
-            provider,
-            model,
-            type(exc).__name__,
-        )
-        return False
+    Same contract as :func:`record_token_consumption` - same validation,
+    pricing, derived ``request_id``/``source`` and fail-open ``bool`` - but
+    the row is only *registered* for duration finalization: it never
+    becomes the request's single primary Usage id, whatever the write
+    order, so a response-facing ``log_id`` keeps naming the primary row.
+    """
+    return _persist_token_consumption(
+        register_usage_log_id,
+        user_id=user_id,
+        provider=provider,
+        model=model,
+        service=service,
+        token_input=token_input,
+        token_output=token_output,
+    )
 
 
 def record_resolved_consumption(

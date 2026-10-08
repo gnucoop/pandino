@@ -6,6 +6,7 @@ from typing import Any, ClassVar, Optional
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.result_provenance import record_trusted_result
 from datachat.sql_datasource import SqlDatasource
 from datachat.sql_guard import validate_select
 from datachat.sql_identifiers import quote_identifiers
@@ -170,7 +171,10 @@ class SqlEngineTool(Tool):
                     "SELECT DISTINCT on them) before concluding the data is absent."
                 )
 
-            return {"kind": "table", "data": records, "meta": meta}
+            return record_trusted_result(
+                {"kind": "table", "data": records, "meta": meta},
+                more_rows_available=truncated,
+            )
 
         except Exception as e:
             runtime_logger.exception(

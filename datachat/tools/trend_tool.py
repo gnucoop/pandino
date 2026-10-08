@@ -5,6 +5,15 @@ import pandas as pd
 from smolagents import Tool
 
 from datachat.output_normalizer import replace_nan
+from datachat.result_provenance import inherits_more_rows_available, record_trusted_result
+from datachat.tools.date_parsing import (
+    AMBIGUOUS_DATE_FORMAT,
+    INCONSISTENT_TIMEZONES,
+    date_error,
+    parse_date_bound,
+    parse_date_series,
+)
+from datachat.tools.limits import InvalidLimit, invalid_limit_error, optional_limit
 
 logger = logging.getLogger(__name__)
 
@@ -22,21 +31,6 @@ def _to_json_scalar(value: Any) -> Any:
     if isinstance(value, (int, float, str)):
         return value
     return str(value)
-
-
-def _parse_iso_date(s: Any) -> pd.Timestamp | None:
-    if s is None:
-        return None
-    try:
-        txt = str(s).strip()
-        if not txt:
-            return None
-        ts = pd.to_datetime(txt, errors="coerce", utc=False)
-        if pd.isna(ts):
-            return None
-        return ts if isinstance(ts, pd.Timestamp) else pd.Timestamp(ts)
-    except Exception:
-        return None
 
 
 def _freq_to_pandas(freq: str) -> str | None:
@@ -91,7 +85,7 @@ class TrendTool(Tool):
     description = (
         "Compute a time trend by grouping rows on a date column using day, week, or month buckets. "
         "Works on the full dataset or on a subset passed via `data`. "
-        "Returns a small table usable for comparisons or plotting."
+        "Returns the full period series unless `n` is given; usable for comparisons or plotting."
     )
     output_type = "object"
 
@@ -134,7 +128,7 @@ class TrendTool(Tool):
         },
         "n": {
             "type": "integer",
-            "description": "Max number of periods to return (max 50).",
+            "description": "Optional max number of periods to return, taken after sorting. If omitted, all periods are returned.",
             "nullable": True,
         },
         "ascending": {
@@ -165,7 +159,7 @@ class TrendTool(Tool):
         metric: Optional[str] = None,
         start: Optional[Any] = None,
         end: Optional[Any] = None,
-        n: Optional[int] = 50,
+        n: Optional[int] = None,
         ascending: Optional[bool] = True,
         include_empty: Optional[bool] = False,
     ) -> dict[str, Any]:
@@ -221,19 +215,40 @@ class TrendTool(Tool):
                 if metric_clean not in df.columns:
                     return {"kind": "error", "message": f"Invalid metric column: {metric_clean}", "code": "INVALID_METRIC"}
 
-            n_int = max(1, min(int(n if n is not None else 50), 50))
+            limit = optional_limit(n)
             asc = bool(ascending) if ascending is not None else True
             keep_empty = bool(include_empty) if include_empty is not None else False
 
-            dt = pd.to_datetime(df[date_col_clean], errors="coerce")
+            parsed = parse_date_series(df[date_col_clean])
+            if parsed.error:
+                return date_error(parsed.error, date_col_clean)
+            dt = parsed.values
             if dt.isna().all():
                 return {"kind": "error", "message": f"Column '{date_col_clean}' has no parseable dates.", "code": "NO_PARSEABLE_DATES"}
+            excluded = int(dt.isna().sum())
+
+            bounds = []
+            for bound in (start, end):
+                ts, code = parse_date_bound(bound, parsed)
+                if code == AMBIGUOUS_DATE_FORMAT:
+                    return {
+                        "kind": "error",
+                        "message": "The start/end date order (dd/mm or mm/dd) is ambiguous; use ISO format (YYYY-MM-DD).",
+                        "code": code,
+                    }
+                if code == INCONSISTENT_TIMEZONES:
+                    return {
+                        "kind": "error",
+                        "message": f"The start/end date timezone is not compatible with column '{date_col_clean}'.",
+                        "code": code,
+                    }
+                if code:
+                    return {"kind": "error", "message": "Invalid start/end date; use ISO format (YYYY-MM-DD).", "code": code}
+                bounds.append(ts)
+            start_ts, end_ts = bounds
 
             tmp = df.copy()
             tmp["__dt"] = dt
-
-            start_ts = _parse_iso_date(start)
-            end_ts = _parse_iso_date(end)
 
             tmp = tmp[tmp["__dt"].notna()]
             if start_ts is not None:
@@ -304,7 +319,7 @@ class TrendTool(Tool):
             out["period"] = out["period_dt"].apply(lambda x: _format_period(pd.Timestamp(x), freq))
             out = out.drop(columns=["period_dt"], errors="ignore")
 
-            out = out.sort_values(by="period", ascending=asc).head(n_int)
+            out = out.sort_values(by="period", ascending=asc).iloc[:limit]
 
             records = out[["period", value_col]].to_dict(orient="records")
             safe_records: list[dict[str, Any]] = []
@@ -321,13 +336,20 @@ class TrendTool(Tool):
                 metric_clean,
                 start_ts.isoformat() if start_ts is not None else None,
                 end_ts.isoformat() if end_ts is not None else None,
-                n_int,
+                limit,
                 len(safe_records),
                 keep_empty,
             )
 
-            return {"kind": "table", "data": safe_records}
+            payload: dict[str, Any] = {"kind": "table", "data": safe_records}
+            note = None
+            if excluded:
+                note = f"{excluded} row(s) were excluded because their date value was missing or could not be interpreted."
+                payload["note"] = note
+            return record_trusted_result(payload, more_rows_available=inherits_more_rows_available(data), note=note)
 
+        except InvalidLimit as e:
+            return invalid_limit_error(e)
         except Exception as e:
             logger.exception("event=tool_call_failed")
             return {"kind": "error", "message": str(e), "code": "TOOL_FAILED"}
