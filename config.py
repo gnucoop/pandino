@@ -180,6 +180,29 @@ class DatachatSqlConfig:
     pool_recycle_s: int
 
 
+@dataclass(frozen=True)
+class InterviewerConfig:
+    """
+    Analysis interviewer settings.
+
+    The interviewer reads the same read-only SQL datasource as DataChat
+    (DatachatSqlConfig); only its model and interview limits are its own.
+    """
+
+    provider: str
+    model: str
+    max_steps: int
+
+    # Interview turns (one user answer -> one agent message) per refinement
+    # round. When reached, the agent is told to propose a brief draft.
+    max_turns: int
+    # Data findings the agent may record per session with record_finding.
+    max_notes: int
+    # Questions that must be asked and answered before a brief draft is
+    # accepted, the fixed opening goal question included. Never below 4.
+    min_questions: int
+
+
 # ---------------------------------------------------------------------------
 # Top-level config
 # ---------------------------------------------------------------------------
@@ -197,6 +220,7 @@ class AppConfig:
     rag: RagConfig
     datachat: DatachatConfig
     datachat_sql: DatachatSqlConfig
+    interviewer: InterviewerConfig
 
     auth_gateway_url: str
     stripe_key: Optional[str]
@@ -207,6 +231,7 @@ class AppConfig:
     prompt_token_cost: int
     audio_form_token_cost: int
     compare_docs_token_cost: int
+    interviewer_token_cost: int
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +475,15 @@ def load_config() -> AppConfig:
         log_level=os.environ.get("DATACHAT_LOG_LEVEL", "INFO"),
     )
 
+    interviewer = InterviewerConfig(
+        provider=os.environ.get("INTERVIEWER_PROVIDER", models.datachat_provider).strip(),
+        model=os.environ.get("INTERVIEWER_MODEL", models.datachat_model).strip(),
+        max_steps=_env_int("INTERVIEWER_MAX_STEPS", 15, minimum=1, maximum=50),
+        max_turns=_env_int("INTERVIEWER_MAX_TURNS", 12, minimum=3, maximum=50),
+        max_notes=_env_int("INTERVIEWER_MAX_NOTES", 30, minimum=1, maximum=200),
+        min_questions=_env_int("INTERVIEWER_MIN_QUESTIONS", 4, minimum=4, maximum=10),
+    )
+
     # A misconfigured SQL datasource disables itself; it does not stop the
     # application from booting. The CSV DataChat path, and every other feature,
     # work without it, and failing here would take them all down over a feature
@@ -473,6 +507,7 @@ def load_config() -> AppConfig:
         rag=rag,
         datachat=datachat,
         datachat_sql=datachat_sql,
+        interviewer=interviewer,
         auth_gateway_url=os.environ.get(
             "AUTH_GATEWAY_URL", "http://localhost:3000/validate"
         ),
@@ -482,4 +517,5 @@ def load_config() -> AppConfig:
         prompt_token_cost=int(os.environ.get("PROMPT_TOKEN_COST", "1")),
         audio_form_token_cost=int(os.environ.get("AUDIO_FORM_TOKEN_COST", "1")),
         compare_docs_token_cost=int(os.environ.get("COMPARE_DOCS_TOKEN_COST", "1")),
+        interviewer_token_cost=int(os.environ.get("INTERVIEWER_TOKEN_COST", "1")),
     )
