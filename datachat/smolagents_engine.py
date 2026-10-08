@@ -1,21 +1,25 @@
-import json
-import logging
 import os
 import re
 import shutil
 import textwrap
-import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Optional, Tuple
+from typing import Any, ClassVar, Optional, Tuple
 
 import pandas as pd
-from smolagents import CodeAgent, LiteLLMModel
 
-import datachat.schema_snapshot_loader as schema_snapshot_loader
-import datachat.sql_datasource as sql_datasource
 from datachat.bootstrap_static import get_static_bootstrap_html
 from datachat.engine_interface import DataChatEngine, EngineBootstrapResult
+from datachat.final_answer_contract import (
+    coerce_final_payload,
+    extract_json_object,
+    is_empty_table,
+    unwrap_nested_table,
+    validate_contract_payload,
+    validate_table,
+    validate_text_or_message,
+)
+from datachat.smolagents_base import SmolagentsEngineBase
 from datachat.sql_datasource import SqlDatasource
 from datachat.tools.aggregate_tool import AggregateTool
 from datachat.tools.correlation_tool import CorrelationTool
@@ -25,14 +29,10 @@ from datachat.tools.missing_values_tool import MissingValuesTool
 from datachat.tools.plot_tool import PlotTool
 from datachat.tools.row_count_tool import RowCountTool
 from datachat.tools.sample_rows_tool import SampleRowsTool
-from datachat.tools.sql_engine_tool import SqlEngineTool
 from datachat.tools.top_rows_tool import TopRowsTool
 from datachat.tools.trend_tool import TrendTool
 from datachat.tools.unique_values_tool import UniqueValuesTool
-from llm.litellm_factory import build_litellm_model
 from infrastructure.prompt_utils import load_prompt, render_prompt
-
-runtime_logger = logging.getLogger("datachat.runtime")
 
 _ALLOWED_FINAL_KINDS = {"text", "table", "image_path", "error"}
 
@@ -106,66 +106,26 @@ _SQL_ADDENDUM_DEFAULT = textwrap.dedent(
 # Final answer contract utils
 # ----------------------------
 
-def _extract_json_object(s: str) -> Optional[dict[str, Any]]:
-    """
-    Best-effort extraction of a JSON object from a string.
-    - strict json.loads
-    - if that fails, try substring between first '{' and last '}'.
-    """
-    s = (s or "").strip()
-    if not s:
-        return None
-
-    # A) strict JSON
-    try:
-        obj = json.loads(s)
-        if isinstance(obj, dict):
-            return obj
-        # Sometimes LLM returns a JSON string containing JSON.
-        if isinstance(obj, str):
-            obj2 = json.loads(obj)
-            if isinstance(obj2, dict):
-                return obj2
-    except Exception:
-        pass
-
-    # B) conservative extraction
-    start = s.find("{")
-    end = s.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        candidate = s[start : end + 1].strip()
-        try:
-            obj = json.loads(candidate)
-            if isinstance(obj, dict):
-                return obj
-        except Exception:
-            pass
-
+def _validate_image_path(payload: dict[str, Any]) -> Optional[str]:
+    path = payload.get("path")
+    if not isinstance(path, str) or not path.strip():
+        return "MISSING_PATH"
     return None
 
 
-def _unwrap_nested_table(payload: dict[str, Any]) -> dict[str, Any]:
-    """
-    Fix common LLM mistake:
-      {"kind":"table","data":{"kind":"table","data":[...]}}
-    -> {"kind":"table","data":[...]}
-    """
-    try:
-        kind = str(payload.get("kind") or "").strip().lower()
-        if kind != "table":
-            return payload
+_DATACHAT_KIND_VALIDATORS = {
+    "text": validate_text_or_message,
+    "error": validate_text_or_message,
+    "table": validate_table,
+    "image_path": _validate_image_path,
+}
+assert set(_DATACHAT_KIND_VALIDATORS) == _ALLOWED_FINAL_KINDS
 
-        data = payload.get("data")
-        if isinstance(data, list):
-            return payload
-
-        if isinstance(data, dict):
-            nested_data = data.get("data")
-            if isinstance(nested_data, list):
-                payload["data"] = nested_data
-        return payload
-    except Exception:
-        return payload
+# Kept under their historical names: they are DataChat's view of the shared
+# contract helpers in datachat.final_answer_contract.
+_extract_json_object = extract_json_object
+_unwrap_nested_table = unwrap_nested_table
+_is_empty_table = is_empty_table
 
 
 def _validate_contract_payload(payload: dict[str, Any]) -> Tuple[bool, Optional[str], str]:
@@ -173,43 +133,7 @@ def _validate_contract_payload(payload: dict[str, Any]) -> Tuple[bool, Optional[
     Returns:
       (passed, final_kind, reason)
     """
-    raw_kind = payload.get("kind")
-    kind = str(raw_kind or "").strip().lower()
-
-    if kind not in _ALLOWED_FINAL_KINDS:
-        return False, (kind or None), "INVALID_KIND"
-
-    if kind in {"text", "error"}:
-        text_val = payload.get("text")
-        msg_val = payload.get("message")
-        if text_val is None and msg_val is None:
-            return False, kind, "MISSING_TEXT_OR_MESSAGE"
-        if text_val is not None and not str(text_val).strip() and msg_val is None:
-            return False, kind, "EMPTY_TEXT"
-        if msg_val is not None and not str(msg_val).strip() and text_val is None:
-            return False, kind, "EMPTY_MESSAGE"
-        return True, kind, "OK"
-
-    if kind == "table":
-        if "data" not in payload:
-            return False, kind, "MISSING_DATA"
-        return True, kind, "OK"
-
-    if kind == "image_path":
-        path = payload.get("path")
-        if not isinstance(path, str) or not path.strip():
-            return False, kind, "MISSING_PATH"
-        return True, kind, "OK"
-
-    return False, (kind or None), "INVALID_KIND"
-
-
-def _is_empty_table(payload: Optional[dict[str, Any]]) -> bool:
-    """Whether a validated payload is a table that carries no rows."""
-    if not isinstance(payload, dict):
-        return False
-    data = payload.get("data")
-    return isinstance(data, list) and not data
+    return validate_contract_payload(payload, _DATACHAT_KIND_VALIDATORS)
 
 
 def _contract_failure_message(reason: str) -> str:
@@ -236,21 +160,9 @@ def _coerce_final_payload(output: Any) -> Tuple[Optional[dict[str, Any]], bool, 
     Returns:
       (payload_or_none, passed, final_kind, reason)
     """
-    if isinstance(output, dict):
-        candidate = output
-    elif isinstance(output, str):
-        candidate = _extract_json_object(output)
-        if candidate is None:
-            return None, False, None, "NON_JSON_OR_NO_OBJECT"
-    else:
-        return None, False, None, "NON_JSON_OR_UNSUPPORTED_TYPE"
-
-    if "kind" not in candidate:
-        return None, False, None, "NO_KIND"
-
-    candidate = _unwrap_nested_table(candidate)
-    passed, final_kind, reason = _validate_contract_payload(candidate)
-    return candidate, passed, final_kind, reason
+    return coerce_final_payload(
+        output, _DATACHAT_KIND_VALIDATORS, repair=_unwrap_nested_table
+    )
 
 
 # ----------------------------
@@ -258,82 +170,18 @@ def _coerce_final_payload(output: Any) -> Tuple[Optional[dict[str, Any]], bool, 
 # ----------------------------
 
 @dataclass
-class SmolagentsEngine(DataChatEngine):
-    api_key: str
-    user_name: str
+class SmolagentsEngine(SmolagentsEngineBase, DataChatEngine):
     llm: Any  # kept for interface compatibility; not used here
     data: pd.DataFrame|None
 
-    _agent: Optional[CodeAgent] = field(default=None, init=False, repr=False)
-    _model: Optional[LiteLLMModel] = field(default=None, init=False, repr=False)
+    ENGINE_NAME: ClassVar[str] = "smolagents"
+    RUNTIME_LOGGER_NAME: ClassVar[str] = "datachat.runtime"
 
     _plots_dir: Optional[str] = field(default=None, init=False, repr=False)
     _user_plots_dir: Optional[str] = field(default=None, init=False, repr=False)
 
-    _last_run_result: Any = field(default=None, init=False, repr=False)
-    _last_run_duration_ms: Optional[float] = field(default=None, init=False, repr=False)
-
-    _provider: str = field(default="", init=False, repr=False)
-    _configured_model: str = field(default="", init=False, repr=False)
-    _max_steps: int = field(default=12, init=False, repr=False)
-    _instructions: str = field(default="", init=False, repr=False)
-
-    _last_final_answer_check_passed: Optional[bool] = field(default=None, init=False, repr=False)
-    _last_final_kind: Optional[str] = field(default=None, init=False, repr=False)
-    _active_request_id: Optional[str] = field(default=None, init=False, repr=False)
-
     # Per-run budget for the empty-table guard, reset at the top of chat().
     _empty_final_rejections: int = field(default=0, init=False, repr=False)
-
-    _final_answer_checks_supported: bool = field(default=False, init=False, repr=False)
-
-    # The SQL datasource is resolved exactly once, here, and passed down to
-    # _build_instructions() and _sql_tools(). `None` means the datasource is
-    # disabled or unconfigured, and is the single gate for everything SQL: no
-    # reflection, no schema in the prompt, no sql_engine tool.
-    _sql_datasource: Optional[SqlDatasource] = field(default=None, init=False, repr=False)
-    _sql_ready: bool = field(default=False, init=False, repr=False)
-
-    # Real relation -> real columns, from the very snapshot rendered into the
-    # prompt. Derived there rather than fetched by the tool so that a TTL expiry
-    # mid-session can never have the tool quoting names the agent was not shown.
-    _sql_identifiers: dict[str, tuple[str, ...]] = field(
-        default_factory=dict, init=False, repr=False
-    )
-
-    def __post_init__(self) -> None:
-        self._init_paths()
-        self._init_config()
-
-        runtime_logger.info(
-            "engine_init engine=smolagents user=%s provider=%s model=%s max_steps=%s",
-            self.user_name,
-            self._provider,
-            self._configured_model or "missing",
-            self._max_steps,
-        )
-
-        if not self._configured_model:
-            self._set_missing_config("MISSING_CONFIG")
-            return
-
-        self._model = self._build_model()
-        if self._model is None:
-            self._set_missing_config("MISSING_CONFIG")
-            return
-
-        # Single gate: everything SQL hangs off this one resolution.
-        self._sql_datasource = sql_datasource.get_datasource()
-
-        self._instructions = self._build_instructions(self._sql_datasource)
-        self._agent = self._build_agent(self._model, self._instructions)
-
-        runtime_logger.info(
-            "engine_init_result engine=smolagents user=%s status=%s sql=%s",
-            self.user_name,
-            "ok" if self._agent is not None else "error",
-            "ready" if self._sql_ready else ("error" if self._sql_datasource is not None else "off"),
-        )
 
     # --- init helpers ---
 
@@ -351,25 +199,6 @@ class SmolagentsEngine(DataChatEngine):
             self._max_steps = max(1, int(os.getenv("DATACHAT_MAX_STEPS", "12")))
         except ValueError:
             self._max_steps = 12
-
-    def _set_missing_config(self, code: str) -> None:
-        self._model = None
-        self._agent = None
-        runtime_logger.info(
-            "engine_init_result engine=smolagents user=%s status=error error_code=%s",
-            self.user_name,
-            code,
-        )
-
-    def _build_model(self) -> Optional[LiteLLMModel]:
-        try:
-            return build_litellm_model(
-                provider=self._provider,
-                configured_model=self._configured_model,
-                temperature=0.0,
-            )
-        except Exception:
-            return None
 
     def _build_instructions(self, datasource: Optional[SqlDatasource] = None) -> str:
         cols = list(self.data.columns) if self.data is not None else []
@@ -427,47 +256,21 @@ class SmolagentsEngine(DataChatEngine):
         template = load_prompt("data_chat_system", default_text=default_context)
         instructions = render_prompt(template, columns=cols)
 
-        # Gate: with no datasource nothing SQL is appended and no reflection is
-        # attempted, so the agent is exactly what it is with SQL disabled.
-        if datasource is None:
-            return instructions
-
-        snapshot = schema_snapshot_loader.get_schema_snapshot(datasource)
-        if snapshot is None:
-            # Reflection failed. An agent that can write SQL but was never told
-            # the schema is worse than one without SQL, so _sql_tools() drops
-            # sql_engine too and the instructions stay silent about the database.
-            runtime_logger.info(
-                "engine_init_sql engine=smolagents user=%s status=error reason=SCHEMA_UNAVAILABLE",
-                self.user_name,
-            )
-            return instructions
-
-        rendered = schema_snapshot_loader.render_schema(
-            snapshot, datasource.schema_max_chars
-        )
-
         # Appended as a separate prompt so that a DB-stored override of
         # data_chat_system keeps working and can predate the SQL support.
-        addendum = load_prompt(
-            "data_chat_sql_addendum", default_text=_SQL_ADDENDUM_DEFAULT
+        # With no datasource, or when reflection fails, nothing SQL is appended:
+        # an agent that can write SQL but was never told the schema is worse
+        # than one without SQL, so _sql_tools() drops sql_engine too.
+        addendum = self._sql_addendum(
+            datasource,
+            lambda: load_prompt("data_chat_sql_addendum", default_text=_SQL_ADDENDUM_DEFAULT),
         )
-        if "{sql_schema}" in addendum:
-            addendum = render_prompt(addendum, sql_schema=rendered)
-        else:
-            # An override stored before the schema placeholder existed: append
-            # the schema rather than silently dropping it.
-            addendum = addendum + "\n\n" + rendered
-
-        self._sql_ready = True
-        self._sql_identifiers = schema_snapshot_loader.build_identifier_index(snapshot)
-        runtime_logger.info(
-            "engine_init_sql engine=smolagents user=%s status=ready relations=%s schema_chars=%s",
-            self.user_name,
-            len(snapshot.relations),
-            len(rendered),
-        )
+        if addendum is None:
+            return instructions
         return instructions + "\n\n" + addendum
+
+    def _extra_tools(self) -> list[Any]:
+        return self._data_tools()
 
     def _data_tools(self) -> list[Any]:
         """DATA tools, or an empty list when data (csv datasource) is None."""
@@ -488,62 +291,6 @@ class SmolagentsEngine(DataChatEngine):
             TrendTool(datasource),
         ]
 
-    def _sql_tools(self, datasource: Optional[SqlDatasource] = None) -> list[Any]:
-        """
-        SQL tools, or an empty list when the datasource is disabled or its
-        schema could not be reflected.
-
-        Discovery is no longer a tool: the schema is reflected once and rendered
-        into the instructions by _build_instructions(), so sql_engine is all the
-        agent needs. _sql_ready is set there, which is why instructions must be
-        built first.
-        """
-        if datasource is None or not self._sql_ready:
-            return []
-        return [SqlEngineTool(datasource, identifiers=self._sql_identifiers)]
-
-    def _build_agent(self, model: LiteLLMModel, instructions: str) -> Optional[CodeAgent]:
-        tools = []
-
-        data_tools = self._data_tools()
-        tools.extend(data_tools)
-
-        sql_tools = self._sql_tools(self._sql_datasource)
-        tools.extend(sql_tools)
-
-        runtime_logger.info(
-            "engine_init_tools engine=smolagents user=%s tool_count=%s sql_tools=%s",
-            self.user_name,
-            len(tools),
-            len(sql_tools),
-        )
-
-        base_kwargs: dict[str, Any] = {
-            "tools": tools,
-            "model": model,
-            "instructions": instructions,
-            "max_steps": self._max_steps,
-            "additional_authorized_imports": ["json"],
-        }
-
-        try:
-            agent = CodeAgent(**{**base_kwargs, "final_answer_checks": [self._check_final_answer]})
-            self._final_answer_checks_supported = True
-            runtime_logger.info(
-                "engine_init_guardrail engine=smolagents user=%s final_answer_checks_supported=%s",
-                self.user_name,
-                True,
-            )
-            return agent
-        except TypeError:
-            self._final_answer_checks_supported = False
-            runtime_logger.info(
-                "engine_init_guardrail engine=smolagents user=%s final_answer_checks_supported=%s",
-                self.user_name,
-                False,
-            )
-            return CodeAgent(**base_kwargs)
-
     def _check_final_answer(self, *args: Any, **kwargs: Any) -> bool:
         """
         Guard the final answer before smolagents hands it back to the caller.
@@ -562,7 +309,7 @@ class SmolagentsEngine(DataChatEngine):
         self._last_final_answer_check_passed = passed
         self._last_final_kind = final_kind
 
-        runtime_logger.info(
+        self._log.info(
             "final_answer_check request_id=%s engine=smolagents user=%s passed=%s final_kind=%s reason=%s",
             self._active_request_id or "n/a",
             self.user_name,
@@ -580,7 +327,7 @@ class SmolagentsEngine(DataChatEngine):
             if self._empty_final_rejections < _MAX_EMPTY_FINAL_REJECTIONS:
                 self._empty_final_rejections += 1
                 self._last_final_answer_check_passed = False
-                runtime_logger.info(
+                self._log.info(
                     "final_answer_empty_rejected request_id=%s engine=smolagents user=%s attempt=%s",
                     self._active_request_id or "n/a",
                     self.user_name,
@@ -590,7 +337,7 @@ class SmolagentsEngine(DataChatEngine):
 
             # Budget spent: the agent has had its verification round and still
             # reports nothing, so an empty result is taken at face value.
-            runtime_logger.info(
+            self._log.info(
                 "final_answer_empty_accepted request_id=%s engine=smolagents user=%s rejections=%s",
                 self._active_request_id or "n/a",
                 self.user_name,
@@ -611,7 +358,7 @@ class SmolagentsEngine(DataChatEngine):
         self._last_final_kind = None
         self._empty_final_rejections = 0
 
-        runtime_logger.info(
+        self._log.info(
             "chat_start request_id=%s engine=smolagents user=%s message_len=%s",
             self._active_request_id,
             self.user_name,
@@ -619,7 +366,7 @@ class SmolagentsEngine(DataChatEngine):
         )
 
         if self._agent is None:
-            runtime_logger.info(
+            self._log.info(
                 "chat_error request_id=%s engine=smolagents user=%s error_code=MISSING_CONFIG",
                 self._active_request_id,
                 self.user_name,
@@ -634,22 +381,10 @@ class SmolagentsEngine(DataChatEngine):
                 "code": "MISSING_CONFIG",
             }
 
-        try:
-            started = time.time()
-            run_result = self._agent.run(str(message), reset=True, return_full_result=True)
-            self._last_run_result = run_result
-            self._last_run_duration_ms = round((time.time() - started) * 1000, 2)
-        except Exception as e:
-            self._last_run_result = None
-            self._last_run_duration_ms = None
-            runtime_logger.info(
-                "chat_error request_id=%s engine=smolagents user=%s error_code=RUN_FAILED error_message_short=%s",
-                self._active_request_id,
-                self.user_name,
-                str(e)[:160],
-            )
+        run_result, run_error = self._run_agent(str(message))
+        if run_result is None:
             self._active_request_id = None
-            return {"kind": "error", "message": f"SmolagentsEngine failed to run: {e}", "code": "RUN_FAILED"}
+            return {"kind": "error", "message": f"SmolagentsEngine failed to run: {run_error}", "code": "RUN_FAILED"}
 
         out = getattr(run_result, "output", None)
 
@@ -676,13 +411,13 @@ class SmolagentsEngine(DataChatEngine):
         # the response kind out from under callers that asked for a table.
         # Presenting an empty result is the client's display decision.
         if _is_empty_table(result_payload):
-            runtime_logger.info(
+            self._log.info(
                 "chat_empty_table request_id=%s engine=smolagents user=%s",
                 self._active_request_id,
                 self.user_name,
             )
 
-        runtime_logger.info(
+        self._log.info(
             "chat_end request_id=%s engine=smolagents user=%s duration_ms=%s response_kind=%s final_answer_check_passed=%s final_kind=%s",
             self._active_request_id,
             self.user_name,
@@ -693,11 +428,6 @@ class SmolagentsEngine(DataChatEngine):
         )
         self._active_request_id = None
         return result_payload
-
-    def get_last_trace(self) -> Optional[dict[str, Any]]:
-        if self._last_run_result is None:
-            return None
-        return {"run_result": self._last_run_result, "duration_ms": self._last_run_duration_ms}
 
     def close(self) -> None:
         plots_dir_removed = False
@@ -719,7 +449,7 @@ class SmolagentsEngine(DataChatEngine):
         except Exception as e:
             cleanup_error = str(e)[:160]
 
-        runtime_logger.info(
+        self._log.info(
             "cleanup_result engine=smolagents user=%s plots_dir_removed=%s user_dir_removed=%s cleanup_error=%s",
             self.user_name,
             plots_dir_removed,
