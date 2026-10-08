@@ -15,7 +15,7 @@ import datachat.sql_datasource as sql_datasource
 import infrastructure.database_pg as database_pg
 import infrastructure.vector_store as vector_store
 from utils.agent_logging import setup_agent_logger
-from utils.runtime_logging import setup_datachat_runtime_logger
+from utils.runtime_logging import setup_datachat_runtime_logger, setup_interviewer_runtime_logger
 from config import load_config, AppConfig
 from routes.system import system_bp
 from routes.auth import auth_bp
@@ -26,6 +26,7 @@ from routes.multimodal import multimodal_bp
 from routes.ingestion import ingestion_bp
 from routes.rag import rag_bp
 from routes.datachat import datachat_bp
+from routes.interviewer import interviewer_bp
 from routes.admin import admin_bp
 
 load_dotenv()  # Load environment variables from .env file
@@ -52,6 +53,7 @@ app.register_blueprint(multimodal_bp)
 app.register_blueprint(ingestion_bp)
 app.register_blueprint(rag_bp)
 app.register_blueprint(datachat_bp)
+app.register_blueprint(interviewer_bp)
 app.register_blueprint(admin_bp)
 app.config["MAUI_CONFIG"] = (
     config  # Make Maui config available to all Blueprints via current_app
@@ -72,6 +74,9 @@ DATACHAT_RUNTIME_LOGGER = (
 )  # Initialise the datachat runtime logger
 app.config["DATACHAT_RUNTIME_LOGGER"] = (
     DATACHAT_RUNTIME_LOGGER  # Make the datachat runtime logger available to all Blueprints via current_app
+)
+app.config["INTERVIEWER_RUNTIME_LOGGER"] = (
+    setup_interviewer_runtime_logger()  # Same, for the analysis interviewer
 )
 
 # Verify Matplotlib backend
