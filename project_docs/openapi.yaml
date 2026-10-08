@@ -44,6 +44,11 @@ tags:
     description: Document ingestion and Retrieval-Augmented Generation completions.
   - name: DataChat
     description: Conversational CSV analysis sessions (start → chat → end).
+  - name: Analysis Interviewer
+    description: >-
+      Interviews the user about the analysis they want and produces an analysis
+      brief for approval (start → answer/reject → approve → end). Requires the SQL
+      datasource.
 
 components:
   securitySchemes:
@@ -131,6 +136,104 @@ components:
           enum: [str, dataframe, image, dict, text_and_image]
         value:
           description: String, list, or base64 payload depending on `type`.
+    AnalysisBrief:
+      type: object
+      description: >-
+        Analysis specification for the data-analyst agent, validated against the
+        database schema the interviewer was shown. See interviewer/brief.py.
+      required: [name, description, category, tags, language, audience, business_context,
+                 data_scope, data_notes, mission, sub_tasks, metrics_config, report, open_questions]
+      properties:
+        name: {type: string}
+        description: {type: string}
+        category:
+          type: string
+          enum: [discovery, relationships, quality, prediction, segmentation]
+        tags: {type: array, items: {type: string}}
+        language: {type: string}
+        audience: {type: string}
+        business_context: {type: string}
+        data_scope:
+          type: object
+          properties:
+            relations:
+              type: array
+              items:
+                type: object
+                properties:
+                  name: {type: string}
+                  columns: {type: array, items: {type: string}}
+                  role: {type: string}
+            joins: {type: array, items: {type: string}}
+            filters: {type: array, items: {type: string}}
+            time_range: {type: string, nullable: true}
+            granularity: {type: string, nullable: true}
+            sql_hints: {type: array, items: {type: string}}
+        data_notes: {type: array, items: {type: string}}
+        mission: {type: string}
+        sub_tasks:
+          type: array
+          items:
+            type: object
+            properties:
+              id: {type: string}
+              name: {type: string}
+              order: {type: integer}
+              depends_on: {type: array, items: {type: string}}
+              mission: {type: string}
+              outputs:
+                type: object
+                properties:
+                  required: {type: array, items: {type: string}}
+                  optional: {type: array, items: {type: string}}
+        metrics_config:
+          type: object
+          nullable: true
+          additionalProperties: true
+        report:
+          type: object
+          properties:
+            format: {type: string, enum: [html]}
+            sections: {type: array, items: {type: string}}
+            charts: {type: array, items: {type: string}}
+            tone: {type: string}
+            length: {type: string}
+        open_questions: {type: array, items: {type: string}}
+    InterviewerResponse:
+      type: object
+      description: >-
+        One interviewer turn. `question`: value is {text, topic}, exactly one
+        question per turn. `brief_draft`:
+        a proposal awaiting a decision (approve, revise or decline), not stored.
+        `brief`: the approved, stored brief; the session is closed. `declined`: the
+        draft was declined, nothing stored, the session is closed; value is {}.
+        `error`: value is {message, code}.
+      properties:
+        type:
+          type: string
+          enum: [question, brief_draft, brief, declined, error]
+        value:
+          oneOf:
+            - type: object
+              description: The next question for the user (one per turn).
+              properties:
+                text: {type: string, description: The question.}
+                topic: {type: string, enum: [goal, data, scope, report]}
+            - type: object
+              description: Brief draft or approved brief.
+              properties:
+                summary: {type: string}
+                brief: {$ref: '#/components/schemas/AnalysisBrief'}
+                prompt_text:
+                  type: string
+                  description: The prompt rendered from the brief for the data analyst.
+            - type: object
+              description: Error.
+              properties:
+                message: {type: string}
+                code:
+                  type: string
+                  enum: [INVALID_OUTPUT, RUN_FAILED, AGENT_ERROR, NO_PENDING_DRAFT, DRAFT_PENDING, MISSING_CONFIG]
 
 security:
   - apiKey: []
@@ -903,6 +1006,146 @@ paths:
       responses:
         "200":
           description: Agent deleted (or was not active).
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Missing header.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /start-analysis-interview:
+    post:
+      tags: [Analysis Interviewer]
+      summary: Start an analysis interview
+      description: >-
+        Opens an in-memory interviewer session for the API key and returns the
+        welcome, which ends with the fixed opening question (the goal of the
+        analysis): the first `/analysis-interview` answer replies to it. No model
+        call and no tokens spent, but the user must hold enough tokens for one
+        turn. Rejected with 400 when the SQL datasource (DATACHAT_SQL_ENABLED) is
+        unavailable.
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+        - $ref: '#/components/parameters/UserNameHeader'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                lang:
+                  type: string
+                  default: ENG
+                  enum: [ITA, ENG, FRA, SPA]
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                lang: {type: string}
+      responses:
+        "200":
+          description: Session active, with the welcome message.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  "Agent active":
+                    type: string
+                    example: active
+                  welcome:
+                    type: string
+                    description: Localized HTML greeting, ending with the opening goal question.
+        "400":
+          description: Missing header, or SQL datasource unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "500":
+          description: Not enough tokens, or interviewer not configured.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /analysis-interview:
+    post:
+      tags: [Analysis Interviewer]
+      summary: Answer, approve, revise or decline within an analysis interview
+      description: >-
+        `{"answer": "..."}` (action `answer`, the default) answers the open
+        questions; the first answer states the goal. Refused with `DRAFT_PENDING`
+        while a draft awaits a decision. On a pending draft:
+        `{"action": "approve"}` stores it (`analysis_briefs`, status `ready`, the
+        hand-off to the data analyst), returns `brief_id` and closes the session;
+        `{"action": "revise", "answer": "what to change"}` keeps working on it:
+        the interviewer asks follow-up questions, one per turn, then proposes a
+        refined draft;
+        `{"action": "decline"}` stores nothing and closes the session. Approve and
+        decline make no model call and spend no tokens.
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action:
+                  type: string
+                  default: answer
+                  enum: [answer, approve, revise, decline]
+                answer:
+                  type: string
+                  description: Required for `answer`; optional feedback for `revise`.
+      responses:
+        "200":
+          description: The interviewer's turn, the approved brief, or the declined draft.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  response:
+                    $ref: '#/components/schemas/InterviewerResponse'
+                  brief_id:
+                    type: integer
+                    description: Present when a brief was approved and stored.
+                  log_id:
+                    type: integer
+        "400":
+          description: >-
+            Missing answer / body / header, invalid action, no session, no pending
+            draft to decide on, or an answer while a draft is pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "500":
+          description: Not enough tokens, interviewer not configured, or the brief could not be stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /end-analysis-interview:
+    post:
+      tags: [Analysis Interviewer]
+      summary: End an analysis interview
+      description: Deletes the in-memory interviewer for the API key. Approved briefs stay stored.
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+        - $ref: '#/components/parameters/UserNameHeader'
+      responses:
+        "200":
+          description: Interviewer deleted (or was not active).
           content:
             application/json:
               schema:

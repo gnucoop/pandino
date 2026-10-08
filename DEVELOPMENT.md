@@ -24,6 +24,7 @@ the Pandino Flask application.
 9. [Authentication, Users & Tokens](#9-authentication-users--tokens)
 10. [RAG / Vector Store](#10-rag--vector-store)
 11. [DataChat Engine](#11-datachat-engine)
+    - [11b. Analysis Interviewer](#11b-analysis-interviewer)
 12. [Prompt Management (DB-driven)](#12-prompt-management-db-driven)
 13. [Admin Panel](#13-admin-panel)
 14. [Adding a New Endpoint (Step-by-Step)](#14-adding-a-new-endpoint-step-by-step)
@@ -88,7 +89,6 @@ pandino/
 ├── requirements.txt            # Pinned dependencies
 ├── Dockerfile                  # Production image (gunicorn + gevent)
 ├── .env.example                # Template for environment variables
-├── .env.variants               # Alternative model/provider presets
 ├── .python-version             # 3.10.13
 │
 ├── routes/                     # HTTP layer (Flask Blueprints) — thin controllers
@@ -101,8 +101,9 @@ pandino/
 │   ├── ingestion.py            #   /storeragfile
 │   ├── rag.py                  #   /completion.json, /agentchat
 │   ├── datachat.py             #   /startdatachat, /datachat, /enddatachat
+│   ├── interviewer.py          #   /start-analysis-interview, /analysis-interview, /end-analysis-interview
 │   ├── admin.py                #   /admin/* (web UI)
-│   └── utils.py                #   assert_valid_api_key() shared helper
+│   └── utils.py                #   assert_valid_api_key(), log_agent_run() shared helpers
 │
 ├── services/                   # Business logic (Flask-free, unit-testable)
 │   ├── completion_service.py   #   RAG chat completion (LangChain)
@@ -114,14 +115,15 @@ pandino/
 │   ├── document_text_service.py#   Local extraction: PDF/DOCX/RTF/TXT → text
 │   ├── document_extraction_service.py # Local extraction + OCR fallback orchestration
 │   ├── document_ocr_service.py #   PDF page → PNG rendering (provider-independent)
-│   └── document_comparison_service.py # Multi-doc LLM comparison → JSON {score,summary,reasoning}
+│   ├── document_comparison_service.py # Multi-doc LLM comparison → JSON {score,summary,reasoning}
+│   └── analysis_brief_service.py # Store / load user-approved analysis briefs
 │
 ├── infrastructure/             # Side-effecting adapters
 │   ├── database_pg.py          #   PostgreSQL access + Fernet-encrypted API keys
 │   ├── database_methods.py     #   Parameterized SQL builders (psycopg.sql, injection-safe)
 │   ├── vector_store.py         #   PGVector store wrapper (MauiVectorStore)
 │   ├── ai.py                   #   choose_llm() / choose_emb_model() / vision / asr
-│   ├── agent_manager.py        #   In-memory dict of active DataChat engines
+│   ├── agent_manager.py        #   In-memory registry of active engines, per (agent kind, api key)
 │   ├── retriever_tool.py       #   Smolagents Tool wrapping retrieval_service
 │   ├── prompt_utils.py         #   load_prompt() / render_prompt() (DB → default → env)
 │   ├── dino.py                 #   Dino GraphQL auth
@@ -131,7 +133,10 @@ pandino/
 ├── datachat/                   # Conversational CSV analysis engine
 │   ├── engine_interface.py     #   DataChatEngine Protocol + bootstrap result
 │   ├── engine_factory.py       #   create_engine() dispatcher (currently "smolagents")
-│   ├── smolagents_engine.py    #   Smolagents CodeAgent implementation
+│   ├── smolagents_base.py      #   SmolagentsEngineBase: model, SQL gate, agent build, run/trace (shared)
+│   ├── smolagents_engine.py    #   DataChat's Smolagents CodeAgent implementation
+│   ├── final_answer_contract.py #  JSON final-answer contract helpers (shared)
+│   ├── sql_prompt.py           #   Schema snapshot → SQL addendum + identifier index (shared)
 │   ├── dataset_loader.py       #   CSV → pandas DataFrame
 │   ├── bootstrap.py            #   LLM-driven bootstrap prompt builder
 │   ├── bootstrap_static.py     #   Localized static HTML bootstrap (IT/EN/FR/ES)
@@ -147,11 +152,20 @@ pandino/
 │       ├── trend_tool.py unique_values_tool.py
 │       ├── sql_engine_tool.py sql_tool_utils.py
 │
+├── interviewer/                # Analysis interviewer: interviews the user → analysis brief
+│   ├── engine.py               #   InterviewerEngine(SmolagentsEngineBase): turns, guard, approval
+│   ├── engine_factory.py       #   create_interviewer_engine()
+│   ├── state.py                #   InterviewState: transcript, findings, drafts, interview rules
+│   ├── brief.py                #   Brief schema: validate_brief(), render_brief_prompt()
+│   ├── prompts.py              #   In-code prompt defaults (DB-overridable)
+│   ├── bootstrap_static.py     #   Localized greeting (IT/EN/FR/ES)
+│   └── tools/record_finding_tool.py # Keeps data findings across turns
+│
 ├── llm/
 │   └── litellm_factory.py      #   build_litellm_model() for Smolagents
 │
 ├── utils/
-│   ├── runtime_logging.py      #   datachat.runtime logger (stdout)
+│   ├── runtime_logging.py      #   datachat.runtime / interviewer.runtime loggers (stdout)
 │   ├── agent_logging.py        #   Structured JSON logger → logs/agent_runs.log
 │   ├── agent_serialization.py  #   Smolagents RunResult → JSON payload
 │   └── split_message.py        #   WhatsApp-style message chunking
@@ -238,7 +252,8 @@ Known direct env reads still exist and are intentional:
   API-key env vars when a caller does not pass an explicit key.
 - `routes/admin.py` reads `.env` or `os.environ` for the dashboard environment view,
   filtered through explicit allowlists.
-- DataChat internals read selected `DATACHAT_*` variables directly.
+- DataChat internals read selected `DATACHAT_*` variables directly. The interviewer
+  does not: it receives its `InterviewerConfig` from `AppConfig`.
 
 ### Required variables (no defaults — app refuses to start if missing)
 
@@ -259,6 +274,7 @@ Known direct env reads still exist and are intentional:
 | **RAG**             | `RAG_TOP_K`, `RAG_MIN_SIM`, `RAG_DEFAULT_NAMESPACE`                                                                      | `3`, `0.5`, `Dino`                                     |
 | **DataChat engine** | `DATACHAT_ENGINE`, `DATACHAT_MAX_STEPS`, `DATACHAT_RATE_LIMIT_PER_MIN`, `DATACHAT_SESSION_TTL_MIN`, `DATACHAT_LOG_LEVEL` | `smolagents`, `12`, `0`, `60`, `INFO`                  |
 | **DataChat SQL**    | `DATACHAT_SQL_ENABLED`, `DATACHAT_DB_PORT/SCHEMA`, `DATACHAT_SQL_MAX_ROWS/MAX_COLUMNS/MAX_CELL_CHARS`, `DATACHAT_SQL_STATEMENT_TIMEOUT_MS`, `DATACHAT_SQL_INCLUDE_VIEWS` (also gates view reflection), `DATACHAT_SQL_ALLOWED_TABLES/DENIED_TABLES` (tables, views and matviews alike), `DATACHAT_SQL_SCHEMA_TTL_S/SCHEMA_MAX_CHARS/SCHEMA_INCLUDE_FKS`, `DATACHAT_SQL_SCHEMA_PROFILE_VALUES/PROFILE_SAMPLE_ROWS/PROFILE_MAX_VALUES/PROFILE_MAX_VALUE_CHARS`, `DATACHAT_SQL_QUOTE_IDENTIFIERS` | `false`, `5432`/`public`, `200`/`25`/`300`, `10000`, `true`, empty, `3600`/`40000`/`true`, `true`/`50`/`3`/`32`, `true` |
+| **Interviewer**     | `INTERVIEWER_PROVIDER/MODEL`, `INTERVIEWER_MAX_STEPS`, `INTERVIEWER_MAX_TURNS`, `INTERVIEWER_MAX_NOTES`, `INTERVIEWER_MIN_QUESTIONS` (clamped 4–10), `INTERVIEWER_TOKEN_COST`, `INTERVIEWER_LOG_LEVEL` | DataChat's provider/model, `15`, `12`, `30`, `4`, `1`, `INFO` |
 | **Auth**            | `AUTH_GATEWAY_URL`, `STRIPE_SK_KEY`                                                                                      | `http://localhost:3000/validate`, `None`               |
 
 `DATACHAT_DB_HOST`, `DATACHAT_DB_NAME`, `DATACHAT_DB_USER` and `DATACHAT_DB_PASSWORD`
@@ -278,7 +294,7 @@ config.datachat_token_cost              # int
 
 The resulting `AppConfig` is a frozen dataclass composed of sub-configs:
 `DatabaseConfig`, `AdminConfig`, `ModelConfig`, `ApiKeysConfig`, `RagConfig`,
-`DatachatConfig` (`config.py:128`).
+`DatachatConfig`, `DatachatSqlConfig`, `InterviewerConfig`.
 
 ### Provider → env-var map
 
@@ -314,6 +330,7 @@ Created by `database_pg.init_db()` (`infrastructure/database_pg.py:107`):
 | `prompts`   | `title, version, message` — DB-overridable prompt templates                                     |
 | `feedback`  | User thumbs-up/down on answers, optionally linked to `logs.id`                                  |
 | `rag_files` | Tracking of ingested documents (`file_id`, namespace, chunk_count, language)                    |
+| `analysis_briefs` | User-approved analysis briefs from the interviewer: `user_email, name, brief (JSONB), prompt_text, transcript (JSONB), model, provider, status (ready/consumed/archived), approved_at` |
 
 > **Plus** one PGVector table **per namespace** (e.g. `dino`, `farm`) created
 > lazily by `ensure_pgvector_namespace_ready()` (`infrastructure/vector_store.py:57`).
@@ -434,6 +451,7 @@ Blueprints:
 | `ingestion_bp`  | `routes/ingestion.py`  | `/`      |
 | `rag_bp`        | `routes/rag.py`        | `/`      |
 | `datachat_bp`   | `routes/datachat.py`   | `/`      |
+| `interviewer_bp` | `routes/interviewer.py` | `/`     |
 | `admin_bp`      | `routes/admin.py`      | `/admin` |
 
 ### 7.2 Services (`services/`)
@@ -453,6 +471,9 @@ Pure-Python orchestration. Key services:
   `{score(1-100), summary, reasoning}` JSON contract out of the LLM.
 - **`document_extraction_service.extract_document_text()`** — local extraction first,
   then OCR fallback for scanned PDFs (`MIN_EXTRACTED_TEXT_CHARS = 50`).
+- **`analysis_brief_service.save_approved_brief()` / `get_brief()` / `list_briefs()`**
+  — storage of the analysis briefs the user approved in an interview
+  (`analysis_briefs` table). This is where the data analyst reads briefs from.
 
 ### 7.3 Infrastructure (`infrastructure/`)
 
@@ -464,23 +485,29 @@ Pure-Python orchestration. Key services:
 - **`vector_store.py`** — `MauiVectorStore` wraps `langchain_postgres.PGVectorStore`.
   Similarity is computed as `1 - score` and filtered by `min_similarity`.
   Deduplication uses a deterministic `maui_id = f"{namespace}:{sha256(text)}"`.
-- **`agent_manager.py`** — keeps active DataChat engines in an **in-memory** dict
-  keyed by API key (`activeEngines`). This means sessions are **per-process** —
+- **`agent_manager.py`** — keeps active engines in an **in-memory** dict keyed by
+  `(agent kind, API key)` (`activeEngines`), so a user can hold a DataChat session
+  and an analysis interview at once (`getAgent`/`createAgent`/`deleteAgent` for
+  DataChat, `getInterviewer`/`createInterviewer`/`deleteInterviewer` for the
+  interviewer). This means sessions are **per-process** —
   relevant when scaling horizontally (see [§16](#16-deployment--cicd)).
 - **`prompt_utils.py`** — `load_prompt(title, default_text=...)` resolution order:
   **DB → in-code default → env var → ""**. `render_prompt(template, **kwargs)` does
   safe `.format()` substitution.
 
-### 7.4 DataChat (`datachat/`)
+### 7.4 DataChat (`datachat/`) and the interviewer (`interviewer/`)
 
-See [§11](#11-datachat-engine).
+See [§11](#11-datachat-engine) and [§11b](#11b-analysis-interviewer).
 
 ### 7.5 Logging
 
 - `utils/agent_logging.py` → `logs/agent_runs.log` (one JSON record per agent run:
   user, namespace, steps, tool_calls, token_usage, vectors_count, answer_excerpt).
 - `utils/runtime_logging.py` → `datachat.runtime` logger to stdout (controlled by
-  `DATACHAT_LOG_LEVEL`).
+  `DATACHAT_LOG_LEVEL`), and `interviewer.runtime` for the analysis interviewer
+  (controlled by `INTERVIEWER_LOG_LEVEL`). Both emit `key=value` event lines; the
+  interviewer's route lines are `interviewer_request_start/end`, its engine lines
+  carry `engine=interviewer`.
 - Standard Flask logging for request errors.
 
 ---
@@ -581,6 +608,66 @@ curl -X POST http://127.0.0.1:5000/agentchat \
   -H "Content-Type: application/json" -H "X-API-KEY: $KEY" \
   -d '{"chat":["What is the main topic of the training material?"],
        "username":"me@example.com","namespace":"Dino","language":"ITA"}'
+```
+
+### Analysis interviewer (analysis design → approved brief)
+
+A session is: **start (welcome + goal question) → answer the goal → N× answer →
+brief draft → approve | revise (back to answering) | decline**. Approve and decline
+close the session; `/end-analysis-interview` closes it at any point. The SQL datasource
+must be enabled. See [§11b](#11b-analysis-interviewer).
+
+| Method | Path                        | Headers                                    | Body                                                                                   | Returns                                                                                   |
+| ------ | --------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `POST` | `/start-analysis-interview` | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | JSON or form: `lang?`                                                                  | `{Agent active:"active", welcome}` (ends with the goal question). 400 when the SQL datasource is disabled |
+| `POST` | `/analysis-interview`       | `X-API-KEY`, `X-USER-EMAIL`                | `{answer:"..."}` · `{action:"approve"}` · `{action:"revise", answer?:"what to change"}` · `{action:"decline"}` | `{response:{type, value}, log_id?}`; on approval also `brief_id`                         |
+| `POST` | `/end-analysis-interview`   | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | –                                                                                      | Deletes the in-memory interviewer                                                         |
+
+`response.type` is one of:
+
+- `question` — `value: {text, topic}`: exactly one question per turn, `topic` ∈
+  goal/data/scope/report.
+- `brief_draft` — `value: {summary, brief, prompt_text}`. **Not stored.** Decide on it
+  with `approve`, `revise` (keep working on it) or `decline`; a plain answer is refused.
+- `brief` — the approved brief, same `value` shape; it is now stored, `brief_id` is
+  returned and the session is closed.
+- `declined` — `value: {}`; nothing stored, the session is closed.
+- `error` — `value: {message, code}`. `NO_PENDING_DRAFT` and `DRAFT_PENDING` answer
+  400, `MISSING_CONFIG` 500; a turn that went wrong (`INVALID_OUTPUT`, `RUN_FAILED`,
+  `AGENT_ERROR`) answers 200 and can be retried. No tokens are spent.
+
+Tokens (`INTERVIEWER_TOKEN_COST`) are spent on every usable `answer` / `revise` turn.
+Starting is free (but needs the tokens for one turn); approve and decline make no
+model call and spend none.
+
+#### Example: full interview
+
+```bash
+H=(-H "Content-Type: application/json" -H "X-API-KEY: $KEY" -H "X-USER-EMAIL: me@example.com" -H "X-USER-NAME: Me User")
+
+# 1) Start: returns the welcome, which asks for the goal
+curl -X POST http://127.0.0.1:5000/start-analysis-interview "${H[@]}" -d '{"lang":"ENG"}'
+
+# 2) State the goal: returns the first questions
+curl -X POST http://127.0.0.1:5000/analysis-interview "${H[@]}" \
+  -d '{"answer":"Revenue trends by product family for next year budget"}'
+
+# 3) Answer (repeat): questions, until a brief_draft comes back
+curl -X POST http://127.0.0.1:5000/analysis-interview "${H[@]}" \
+  -d '{"answer":"Last three years, monthly, excluding cancelled orders"}'
+
+# 4a) Not right? Keep working on it: follow-up questions, then a refined draft
+curl -X POST http://127.0.0.1:5000/analysis-interview "${H[@]}" \
+  -d '{"action":"revise","answer":"Split by region too"}'
+
+# 4b) Approve: stored, returns brief_id, session closed
+curl -X POST http://127.0.0.1:5000/analysis-interview "${H[@]}" -d '{"action":"approve"}'
+
+# 4c) ...or decline: nothing stored, session closed
+curl -X POST http://127.0.0.1:5000/analysis-interview "${H[@]}" -d '{"action":"decline"}'
+
+# Abandon at any point
+curl -X POST http://127.0.0.1:5000/end-analysis-interview "${H[@]}"
 ```
 
 ### Response shape — DataChat `response`
@@ -691,6 +778,18 @@ def close(self) -> None
 
 ### Active implementation: `SmolagentsEngine`
 
+`SmolagentsEngine` subclasses **`SmolagentsEngineBase`** (`datachat/smolagents_base.py`),
+the plumbing it shares with the analysis interviewer ([§11b](#11b-analysis-interviewer)):
+model construction, the single SQL gate (`_sql_addendum()` → `datachat/sql_prompt.py`,
+which renders the schema snapshot into the addendum and derives the identifier index
+from that same snapshot), `_sql_tools()`, `_build_agent()` with `final_answer_checks`,
+the agent run (`_run_agent()`, always `reset=True`) and `get_last_trace()`. The
+engine-specific parts are hooks: `_init_config()`, `_build_instructions()`,
+`_extra_tools()`, `_requirements_met()`, `_check_final_answer()` and `chat()`. The JSON
+final-answer contract helpers live in `datachat/final_answer_contract.py`, parametrized
+by each engine's map of `kind` → validator. `ENGINE_NAME` labels the log lines
+(`smolagents` for DataChat, so its log lines are unchanged).
+
 `datachat/smolagents_engine.py` builds a Smolagents `CodeAgent` with **11 tools**
 (`datachat/tools/`): `describe`, `missing_values`, `unique_values`, `correlation`,
 `sample_rows`, `top_rows`, `filter_rows`, `row_count`, `aggregate`, `plot`, `trend`,
@@ -736,8 +835,8 @@ engine.chat() → raw output
 
 ### Lifecycle
 
-Engines are kept in `infrastructure/agent_manager.activeEngines` (dict keyed by API
-key). `/startdatachat` creates, `/datachat` reuses, `/enddatachat` removes. Because
+Engines are kept in `infrastructure/agent_manager.activeEngines` (dict keyed by
+`(agent kind, API key)`). `/startdatachat` creates, `/datachat` reuses, `/enddatachat` removes. Because
 state is in-process memory, **sticky routing is required in production** when running
 multiple gunicorn/gunicorn-gevent workers (the Dockerfile uses a single worker to
 avoid this).
@@ -876,9 +975,8 @@ default. The allowlist wins when non-empty; otherwise the denylist applies. Desp
 names, the lists are **one namespace covering tables, views and materialized views**:
 the guard collects bare identifiers from `exp.Table` nodes, which is what a view name in
 a `FROM` parses to, so a separate view list could not be enforced anyway. Scoping is
-enforced in three places: every `extract_*` listing tool filters what it returns, so the
-agent never learns a hidden relation exists; every `extract_*_info` tool refuses it; and
-the guard rejects it.
+enforced in two places: the schema snapshot rendered into the prompt leaves hidden
+relations out, so the agent never learns they exist; and the guard rejects them.
 
 The engine is a lazily built, process-wide singleton. `sql_datasource.init(config)`
 does no I/O, so an unreachable database cannot block startup. **`SmolagentsEngine.close()`
@@ -890,8 +988,9 @@ must not dispose it** — the pool is shared by every session, so one user's
 1. Create `datachat/tools/my_tool.py` subclassing `smolagents.Tool`.
 2. Declare `name`, `description`, `inputs`, `output_type`.
 3. Implement `forward(...)` returning a `{kind, ...}` contract dict.
-4. Instantiate it in `SmolagentsEngine._build_agent()` — or in `_sql_tools()` for a
-   SQL tool.
+4. Instantiate it in `SmolagentsEngine._data_tools()` (returned by the
+   `_extra_tools()` hook) — or in `SmolagentsEngineBase._sql_tools()` for a SQL tool,
+   which the analysis interviewer then gets too.
 
 Before adding a tool, check whether it is really a tool. A tool is for something the
 model *chooses* to do, with arguments it picks. Facts the agent always needs and that
@@ -900,6 +999,99 @@ the system prompt: load them once (see `dataset_loader.py` and
 `schema_snapshot_loader.py`) and render them into the instructions. Making them tools
 costs a turn per question and, because `chat()` runs with `reset=True`, the answer is
 discarded before the next message.
+
+---
+
+## 11b. Analysis Interviewer
+
+The interviewer is the first step of the data-analyst pipeline: it interviews the user
+about the analysis they want and produces an **analysis brief** — a detailed,
+validated specification that the (upcoming) data-analyst agent will execute to produce
+an HTML report. It is the agentic counterpart of digest-pipeline's `profile_generator`,
+and its brief is modelled on that project's `PROFILE`. Implementation lives in
+`interviewer/`; endpoints in `routes/interviewer.py` ([§8](#8-http-api-reference)).
+
+### Engine: `InterviewerEngine`
+
+`interviewer/engine.py` subclasses `SmolagentsEngineBase`, exactly like DataChat, so it
+reads the **same SQL datasource through the same guarded `sql_engine`** (read-only
+transaction, `sql_guard`, row/column/cell caps, identifier case repair, allow/deny
+scoping). Its tools are `sql_engine` and `record_finding`. It requires the SQL
+datasource: with the datasource disabled or unreflectable, `_requirements_met()` is
+false, the engine is not configured, and `/start-analysis-interview` refuses to start.
+Its config is `AppConfig.interviewer` (`InterviewerConfig`), passed in by the factory.
+
+### State across turns
+
+Like DataChat, every agent run starts on a fresh memory (`reset=True`): query results
+would otherwise pile up in the context. What must survive lives in `InterviewState`
+(`interviewer/state.py`) and is rendered into each turn's task (`interviewer_turn`):
+the transcript (questions with their topic, answers, drafts, rejections), the data
+findings the agent saved with `record_finding` (capped by `INTERVIEWER_MAX_NOTES`), the
+drafts the user sent back with their feedback, and the turn counter.
+
+The state opens with a **fixed goal question** (`record_opening_question`), the one the
+bootstrap welcome ends with (`interviewer/bootstrap_static.py`, `get_opening_question`):
+the user's first answer replies to it, and it counts as an answered `goal` question.
+
+### Turns and the final-answer contract
+
+Each turn ends with one JSON object: `{"kind":"question","text","topic"}` (exactly
+**one** question, topic ∈ goal/data/scope/report), `{"kind":"brief_draft",
+"summary","brief"}`, or `{"kind":"error","message"}`. `_check_final_answer` raises with
+the reason — which smolagents replays to the model — when:
+
+- the contract is broken, including a `questions` list (`ONE_QUESTION_ONLY`), even of
+  one item;
+- a draft comes **before the minimum interview**: fewer than
+  `INTERVIEWER_MIN_QUESTIONS` (default and floor 4, the opening question included)
+  questions asked *and answered*, or none of them about the `goal` or none about the
+  `data`;
+- a draft comes, after the user asked for more work on one, **before any follow-up
+  question has been answered**;
+- the brief fails `validate_brief()`.
+
+The same checks run again on the run's output in `chat()`, because at `max_steps`
+smolagents returns a final answer the guard never saw; such an answer becomes an
+`INVALID_OUTPUT` error, never a draft. `INTERVIEWER_MAX_TURNS` is a per-round budget:
+once reached, and only once the minimum interview is met, the task tells the agent to
+propose a draft.
+
+### Approval flow
+
+The model can only **propose**. While a draft is pending, a plain answer is refused
+(`DRAFT_PENDING`): the user must decide.
+
+- **approve** (`approve()`, no model call) → the draft becomes the brief; the route
+  stores it first (`analysis_brief_service.save_approved_brief()`), so a failed insert
+  leaves the draft pending for another try. Once stored, the session is closed.
+- **revise** — "keep working on it" (`reject(feedback)`) → the draft and the feedback
+  are kept, a refinement round opens, and the agent must ask a follow-up question
+  before it can propose a refined draft;
+- **decline** (no model call) → nothing is stored and the session is closed.
+
+**Hand-off to the data analyst.** The approved row in `analysis_briefs` (`brief` JSONB,
+`prompt_text`, `status='ready'`), found by the `brief_id` the approval returns, is the
+input of the upcoming data-analyst agent: it will read it through
+`analysis_brief_service.get_brief()` / `list_briefs(status="ready")` and mark it
+`consumed`.
+
+### The brief
+
+`interviewer/brief.py` defines the shape (see its module docstring): `name,
+description, category, tags, language, audience, business_context, data_scope
+{relations[{name, columns, role}], joins, filters, time_range, granularity,
+sql_hints}, data_notes, mission, sub_tasks[{id, name, order, depends_on, mission,
+outputs{required, optional}}], metrics_config, report{format, sections, charts, tone,
+length}, open_questions`.
+
+`validate_brief(brief, identifiers)` checks it against the schema and against the
+database the interviewer was shown: every relation and column must exist, every
+`sql_hints` query must pass `sql_guard.validate_select` and read only visible relations,
+`depends_on` must point to earlier tasks, the last task must be `final_summary`, and
+`metrics_config` keys must match sub-task output keys exactly. All errors are returned
+at once. `render_brief_prompt(brief)` derives the prompt text for the data analyst;
+both are stored in `analysis_briefs` together with the interview transcript.
 
 ---
 
@@ -927,6 +1119,9 @@ Known prompt titles used across the codebase:
 | `data_chat_system`                       | DataChat engine instructions     |
 | `start_chat_system`                      | DataChat bootstrap (LLM variant) |
 | `data_chat_sql_addendum`                 | DataChat SQL rules, appended to `data_chat_system` when the SQL datasource is enabled |
+| `interviewer_system`                     | Interviewer persona, method, output contract, brief standard |
+| `interviewer_sql_addendum`               | Interviewer schema + SQL rules, appended to `interviewer_system` |
+| `interviewer_turn`                       | Interviewer per-turn task (interview state, latest message, next step) |
 
 Manage them via the admin UI (`/admin/prompts`) or the `prompts` table directly.
 
@@ -942,7 +1137,9 @@ braces.
 | Placeholder    | Available in             |
 | -------------- | ------------------------ |
 | `{columns}`    | `data_chat_system` — the uploaded dataset's column list |
-| `{sql_schema}` | `data_chat_sql_addendum` — the rendered database schema |
+| `{sql_schema}` | `data_chat_sql_addendum`, `interviewer_sql_addendum` — the rendered database schema |
+| `{language}`, `{min_questions}` | `interviewer_system` — the interview language, the minimum questions before a draft |
+| `{interview_state}`, `{latest_message}`, `{next_step}` | `interviewer_turn` |
 
 If an override omits `{sql_schema}`, the schema is appended after the template rather
 than dropped, so an addendum stored before the placeholder existed keeps working. A
@@ -1032,6 +1229,12 @@ To add, say, `POST /summarize_text`:
   expression class. Treat a failure here as a security regression, not a flaky test.
   `tests/test_sql_datasource.py` and `tests/test_sql_tools.py` cover the engine
   options and the tool contracts, also without PostgreSQL.
+- **Analysis interviewer:** `tests/test_interviewer_engine.py` (turns, minimum
+  interview, approval and refinement; the engine is built through its real
+  `__post_init__` with the model, datasource and `CodeAgent` patched),
+  `tests/test_interviewer_brief.py` (brief schema and rendering),
+  `tests/test_interviewer_routes.py` (HTTP contract), `tests/test_analysis_brief_service.py`
+  (storage) and `tests/test_agent_manager.py` (per-kind sessions).
 - When writing tests, follow the same pattern: `unittest.mock.patch.dict` for env,
   and mock `infrastructure.*` boundaries. Services are designed to be tested without
   Flask.
@@ -1059,11 +1262,13 @@ Secrets required in GitHub: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`
 ### Production notes
 
 - **Single worker by design.** The default gunicorn command uses `--workers 1`
-  because DataChat engines live in process memory. To scale horizontally you must
+  because DataChat engines and analysis interviews live in process memory (an
+  interview's pending draft included — only approved briefs reach the database). To scale horizontally you must
   add sticky sessions / externalize session state.
 - **Persistent volumes:** mount `/tmp/datachat_plots` (or set `DATACHAT_PLOTS_DIR`)
   and the `logs/` directory.
-- **Database:** ensure `pgvector` extension and run `init_db()` on first deploy.
+- **Database:** ensure `pgvector` extension and run `init_db()` on first deploy
+  (and once again after upgrading, to create the `analysis_briefs` table).
 - **DataChat SQL datasource:** create a least-privilege role for `DATACHAT_DB_USER`.
   This is the only read-only layer an application bug cannot bypass:
   ```sql
