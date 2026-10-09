@@ -310,3 +310,50 @@ def test_datachat_sql_identifier_quoting_can_be_turned_off():
     env = {**REQUIRED_ENV, **SQL_ENV, "DATACHAT_SQL_QUOTE_IDENTIFIERS": "false"}
     with patch.dict("os.environ", env, clear=True):
         assert load_config().datachat_sql.quote_identifiers is False
+
+
+# ---------------------------------------------------------------------------
+# Analysis interviewer
+# ---------------------------------------------------------------------------
+
+
+def test_interviewer_defaults_follow_the_datachat_model():
+    env = {**REQUIRED_ENV, "DATACHAT_MODEL": "my/model", "DATACHAT_PROVIDER": "Mistral"}
+    with patch.dict("os.environ", env, clear=True):
+        cfg = load_config()
+
+    assert cfg.interviewer.model == "my/model"
+    assert cfg.interviewer.provider == "Mistral"
+    assert cfg.interviewer.max_steps == 15
+    assert cfg.interviewer.max_turns == 12
+    assert cfg.interviewer.max_notes == 30
+    assert cfg.interviewer.min_questions == 4
+    assert cfg.interviewer_token_cost == 1
+
+
+def test_interviewer_model_can_differ_from_datachat():
+    env = {
+        **REQUIRED_ENV,
+        "DATACHAT_MODEL": "my/model",
+        "INTERVIEWER_MODEL": "other/model",
+        "INTERVIEWER_PROVIDER": "Anthropic",
+        "INTERVIEWER_TOKEN_COST": "4",
+    }
+    with patch.dict("os.environ", env, clear=True):
+        cfg = load_config()
+
+    assert cfg.models.datachat_model == "my/model"
+    assert cfg.interviewer.model == "other/model"
+    assert cfg.interviewer.provider == "Anthropic"
+    assert cfg.interviewer_token_cost == 4
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [("0", 4), ("3", 4), ("5", 5), ("99", 10), ("not-a-number", 4)],
+)
+def test_interviewer_min_questions_never_drops_below_four(raw, expected):
+    """The brief must rest on at least four answered questions, whatever the env says."""
+    env = {**REQUIRED_ENV, "INTERVIEWER_MIN_QUESTIONS": raw}
+    with patch.dict("os.environ", env, clear=True):
+        assert load_config().interviewer.min_questions == expected
