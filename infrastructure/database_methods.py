@@ -4,6 +4,7 @@ Each function returns a composable SQL object (psycopg.sql) and its parameters.
 """
 
 from psycopg import sql
+from psycopg.types.json import Jsonb
 from typing import Tuple, Any, Optional, List
 
 
@@ -1436,6 +1437,74 @@ def build_insert_operational_event_query(
     )
     return query, params
 
+# ---------------------------------------------------------------------------
+# Analysis briefs
+# ---------------------------------------------------------------------------
+
+_ANALYSIS_BRIEF_COLUMNS = (
+    "id",
+    "user_email",
+    "name",
+    "brief",
+    "prompt_text",
+    "transcript",
+    "model",
+    "provider",
+    "status",
+    "approved_at",
+    "created_at",
+)
+
+
+def build_insert_analysis_brief_query(
+    user_email: str,
+    name: str,
+    brief: dict,
+    prompt_text: str,
+    transcript: Optional[list],
+    model: Optional[str],
+    provider: Optional[str],
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to insert a user-approved analysis brief.
+
+    :param user_email: Username (email) of the user who approved the brief.
+    :param name: Human-readable brief name.
+    :param brief: The structured brief (stored as JSONB).
+    :param prompt_text: The rendered prompt for the data analyst.
+    :param transcript: The interview transcript (stored as JSONB), if any.
+    :param model: Model that conducted the interview.
+    :param provider: Provider of that model.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "INSERT INTO {table} "
+        "({col_user}, {col_name}, {col_brief}, {col_prompt}, {col_transcript}, {col_model}, {col_provider}) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s) "
+        "RETURNING {col_id}"
+    ).format(
+        table=sql.Identifier("analysis_briefs"),
+        col_user=sql.Identifier("user_email"),
+        col_name=sql.Identifier("name"),
+        col_brief=sql.Identifier("brief"),
+        col_prompt=sql.Identifier("prompt_text"),
+        col_transcript=sql.Identifier("transcript"),
+        col_model=sql.Identifier("model"),
+        col_provider=sql.Identifier("provider"),
+        col_id=sql.Identifier("id"),
+    )
+
+    params = (
+        user_email,
+        name,
+        Jsonb(brief),
+        prompt_text,
+        Jsonb(transcript) if transcript is not None else None,
+        model,
+        provider,
+    )
+    return query, params
+
 
 def build_get_operational_events_by_request_id_query(
     request_id: str,
@@ -1479,3 +1548,71 @@ def build_get_operational_events_by_request_id_query(
         col_message=sql.Identifier("message"),
     )
     return query, (request_id,)
+
+
+def build_get_analysis_brief_query(
+    brief_id: int,
+    user_email: Optional[str] = None,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to retrieve one analysis brief by ID.
+
+    :param brief_id: ID of the brief.
+    :param user_email: When given, the brief must also belong to this user.
+    :return: Tuple of SQL query and parameters.
+    """
+    where = "{col_id} = %s"
+    params: List[Any] = [brief_id]
+    if user_email is not None:
+        where += " AND {col_user} = %s"
+        params.append(user_email)
+
+    query = sql.SQL("SELECT {columns} FROM {table} WHERE " + where).format(
+        columns=sql.SQL(", ").join(sql.Identifier(c) for c in _ANALYSIS_BRIEF_COLUMNS),
+        table=sql.Identifier("analysis_briefs"),
+        col_id=sql.Identifier("id"),
+        col_user=sql.Identifier("user_email"),
+    )
+    return query, tuple(params)
+
+
+def build_list_analysis_briefs_query(
+    user_email: Optional[str] = None,
+    status: Optional[str] = None,
+    limit: int = 50,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to list analysis briefs, newest first, without the
+    heavy JSONB and prompt columns.
+
+    :param user_email: Optional filter on the owning user.
+    :param status: Optional filter on the brief status.
+    :param limit: Maximum number of rows returned.
+    :return: Tuple of SQL query and parameters.
+    """
+    conditions = []
+    params: List[Any] = []
+    if user_email is not None:
+        conditions.append("{col_user} = %s")
+        params.append(user_email)
+    if status is not None:
+        conditions.append("{col_status} = %s")
+        params.append(status)
+
+    base_query = (
+        "SELECT {col_id}, {col_user}, {col_name}, {col_status}, {col_approved} FROM {table}"
+    )
+    if conditions:
+        base_query += " WHERE " + " AND ".join(conditions)
+    base_query += " ORDER BY {col_approved} DESC LIMIT %s"
+    params.append(limit)
+
+    query = sql.SQL(base_query).format(
+        table=sql.Identifier("analysis_briefs"),
+        col_id=sql.Identifier("id"),
+        col_user=sql.Identifier("user_email"),
+        col_name=sql.Identifier("name"),
+        col_status=sql.Identifier("status"),
+        col_approved=sql.Identifier("approved_at"),
+    )
+    return query, tuple(params)
