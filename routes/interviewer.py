@@ -22,7 +22,14 @@ from typing import Any, Optional
 
 from flask import Blueprint, Response, jsonify, request, current_app
 
-from infrastructure.agent_manager import getInterviewer, createInterviewer, deleteInterviewer
+from infrastructure.agent_manager import (
+    getInterviewer,
+    createInterviewer,
+    deleteInterviewer,
+    deleteInterviewerIfCurrent,
+    try_acquire_run,
+    release_run,
+)
 from infrastructure.database_pg import edit_tokens, get_user_tokens
 from datachat.sql_datasource import get_datasource as get_sql_datasource
 from interviewer.engine_factory import create_interviewer_engine
@@ -151,7 +158,9 @@ def startAnalysisInterview() -> Response | tuple[Response, int]:
         return jsonify({"error": f"Failed to create Interviewer: {str(e)}"}), 500
 
     if not engine.is_ready:
-        deleteInterviewer(api_key, user_name)
+        # Only this request's engine: a concurrent start may have registered
+        # another one for the same Api Key.
+        deleteInterviewerIfCurrent(api_key, engine)
         return jsonify({"error": "Interviewer not configured", "code": "MISSING_CONFIG"}), 500
 
     # The welcome ends with the fixed goal question: the user's first
@@ -189,24 +198,43 @@ def analysisInterview() -> Response | tuple[Response, int]:
     if not engine:
         return jsonify({"error": "Interviewer not active for this Api Key"}), 400
 
-    if action in ("approve", "decline"):
-        response, status = _approve(engine, user_email) if action == "approve" else _decline(engine)
-        if status == 200:
-            # The interview is over. X-USER-NAME is not required here, and
-            # deleteInterviewer only checks that some user is named.
-            deleteInterviewer(api_key, user_name or user_email)
-    else:
-        not_enough = _not_enough_tokens_response(user_email, config.interviewer_token_cost)
-        if not_enough is not None:
-            return not_enough
-        response, status = _run_turn(
-            user_email,
-            (lambda: engine.reject(answer or None))
-            if action == "revise"
-            else (lambda: engine.chat(answer)),
+    # Only one action per engine: a concurrent request is rejected, not queued.
+    if not try_acquire_run(engine):
+        return (
+            jsonify(
+                {
+                    "error": "session_busy",
+                    "message": "A request is already being processed for this session.",
+                }
+            ),
+            409,
         )
 
-    return response, status
+    try:
+        # The session may have been ended or replaced since it was looked up.
+        if getInterviewer(api_key) is not engine:
+            return jsonify({"error": "Interviewer not active for this Api Key"}), 400
+
+        if action in ("approve", "decline"):
+            response, status = _approve(engine, user_email) if action == "approve" else _decline(engine)
+            if status == 200:
+                # The interview is over. Only this engine is removed: if /end
+                # and /start replaced it meanwhile, the new session stays.
+                deleteInterviewerIfCurrent(api_key, engine)
+        else:
+            not_enough = _not_enough_tokens_response(user_email, config.interviewer_token_cost)
+            if not_enough is not None:
+                return not_enough
+            response, status = _run_turn(
+                user_email,
+                (lambda: engine.reject(answer or None))
+                if action == "revise"
+                else (lambda: engine.chat(answer)),
+            )
+
+        return response, status
+    finally:
+        release_run(engine)
 
 
 def _no_pending_draft_response(verb: str) -> tuple[Response, int]:

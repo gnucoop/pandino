@@ -20,6 +20,10 @@ _busyLock = threading.Lock()
 # Dictionary of active agents associated to an (agent kind, Api Key) pair
 activeEngines: dict[tuple[str, str], Any] = {}
 
+# Guards every write to activeEngines, so a delete can check which engine is
+# registered and remove it as one step. Factories and close() run outside it.
+_registryLock = threading.Lock()
+
 
 def _get(kind: str, api_key) -> Any | None:
     if not api_key:
@@ -33,18 +37,23 @@ def _get_or_create(kind: str, api_key, factory: Callable[[], Any]) -> Any:
         return activeEngines.get(key)
 
     engine = factory()
-    activeEngines[key] = engine
+    with _registryLock:
+        activeEngines[key] = engine
     return engine
 
 
 def _delete(kind: str, api_key, user_name) -> Any | None:
     key = (kind, str(api_key))
-    engine = activeEngines.get(key)
-    if not api_key or not engine or not user_name:
+    if not api_key or not user_name:
+        return None
+
+    with _registryLock:
+        engine = activeEngines.pop(key, None)
+    if not engine:
         return None
 
     engine.close()
-    return activeEngines.pop(key)
+    return engine
 
 
 # Retrieves an active agent associated with an Api Key
@@ -87,6 +96,22 @@ def createInterviewer(api_key, factory: Callable[[], Any]) -> Any:
 # Deletes the interviewer from active agents.
 def deleteInterviewer(api_key, user_name) -> Any | None:
     return _delete(INTERVIEWER, api_key, user_name)
+
+
+# Deletes the interviewer only if `engine` is still the one registered, so a
+# request holding a stale engine never removes a newer session for the key.
+def deleteInterviewerIfCurrent(api_key, engine) -> bool:
+    if not api_key or engine is None:
+        return False
+
+    key = (INTERVIEWER, str(api_key))
+    with _registryLock:
+        if activeEngines.get(key) is not engine:
+            return False
+        activeEngines.pop(key)
+
+    engine.close()
+    return True
 
 
 # Lists all active agents
