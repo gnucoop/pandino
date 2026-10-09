@@ -18,6 +18,8 @@ Pandino is a powerful tool designed to analyze and visualize data using various 
 
 - **Read-only SQL Access (optional)**: Let the DataChat agent answer questions from a dedicated PostgreSQL database in natural language. The schema — tables, views, materialized views and their columns — is reflected once, cached, and given to the agent up front, so it writes `SELECT` queries directly instead of spending turns discovering what exists. Each relation is also sampled once so the schema carries example values, which is what tells the agent how a column is actually written rather than leaving it to guess a format and match nothing. Disabled by default; enable it with `DATACHAT_SQL_ENABLED` and a dedicated `DATACHAT_DB_*` connection. Queries are validated before execution and run in a read-only transaction with a statement timeout and result caps.
 
+- **Analysis Interviewer**: An agent that interviews the user about the analysis they want — the goal, the relevant data, scope and report — while exploring the SQL database to ask concrete, data-grounded questions. It asks one question at a time, at least four (the opening goal question included) covering the goal and the data, then proposes a detailed analysis brief (modelled on digest-pipeline's analysis profiles) for the user to approve; the user can approve it, decline it, or ask it to keep working on it, in which case it asks follow-up questions and refines it. Approved briefs are stored in the `analysis_briefs` table for the upcoming data-analyst agent. It reuses the DataChat SQL engine and all of its safeguards, and requires the SQL datasource.
+
 - **Retrieval-Augmented Generation (RAG)**: 
   - **Multi-format File Processing**: Ingest and process various file formats (PDF, TXT, Markdown, audio) to build a knowledge base.
   - **Vector Database Support**: Choose between Pinecone and PGVector for efficient similarity search.
@@ -109,6 +111,9 @@ Here is a list of the available non-admin endpoints:
 - **POST /enddatachat**: Ends a data chat session and deletes the agent.
 - **POST /startdatachat**: Starts a new data chat session and creates an agent.
 - **POST /datachat**: Handles the chat interaction with the data agent.
+- **POST /start-analysis-interview**: Starts an analysis interview; the welcome asks for the analysis goal. Requires the SQL datasource.
+- **POST /analysis-interview**: Answers the interviewer's questions (the first answer states the goal), then approves, revises or declines its brief draft. Approval stores the brief, returns its `brief_id` and ends the session; declining ends it storing nothing.
+- **POST /end-analysis-interview**: Ends the analysis interview session.
 - **POST /buyreport**: Allows a user to "buy" a report using their tokens.
 - **POST /completion.json**: Provides a chat completion service.
 - **POST /prompt.txt**: Handles a prompt and returns a response.
@@ -201,6 +206,31 @@ curl -X POST "http://127.0.0.1:5000/datachat" \
      {
          "chat": "your_request_to_pandas_here"
      }
+```
+
+An analysis interview, from start to the approved brief:
+```bash
+curl -X POST "http://127.0.0.1:5000/start-analysis-interview" \
+     -H "Content-Type: application/json" \
+     -H "X-API-KEY: your_api_key_here" \
+     -H "X-USER-EMAIL: user@example.com" \
+     -H "X-USER-NAME: your_full_user_name_here" \
+     -d '{"lang": "ENG"}'
+
+# state the goal, then answer the questions (repeat until a "brief_draft" response comes back)
+curl -X POST "http://127.0.0.1:5000/analysis-interview" \
+     -H "Content-Type: application/json" \
+     -H "X-API-KEY: your_api_key_here" \
+     -H "X-USER-EMAIL: user@example.com" \
+     -d '{"answer": "Monthly, last three years"}'
+
+# approve the draft ... or send {"action": "revise", "answer": "what to change"} to keep
+# working on it, or {"action": "decline"} to drop it and end the interview
+curl -X POST "http://127.0.0.1:5000/analysis-interview" \
+     -H "Content-Type: application/json" \
+     -H "X-API-KEY: your_api_key_here" \
+     -H "X-USER-EMAIL: user@example.com" \
+     -d '{"action": "approve"}'
 ```
 
 To access the `/agentchat` endpoint using `curl`, use the following command:
