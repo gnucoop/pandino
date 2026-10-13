@@ -75,6 +75,37 @@ def _attach_recorded_charts(
     return response_dict
 
 
+class InvalidMemoryRequest(ValueError):
+    """The optional memory fields of a /datachat request are invalid."""
+
+    code = "invalid_memory_request"
+
+
+def _parse_memory_request(payload: dict[str, Any]) -> tuple[bool, Optional[str]]:
+    """
+    Validate the optional ``memory`` / ``conversation_id`` fields.
+
+    Returns ``(memory_enabled, conversation_id)``: absent ``memory`` means OFF,
+    a missing ``conversation_id`` with memory ON means a new conversation.
+    Strict: ``memory`` must be a real bool, ``conversation_id`` a non-blank
+    string (kept unchanged) and only with ``memory`` true. Anything else raises
+    InvalidMemoryRequest. Pure: no Flask, engine or database access.
+    """
+    memory = payload.get("memory", False)
+    if type(memory) is not bool:
+        raise InvalidMemoryRequest("memory must be a boolean")
+
+    if "conversation_id" not in payload:
+        return memory, None
+
+    conversation_id = payload["conversation_id"]
+    if not memory:
+        raise InvalidMemoryRequest("conversation_id requires memory true")
+    if not isinstance(conversation_id, str) or not conversation_id.strip():
+        raise InvalidMemoryRequest("conversation_id must be a non-empty string")
+    return True, conversation_id
+
+
 def _flush_provider_contributions(user_email: str) -> None:
     """
     Persist each provider call a tool made during this run as its own Usage row.
