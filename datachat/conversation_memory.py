@@ -46,7 +46,7 @@ TRUNCATION_MARKER = "…"
 
 # Whole rendered history fragment, framing included; the current question
 # appended by compose_task() is not counted.
-MAX_RENDERED_HISTORY_CHARS = 4000
+MAX_RENDERED_HISTORY_CHARS = 8000
 
 # Fixed framing, kept in code (not load_prompt) so rendering needs no I/O and
 # its length is known. Labelling turns as untrusted and JSON-quoting their

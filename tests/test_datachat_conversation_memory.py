@@ -552,12 +552,12 @@ def test_cell_values_are_valid_json():
 
 
 def test_budget_drops_older_turns_first():
-    turns = [_text_turn(f"q{i}", "x" * 1000) for i in range(5)]
+    turns = [_text_turn(f"q{i}" + "?" * 497, "x" * 1000, note="n" * 500) for i in range(5)]
     fragment = render_historical_context(turns)
     assert len(fragment) <= MAX_RENDERED_HISTORY_CHARS
     body = _body(fragment)
-    assert '"q4"' in body and '"q0"' not in body
-    kept = [i for i in range(5) if f'"q{i}"' in body]
+    assert 'Q: "q4?' in body and 'Q: "q0?' not in body
+    kept = [i for i in range(5) if f'Q: "q{i}?' in body]
     assert kept == list(range(5 - len(kept), 5))
     assert body.startswith(f"Turn 1 of {len(kept)}\n")
 
@@ -587,11 +587,14 @@ def test_newest_table_rows_reduced_progressively():
 
 
 def test_newer_turn_not_reduced_to_fit_older_ones():
-    newest = _table_turn(columns=("a",), rows=[(i,) for i in range(10)])
+    # The newest table fits whole but leaves too little room for the older turn.
+    newest = _table_turn(columns=[f"c{j}" for j in range(6)], rows=[("v" * 100,) * 6] * 10)
     older = _text_turn("old", "y" * 1000, note="z" * 500)
-    filler = [_text_turn(f"f{i}", "w" * 1000) for i in range(3)]
-    body = _body(render_historical_context([*filler, older, newest]))
-    assert "kept 10 rows x 1 columns." in body
+    fragment = render_historical_context([older, newest])
+    body = _body(fragment)
+    assert "kept 10 rows x 6 columns." in body
+    assert '"old"' not in body
+    assert len(fragment) + len(_body(render_historical_context([older]))) > MAX_RENDERED_HISTORY_CHARS
 
 
 def test_newest_turn_that_cannot_fit_yields_empty_fragment():
