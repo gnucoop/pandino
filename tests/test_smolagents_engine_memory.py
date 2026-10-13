@@ -12,6 +12,7 @@ import pytest
 from datachat.conversation_memory import (
     HISTORY_HEADER,
     CompactTurn,
+    ConfirmOutcome,
     ConversationLimitReached,
     ConversationNotFound,
     ConversationStore,
@@ -343,3 +344,198 @@ def test_dataclass_construction_gives_independent_stores(monkeypatch, tmp_path):
     assert b._conversations.active_count() == 0
     with pytest.raises(ConversationNotFound):
         b._conversations.begin(conv.conversation_id)
+
+
+# --- memory_preflight ------------------------------------------------------
+
+
+def test_preflight_new_conversation_reserves_nothing():
+    agent = _RecordingAgent()
+    engine = _make_engine(agent)
+
+    for _ in range(3):
+        assert engine.memory_preflight() is None
+        assert engine.memory_preflight(None) is None
+
+    assert engine._conversations.active_count() == 0
+    assert engine._conversations.has_free_slot()
+    assert agent.calls == []
+
+
+def test_preflight_existing_active_conversation_leaves_it_untouched():
+    agent = _RecordingAgent()
+    engine = _make_engine(agent)
+    conv = _confirmed(engine, _turn())
+    before = conv.turns
+
+    engine.memory_preflight(conv.conversation_id)
+
+    assert conv.status == "active"
+    assert conv.turns == before
+    assert engine._conversations.get(conv.conversation_id) is conv
+    assert agent.calls == []
+
+
+def test_preflight_unknown_or_closed_id_raises_not_found():
+    engine = _make_engine(_RecordingAgent())
+    conv = _confirmed(engine, _turn())
+    engine._conversations.close(conv.conversation_id)
+
+    with pytest.raises(ConversationNotFound):
+        engine.memory_preflight("nope")
+    with pytest.raises(ConversationNotFound):
+        engine.memory_preflight(conv.conversation_id)
+
+
+def test_preflight_at_limit_rejects_new_but_accepts_active():
+    agent = _RecordingAgent()
+    engine = _make_engine(agent)
+    engine._conversations = ConversationStore(max_conversations=1)
+    conv = _confirmed(engine, _turn())
+
+    with pytest.raises(ConversationLimitReached):
+        engine.memory_preflight()
+    engine.memory_preflight(conv.conversation_id)
+
+    assert engine._conversations.active_count() == 1
+    assert agent.calls == []
+
+
+# --- confirm_memory_turn ---------------------------------------------------
+
+
+def test_confirm_activates_candidate():
+    agent = _RecordingAgent()
+    engine = _make_engine(agent)
+    result = engine.chat_with_memory("Quante righe?")
+    assert engine._conversations.active_count() == 0  # no auto-confirmation
+
+    outcome = engine.confirm_memory_turn(result)
+
+    assert outcome is ConfirmOutcome.ACTIVATED
+    conv = result.conversation
+    assert conv.status == "active"
+    assert engine._conversations.get(conv.conversation_id) is conv
+    assert conv.turns == (result.pending_turn,)
+    assert len(agent.calls) == 1  # only the chat_with_memory run
+
+
+def test_confirm_appends_to_active_conversation():
+    engine = _make_engine(_RecordingAgent())
+    conv = _confirmed(engine, _turn())
+    conv_id = conv.conversation_id
+
+    result = engine.chat_with_memory("Next?", conv_id)
+    outcome = engine.confirm_memory_turn(result)
+
+    assert outcome is ConfirmOutcome.APPENDED
+    assert conv.conversation_id == conv_id
+    assert len(conv.turns) == 2
+    assert conv.turns[-1].question == "Next?"
+
+
+def test_no_pending_turn_confirms_nothing():
+    engine = _make_engine(_RecordingAgent("just prose"))
+    candidate = engine.chat_with_memory("q")
+    assert candidate.pending_turn is None
+    assert engine.confirm_memory_turn(candidate) is None
+    assert candidate.conversation.status == "candidate"
+    assert engine._conversations.active_count() == 0
+
+    conv = _confirmed(engine, _turn())
+    before = conv.turns
+    existing = engine.chat_with_memory("q", conv.conversation_id)
+    assert engine.confirm_memory_turn(existing, more_rows_available=True, note="n") is None
+    assert conv.turns == before
+
+
+def test_confirm_attaches_trusted_qualifiers_without_mutation():
+    engine = _make_engine(_RecordingAgent(dict(TABLE_OUT)))
+    result = engine.chat_with_memory("q")
+    original = result.pending_turn
+
+    engine.confirm_memory_turn(result, more_rows_available=True, note="Source capped.")
+
+    stored = result.conversation.turns[-1]
+    assert stored.more_rows_available is True
+    assert stored.note == "Source capped."
+    assert stored is not original
+    assert original.more_rows_available is None
+    assert original.note is None
+
+
+@pytest.mark.parametrize("flag", [None, False])
+def test_confirm_without_trusted_evidence_keeps_completeness_unknown(flag):
+    engine = _make_engine(_RecordingAgent(dict(TABLE_OUT)))
+    result = engine.chat_with_memory("q")
+
+    engine.confirm_memory_turn(result, more_rows_available=flag)
+
+    stored = result.conversation.turns[-1]
+    assert stored.more_rows_available is None
+    assert stored.note is None
+
+
+def test_confirm_after_closure_returns_closed_and_does_not_resurrect():
+    engine = _make_engine(_RecordingAgent())
+    conv = _confirmed(engine, _turn())
+    before = conv.turns
+    result = engine.chat_with_memory("Next?", conv.conversation_id)
+    engine._conversations.close(conv.conversation_id)
+
+    outcome = engine.confirm_memory_turn(result)
+
+    assert outcome is ConfirmOutcome.CLOSED
+    assert conv.status == "closed"
+    assert conv.turns == before
+    assert engine._conversations.get(conv.conversation_id) is None
+    with pytest.raises(ConversationNotFound):
+        engine.memory_preflight(conv.conversation_id)
+
+
+def test_result_from_another_engine_is_stale_and_changes_nothing():
+    # E.g. an engine replaced for the same key: the old run's result is stale.
+    old = _make_engine(_RecordingAgent())
+    new = _make_engine(_RecordingAgent())
+    old_active = _confirmed(old, _turn())
+
+    for result in (
+        old.chat_with_memory("q"),
+        old.chat_with_memory("q", old_active.conversation_id),
+    ):
+        before = result.conversation.turns
+        status = result.conversation.status
+        assert new.confirm_memory_turn(result) is ConfirmOutcome.STALE
+        assert result.conversation.turns == before
+        assert result.conversation.status == status
+
+    assert new._conversations.active_count() == 0
+    assert old._conversations.active_count() == 1
+
+
+def test_limit_reached_before_candidate_confirmation():
+    engine = _make_engine(_RecordingAgent())
+    engine._conversations = ConversationStore(max_conversations=1)
+    first = engine.chat_with_memory("first?")
+    second = engine.chat_with_memory("second?")
+
+    assert engine.confirm_memory_turn(second) is ConfirmOutcome.ACTIVATED
+    outcome = engine.confirm_memory_turn(first)
+
+    assert outcome is ConfirmOutcome.LIMIT_REACHED
+    assert first.conversation.status == "candidate"
+    assert first.conversation.turns == ()
+    assert engine._conversations.get(first.conversation.conversation_id) is None
+    assert engine._conversations.active_count() == 1
+
+
+def test_confirm_never_runs_the_agent():
+    agent = _RecordingAgent()
+    engine = _make_engine(agent)
+    result = engine.chat_with_memory("q")
+    agent.calls.clear()
+
+    engine.confirm_memory_turn(result)
+    engine.confirm_memory_turn(result)  # second confirm appends, still no run
+
+    assert agent.calls == []

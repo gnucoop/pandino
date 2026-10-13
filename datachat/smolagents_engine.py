@@ -17,11 +17,13 @@ import datachat.sql_datasource as sql_datasource
 from datachat.bootstrap_static import get_static_bootstrap_html
 from datachat.conversation_memory import (
     CompactTurn,
+    ConfirmOutcome,
     Conversation,
     ConversationStore,
     build_compact_turn,
     compose_task,
     render_historical_context,
+    with_trusted_qualifiers,
 )
 from datachat.engine_interface import DataChatEngine, EngineBootstrapResult
 from datachat.sql_datasource import SqlDatasource
@@ -734,6 +736,37 @@ class SmolagentsEngine(DataChatEngine):
         return MemoryChatResult(
             response=response, conversation=conversation, pending_turn=pending_turn
         )
+
+    def memory_preflight(self, conversation_id: Optional[str] = None) -> None:
+        """
+        Check that chat_with_memory() would currently accept conversation_id.
+
+        Raises ConversationNotFound / ConversationLimitReached, exactly as
+        begin() does. A check, not a reservation: a closure or a new activation
+        may happen before the run, and chat_with_memory() repeats begin().
+        A candidate created here is unregistered and discarded.
+        """
+        self._conversations.begin(conversation_id)
+
+    def confirm_memory_turn(
+        self,
+        result: MemoryChatResult,
+        *,
+        more_rows_available: Optional[bool] = None,
+        note: Optional[str] = None,
+    ) -> Optional[ConfirmOutcome]:
+        """
+        Confirm the turn prepared by chat_with_memory(), on the conversation
+        object that run held. The qualifiers are backend-trusted values chosen
+        by the caller. Returns None (no state change) when no turn is pending,
+        otherwise the store's outcome unchanged.
+        """
+        if result.pending_turn is None:
+            return None
+        turn = with_trusted_qualifiers(
+            result.pending_turn, more_rows_available=more_rows_available, note=note
+        )
+        return self._conversations.confirm(result.conversation, turn)
 
     def _execute(
         self, message: str, task: str
