@@ -212,6 +212,56 @@ def endChat() -> Response | tuple[Response, int]:
         return jsonify({"Agent was not active for this key": api_key})
 
 
+def _valid_conversation_id(value: Any) -> bool:
+    """Same rule as /datachat: a non-blank string, kept unchanged."""
+    return isinstance(value, str) and bool(value.strip())
+
+
+@datachat_bp.route("/datachat/conversation/close", methods=["POST"])
+def closeConversation() -> Response | tuple[Response, int]:
+    """
+    Close one memory conversation of the caller's engine. Idempotent: an
+    unknown, closed or foreign id, or no engine, is "not_active". Takes no
+    run guard, runs no agent, records no Usage and debits nothing.
+    """
+    _logger = current_app.config["DATACHAT_RUNTIME_LOGGER"]
+    request_id = get_request_id()
+
+    def done(body: dict[str, Any], status: int = 200) -> tuple[Response, int]:
+        _logger.info(
+            "datachat_conversation_close request_id=%s http_status=%s outcome=%s",
+            request_id,
+            status,
+            body.get("outcome") or body.get("error"),
+        )
+        return jsonify(body), status
+
+    api_key = request.headers.get("X-API-KEY")
+    user_email = request.headers.get("X-USER-EMAIL")
+
+    if not api_key:
+        return done({"error": "Missing X-API-KEY header"}, 400)
+    if not user_email:
+        return done({"error": "Missing X-USER-EMAIL header"}, 400)
+
+    assert_valid_api_key(api_key, user_email)
+
+    payload = request.get_json(silent=True)
+    if not payload:
+        return done({"error": "Missing JSON body"}, 400)
+
+    conversation_id = payload.get("conversation_id") if isinstance(payload, dict) else None
+    if not _valid_conversation_id(conversation_id):
+        return done({"error": InvalidMemoryRequest.code}, 400)
+
+    engine = getAgent(api_key)
+    close = getattr(engine, "close_memory_conversation", None)
+    if engine is None or not callable(close):
+        return done({"outcome": "not_active"})
+
+    return done({"outcome": close(conversation_id)})
+
+
 @datachat_bp.route("/datachat/export/<token>", methods=["GET"])
 def downloadExport(token: str) -> Response | tuple[Response, int]:
 

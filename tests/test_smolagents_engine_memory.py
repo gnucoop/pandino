@@ -539,3 +539,28 @@ def test_confirm_never_runs_the_agent():
     engine.confirm_memory_turn(result)  # second confirm appends, still no run
 
     assert agent.calls == []
+
+
+# --- explicit closure ------------------------------------------------------
+
+
+def test_close_memory_conversation_delegates_to_own_store_and_is_idempotent():
+    agent = _RecordingAgent()
+    engine = _make_engine(agent)
+    conv = _confirmed(engine, _turn())
+    other = _confirmed(engine, _turn("Other?"))
+    foreign = _make_engine(_RecordingAgent())
+    foreign_conv = _confirmed(foreign, _turn())
+
+    assert engine.close_memory_conversation(foreign_conv.conversation_id) == "not_active"
+    assert foreign_conv.status == "active"
+
+    assert engine.close_memory_conversation(conv.conversation_id) == "closed"
+    assert conv.status == "closed"
+    assert engine._conversations.get(conv.conversation_id) is None
+    assert engine.close_memory_conversation(conv.conversation_id) == "not_active"
+    assert engine.close_memory_conversation("unknown") == "not_active"
+
+    assert other.status == "active"
+    assert engine._conversations.active_count() == 1
+    assert agent.calls == []

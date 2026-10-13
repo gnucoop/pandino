@@ -7,7 +7,7 @@ import textwrap
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Optional, Tuple
+from typing import Any, Literal, Optional, Tuple
 
 import pandas as pd
 from smolagents import CodeAgent, LiteLLMModel
@@ -767,6 +767,16 @@ class SmolagentsEngine(DataChatEngine):
             result.pending_turn, more_rows_available=more_rows_available, note=note
         )
         return self._conversations.confirm(result.conversation, turn)
+
+    def close_memory_conversation(
+        self, conversation_id: str
+    ) -> Literal["closed", "not_active"]:
+        """
+        Close one conversation of this engine, leaving the engine and its
+        other conversations active. The store's outcome is returned unchanged:
+        "not_active" for an unknown, already closed or foreign id.
+        """
+        return self._conversations.close(conversation_id)
 
     def _execute(
         self, message: str, task: str
