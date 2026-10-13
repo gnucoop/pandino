@@ -1,7 +1,6 @@
 """Validation of the optional /datachat memory fields (not yet wired to the route)."""
 
 import copy
-import inspect
 
 import pytest
 
@@ -58,10 +57,6 @@ def test_invalid_requests_share_one_error(payload):
         _parse_memory_request(payload)
     assert exc.value.code == "invalid_memory_request"
     assert payload == before
-
-
-def test_route_handler_does_not_use_validator_yet():
-    assert "_parse_memory_request" not in inspect.getsource(datachat_route.dataChat)
 
 
 def test_validator_touches_no_engine_or_database(monkeypatch):
