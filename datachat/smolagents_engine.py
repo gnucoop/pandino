@@ -7,7 +7,7 @@ import textwrap
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Optional, Tuple
+from typing import Any, Literal, Optional, Tuple
 
 import pandas as pd
 from smolagents import CodeAgent, LiteLLMModel
@@ -15,6 +15,16 @@ from smolagents import CodeAgent, LiteLLMModel
 import datachat.schema_snapshot_loader as schema_snapshot_loader
 import datachat.sql_datasource as sql_datasource
 from datachat.bootstrap_static import get_static_bootstrap_html
+from datachat.conversation_memory import (
+    CompactTurn,
+    ConfirmOutcome,
+    Conversation,
+    ConversationStore,
+    build_compact_turn,
+    compose_task,
+    render_historical_context,
+    with_trusted_qualifiers,
+)
 from datachat.engine_interface import DataChatEngine, EngineBootstrapResult
 from datachat.sql_datasource import SqlDatasource
 from datachat.tools.aggregate_tool import AggregateTool
@@ -310,6 +320,17 @@ def _coerce_final_payload(output: Any) -> Tuple[Optional[dict[str, Any]], bool, 
     return candidate, passed, final_kind, reason
 
 
+@dataclass(frozen=True)
+class MemoryChatResult:
+    """Outcome of chat_with_memory(): the unchanged response, plus the
+    conversation object held by the run and its unconfirmed turn. Internal:
+    never serialized into HTTP JSON."""
+
+    response: dict[str, Any]
+    conversation: Conversation
+    pending_turn: Optional[CompactTurn]
+
+
 # ----------------------------
 # Engine
 # ----------------------------
@@ -355,6 +376,12 @@ class SmolagentsEngine(DataChatEngine):
     # mid-session can never have the tool quoting names the agent was not shown.
     _sql_identifiers: dict[str, tuple[str, ...]] = field(
         default_factory=dict, init=False, repr=False
+    )
+
+    # Conversations of this engine only, used by chat_with_memory(). The
+    # memory-OFF chat() path never reads it.
+    _conversations: ConversationStore = field(
+        default_factory=ConversationStore, init=False, repr=False
     )
 
     def __post_init__(self) -> None:
@@ -684,6 +711,81 @@ class SmolagentsEngine(DataChatEngine):
         return EngineBootstrapResult(suggested_questions_html=html)
 
     def chat(self, message: str) -> Any:
+        return self._execute(message, str(message))[0]
+
+    def chat_with_memory(
+        self, message: str, conversation_id: Optional[str] = None
+    ) -> MemoryChatResult:
+        """
+        Run one turn with the conversation's confirmed history in the task.
+
+        The returned turn is prepared, never confirmed: confirmation is left
+        to the caller. May raise ConversationNotFound / ConversationLimitReached.
+        """
+        conversation = self._conversations.begin(conversation_id)
+        question = str(message)
+        task = compose_task(question, render_historical_context(conversation.turns))
+        response, passed, final_kind, run_state = self._execute(message, task)
+        pending_turn = build_compact_turn(
+            question,
+            response,
+            passed=passed,
+            final_kind=final_kind,
+            run_state=run_state,
+        )
+        return MemoryChatResult(
+            response=response, conversation=conversation, pending_turn=pending_turn
+        )
+
+    def memory_preflight(self, conversation_id: Optional[str] = None) -> None:
+        """
+        Check that chat_with_memory() would currently accept conversation_id.
+
+        Raises ConversationNotFound / ConversationLimitReached, exactly as
+        begin() does. A check, not a reservation: a closure or a new activation
+        may happen before the run, and chat_with_memory() repeats begin().
+        A candidate created here is unregistered and discarded.
+        """
+        self._conversations.begin(conversation_id)
+
+    def confirm_memory_turn(
+        self,
+        result: MemoryChatResult,
+        *,
+        more_rows_available: Optional[bool] = None,
+        note: Optional[str] = None,
+    ) -> Optional[ConfirmOutcome]:
+        """
+        Confirm the turn prepared by chat_with_memory(), on the conversation
+        object that run held. The qualifiers are backend-trusted values chosen
+        by the caller. Returns None (no state change) when no turn is pending,
+        otherwise the store's outcome unchanged.
+        """
+        if result.pending_turn is None:
+            return None
+        turn = with_trusted_qualifiers(
+            result.pending_turn, more_rows_available=more_rows_available, note=note
+        )
+        return self._conversations.confirm(result.conversation, turn)
+
+    def close_memory_conversation(
+        self, conversation_id: str
+    ) -> Literal["closed", "not_active"]:
+        """
+        Close one conversation of this engine, leaving the engine and its
+        other conversations active. The store's outcome is returned unchanged:
+        "not_active" for an unknown, already closed or foreign id.
+        """
+        return self._conversations.close(conversation_id)
+
+    def _execute(
+        self, message: str, task: str
+    ) -> Tuple[dict[str, Any], bool, Optional[str], Optional[str]]:
+        """
+        Run the agent once on `task`.
+        Returns:
+          (response, passed, final_kind, run_state)
+        """
         # Reset the per-run empty-table budget. Request identity is ambient.
         self._empty_final_rejections = 0
 
@@ -707,11 +809,11 @@ class SmolagentsEngine(DataChatEngine):
                     "verifica DATACHAT_PROVIDER/DATACHAT_MODEL e la relativa API key."
                 ),
                 "code": "MISSING_CONFIG",
-            }
+            }, False, None, None
 
         try:
             started = time.time()
-            run_result = self._agent.run(str(message), reset=True, return_full_result=True)
+            run_result = self._agent.run(task, reset=True, return_full_result=True)
             self._last_run_result = run_result
             self._last_run_duration_ms = round((time.time() - started) * 1000, 2)
         except Exception as e:
@@ -723,7 +825,12 @@ class SmolagentsEngine(DataChatEngine):
                 self.user_name,
                 str(e)[:160],
             )
-            return {"kind": "error", "message": f"SmolagentsEngine failed to run: {e}", "code": "RUN_FAILED"}
+            return (
+                {"kind": "error", "message": f"SmolagentsEngine failed to run: {e}", "code": "RUN_FAILED"},
+                False,
+                None,
+                None,
+            )
 
         out = getattr(run_result, "output", None)
 
@@ -764,7 +871,7 @@ class SmolagentsEngine(DataChatEngine):
             bool(passed),
             final_kind or "none",
         )
-        return result_payload
+        return result_payload, bool(passed), final_kind, getattr(run_result, "state", None)
 
     def get_last_trace(self) -> Optional[dict[str, Any]]:
         if self._last_run_result is None:

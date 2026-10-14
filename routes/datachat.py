@@ -13,7 +13,12 @@ from datachat.dataset_loader import load_csv_to_dataframe
 from datachat.sql_datasource import get_datasource as get_sql_datasource
 from datachat.output_normalizer import TableExporter, normalize_datachat_response
 from datachat.engine_output_adapter import adapt_engine_output, consume_adapter_fallback_used
-from datachat.chart_registry import get_recorded_charts
+from datachat.chart_registry import RecordedChart, get_recorded_charts
+from datachat.conversation_memory import (
+    ConfirmOutcome,
+    ConversationLimitReached,
+    ConversationNotFound,
+)
 from datachat.provider_contributions import get_provider_contributions
 from datachat.result_provenance import TrustedResult, lookup_trusted_result
 from utils.agent_serialization import serialize_runresult
@@ -66,13 +71,78 @@ def _attach_recorded_charts(
         return response_dict
 
     response_dict["charts"] = [chart.spec for chart in recorded]
+    chart_more_rows, chart_note = _chart_qualifiers(recorded)
     if trusted is None or not trusted.note:
-        chart_note = next((chart.note for chart in recorded if chart.note), None)
         if chart_note:
             response_dict["note"] = chart_note
-    if any(chart.more_rows_available for chart in recorded):
+    if chart_more_rows:
         response_dict["more_rows_available"] = True
     return response_dict
+
+
+def _chart_qualifiers(recorded: list[RecordedChart]) -> tuple[bool, Optional[str]]:
+    """Trusted caveats of the recorded charts: (any source had more rows, first note)."""
+    more_rows = any(chart.more_rows_available for chart in recorded)
+    note = next((chart.note for chart in recorded if chart.note), None)
+    return more_rows, note
+
+
+def _trusted_memory_qualifiers(
+    trusted: Optional[TrustedResult],
+) -> tuple[Optional[bool], Optional[str]]:
+    """
+    The qualifiers a confirmed memory turn carries, from backend-attested facts
+    only and with the precedence the response uses: the primary result's note
+    first, else the first chart note; more rows if either says so.
+    Completeness stays unknown (None) without such evidence.
+    """
+    chart_more_rows, chart_note = _chart_qualifiers(get_recorded_charts())
+    more_rows = bool(trusted is not None and trusted.more_rows_available) or chart_more_rows
+    note = trusted.note if trusted is not None and trusted.note else chart_note
+    return (True if more_rows else None), note
+
+
+_MEMORY_METHODS = ("memory_preflight", "chat_with_memory", "confirm_memory_turn")
+
+
+def _supports_memory(engine: Any) -> bool:
+    return all(callable(getattr(engine, name, None)) for name in _MEMORY_METHODS)
+
+
+def _debit_succeeded(result: Any) -> bool:
+    """edit_tokens() returns (ok, message); only an explicit True is success."""
+    return isinstance(result, tuple) and len(result) > 0 and result[0] is True
+
+
+class InvalidMemoryRequest(ValueError):
+    """The optional memory fields of a /datachat request are invalid."""
+
+    code = "invalid_memory_request"
+
+
+def _parse_memory_request(payload: dict[str, Any]) -> tuple[bool, Optional[str]]:
+    """
+    Validate the optional ``memory`` / ``conversation_id`` fields.
+
+    Returns ``(memory_enabled, conversation_id)``: absent ``memory`` means OFF,
+    a missing ``conversation_id`` with memory ON means a new conversation.
+    Strict: ``memory`` must be a real bool, ``conversation_id`` a non-blank
+    string (kept unchanged) and only with ``memory`` true. Anything else raises
+    InvalidMemoryRequest. Pure: no Flask, engine or database access.
+    """
+    memory = payload.get("memory", False)
+    if type(memory) is not bool:
+        raise InvalidMemoryRequest("memory must be a boolean")
+
+    if "conversation_id" not in payload:
+        return memory, None
+
+    conversation_id = payload["conversation_id"]
+    if not memory:
+        raise InvalidMemoryRequest("conversation_id requires memory true")
+    if not isinstance(conversation_id, str) or not conversation_id.strip():
+        raise InvalidMemoryRequest("conversation_id must be a non-empty string")
+    return True, conversation_id
 
 
 def _flush_provider_contributions(user_email: str) -> None:
@@ -140,6 +210,56 @@ def endChat() -> Response | tuple[Response, int]:
         return jsonify({"Agent deleted succesfully": "active"})
     else:
         return jsonify({"Agent was not active for this key": api_key})
+
+
+def _valid_conversation_id(value: Any) -> bool:
+    """Same rule as /datachat: a non-blank string, kept unchanged."""
+    return isinstance(value, str) and bool(value.strip())
+
+
+@datachat_bp.route("/datachat/conversation/close", methods=["POST"])
+def closeConversation() -> Response | tuple[Response, int]:
+    """
+    Close one memory conversation of the caller's engine. Idempotent: an
+    unknown, closed or foreign id, or no engine, is "not_active". Takes no
+    run guard, runs no agent, records no Usage and debits nothing.
+    """
+    _logger = current_app.config["DATACHAT_RUNTIME_LOGGER"]
+    request_id = get_request_id()
+
+    def done(body: dict[str, Any], status: int = 200) -> tuple[Response, int]:
+        _logger.info(
+            "datachat_conversation_close request_id=%s http_status=%s outcome=%s",
+            request_id,
+            status,
+            body.get("outcome") or body.get("error"),
+        )
+        return jsonify(body), status
+
+    api_key = request.headers.get("X-API-KEY")
+    user_email = request.headers.get("X-USER-EMAIL")
+
+    if not api_key:
+        return done({"error": "Missing X-API-KEY header"}, 400)
+    if not user_email:
+        return done({"error": "Missing X-USER-EMAIL header"}, 400)
+
+    assert_valid_api_key(api_key, user_email)
+
+    payload = request.get_json(silent=True)
+    if not payload:
+        return done({"error": "Missing JSON body"}, 400)
+
+    conversation_id = payload.get("conversation_id") if isinstance(payload, dict) else None
+    if not _valid_conversation_id(conversation_id):
+        return done({"error": InvalidMemoryRequest.code}, 400)
+
+    engine = getAgent(api_key)
+    close = getattr(engine, "close_memory_conversation", None)
+    if engine is None or not callable(close):
+        return done({"outcome": "not_active"})
+
+    return done({"outcome": close(conversation_id)})
 
 
 @datachat_bp.route("/datachat/export/<token>", methods=["GET"])
@@ -307,6 +427,17 @@ def dataChat() -> Response | tuple[Response, int]:
         )
         return jsonify({"error": "Missing JSON body"}), 400
 
+    try:
+        memory_enabled, conversation_id = _parse_memory_request(request.json)
+    except InvalidMemoryRequest:
+        _logger.info(
+            "datachat_request_end request_id=%s status=error http_status=400 duration_ms_total=%.2f error_code=INVALID_MEMORY_REQUEST user=%s",
+            request_id,
+            (time.time() - request_started) * 1000,
+            user_email,
+        )
+        return jsonify({"error": "invalid_memory_request"}), 400
+
     chat = request.json.get("chat")
 
     engine = getAgent(api_key)
@@ -342,6 +473,33 @@ def dataChat() -> Response | tuple[Response, int]:
         )
         return jsonify({"error": "Agent not active for this Api Key"}), 400
 
+    if memory_enabled and not _supports_memory(engine):
+        _logger.info(
+            "datachat_request_end request_id=%s status=error http_status=400 duration_ms_total=%.2f user=%s engine=%s error_code=MEMORY_NOT_SUPPORTED",
+            request_id,
+            (time.time() - request_started) * 1000,
+            user_email,
+            engine_name,
+        )
+        return jsonify({"error": "memory_not_supported"}), 400
+
+    def conversation_error(exc: Exception) -> tuple[Response, int]:
+        # Raised before any run: no Usage, no debit.
+        if isinstance(exc, ConversationNotFound):
+            status, code = 404, "conversation_not_found"
+        else:
+            status, code = 409, "conversation_limit_reached"
+        _logger.info(
+            "datachat_request_end request_id=%s status=error http_status=%s duration_ms_total=%.2f user=%s engine=%s error_code=%s",
+            request_id,
+            status,
+            (time.time() - request_started) * 1000,
+            user_email,
+            engine_name,
+            code.upper(),
+        )
+        return jsonify({"error": code}), status
+
     # Only one run per engine: a concurrent request is rejected, not queued.
     # Taken before the balance read so it cannot see a balance that the
     # active run is about to debit.
@@ -364,6 +522,14 @@ def dataChat() -> Response | tuple[Response, int]:
         )
 
     try:
+        # Conversation checks precede the balance read. Not a reservation:
+        # chat_with_memory() repeats them.
+        if memory_enabled:
+            try:
+                engine.memory_preflight(conversation_id)
+            except (ConversationNotFound, ConversationLimitReached) as exc:
+                return conversation_error(exc)
+
         # Checks if the User's tokens are enough for this operation
 
         user_tokens = get_user_tokens(user_email)
@@ -391,7 +557,15 @@ def dataChat() -> Response | tuple[Response, int]:
         # Perform the chat operation and get the response and explanation
         chat_started = time.time()
 
-        response = engine.chat(chat)
+        memory_result = None
+        if memory_enabled:
+            try:
+                memory_result = engine.chat_with_memory(chat, conversation_id)
+            except (ConversationNotFound, ConversationLimitReached) as exc:
+                return conversation_error(exc)
+            response = memory_result.response
+        else:
+            response = engine.chat(chat)
 
         # Tool-side provider calls were consumed even when the run failed.
         _flush_provider_contributions(user_email)
@@ -524,7 +698,40 @@ def dataChat() -> Response | tuple[Response, int]:
         response_dict = _attach_recorded_charts(response_dict, trusted)
 
         # Spends User's tokens
-        edit_tokens(user_email, -int(config.datachat_token_cost))
+        debit_result = edit_tokens(user_email, -int(config.datachat_token_cost))
+
+        # Deferred confirmation: the last step before the response, after
+        # normalization, charts and a successful debit, under the run guard.
+        memory_conversation_id: Optional[str] = None
+        if memory_result is not None:
+            outcome: Optional[ConfirmOutcome] = None
+            debit_ok = _debit_succeeded(debit_result)
+            if memory_result.pending_turn is not None and debit_ok:
+                more_rows, note = _trusted_memory_qualifiers(trusted)
+                outcome = engine.confirm_memory_turn(
+                    memory_result, more_rows_available=more_rows, note=note
+                )
+                if outcome in (ConfirmOutcome.ACTIVATED, ConfirmOutcome.APPENDED):
+                    memory_conversation_id = memory_result.conversation.conversation_id
+            elif conversation_id is not None:
+                # Nothing confirmed: an existing conversation keeps its id only
+                # while still active (it may have been closed during the run).
+                try:
+                    engine.memory_preflight(conversation_id)
+                    memory_conversation_id = conversation_id
+                except ConversationNotFound:
+                    pass
+            _logger.info(
+                "datachat_memory_status request_id=%s user=%s engine=%s continuation=%s turn_pending=%s debit_ok=%s confirm_outcome=%s conversation_id_returned=%s",
+                request_id,
+                user_email,
+                engine_name,
+                conversation_id is not None,
+                memory_result.pending_turn is not None,
+                debit_ok,
+                outcome.value if outcome is not None else "none",
+                memory_conversation_id is not None,
+            )
 
         response_payload: dict[str, Any] = {
             "response": response_dict,
@@ -532,6 +739,8 @@ def dataChat() -> Response | tuple[Response, int]:
         }
         if log_id is not None:
             response_payload["log_id"] = log_id
+        if memory_conversation_id is not None:
+            response_payload["conversation_id"] = memory_conversation_id
 
         _logger.info(
             "datachat_request_end request_id=%s status=ok http_status=200 duration_ms_total=%.2f user=%s engine=%s response_kind=%s adapter_fallback_used=%s log_id=%s",
