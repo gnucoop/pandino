@@ -231,6 +231,11 @@ NEXT_STEP_OPEN = (
     "Either ask your next question (exactly one), or, if you have enough to write an articulate "
     "brief, propose a brief_draft for the user's approval."
 )
+NEXT_STEP_OUTPUT_FORMAT = (
+    "Reply only with code steps: Thought, then <code>...</code>. Query the data in code, "
+    "and deliver your question or draft by calling final_answer({...}) inside the code. "
+    "Never write the message for the user as plain text."
+)
 
 LANGUAGE_NAMES = {
     "ITA": "Italian",
