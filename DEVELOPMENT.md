@@ -25,6 +25,7 @@ the Pandino Flask application.
 10. [RAG / Vector Store](#10-rag--vector-store)
 11. [DataChat Engine](#11-datachat-engine)
     - [11b. Analysis Interviewer](#11b-analysis-interviewer)
+    - [11c. Data Analyst](#11c-data-analyst)
 12. [Prompt Management (DB-driven)](#12-prompt-management-db-driven)
 13. [Admin Panel](#13-admin-panel)
 14. [Adding a New Endpoint (Step-by-Step)](#14-adding-a-new-endpoint-step-by-step)
@@ -102,6 +103,7 @@ pandino/
 │   ├── rag.py                  #   /completion.json, /agentchat
 │   ├── datachat.py             #   /startdatachat, /datachat, /enddatachat
 │   ├── interviewer.py          #   /start-analysis-interview, /analysis-interview, /end-analysis-interview
+│   ├── analyst.py              #   /start-analysis, /analysis-status, /analysis-report, /end-analysis
 │   ├── admin.py                #   /admin/* (web UI)
 │   └── utils.py                #   assert_valid_api_key() shared helper
 │
@@ -160,6 +162,27 @@ pandino/
 │   ├── prompts.py              #   In-code prompt defaults (DB-overridable)
 │   ├── bootstrap_static.py     #   Localized greeting (IT/EN/FR/ES)
 │   └── tools/record_finding_tool.py # Keeps data findings across turns
+│
+├── analyst/                    # Data analyst: approved brief → HTML report
+│   ├── README.md               #   Step-by-step guide to the module
+│   ├── orchestrator.py         #   run_analysis(): brief → plan → tasks → charts → report
+│   ├── plan.py                 #   The plan: validate_plan(), plan_from_brief() (any brief shape)
+│   ├── planner_agent.py        #   PlannerAgentEngine: any brief → plan, adds exploration tasks
+│   ├── task_agent.py           #   TaskAgentEngine(SmolagentsEngineBase): one task
+│   ├── chart_agent.py          #   ChartAgentEngine: draws the planned charts from the outputs
+│   ├── report_agent.py         #   ReportAgentEngine(SmolagentsEngineBase): writes the report
+│   ├── run.py                  #   AnalysisRun: status, progress events, cancellation
+│   ├── state.py                #   RunState: plan, outputs, insights, datasets, charts, tables
+│   ├── service.py              #   start_analysis(), report_path() (Flask-free)
+│   ├── sandbox.py              #   GuardedPythonExecutor: no file/network access from agent code
+│   ├── sql_prompt.py           #   Schema addendum scoped to the plan's relations, large tables note
+│   ├── metrics.py              #   metrics_config values, previous-run comparison
+│   ├── model_options.py        #   Model call timeout and retries for the analyst engines
+│   ├── report_template.py      #   HTML rendering (templates/report.html, Chart.js)
+│   ├── values.py               #   numpy/pandas → JSON, bounded previews
+│   ├── prompts.py              #   In-code prompt defaults (DB-overridable)
+│   ├── tools/                  #   20 tools: SQL, DataFrame analysis, saving, insights, report
+│   └── reports/                #   Default ANALYST_REPORTS_DIR, one folder per run (gitignored)
 │
 ├── llm/
 │   └── litellm_factory.py      #   build_litellm_model() for Smolagents
@@ -274,6 +297,7 @@ Known direct env reads still exist and are intentional:
 | **DataChat engine** | `DATACHAT_ENGINE`, `DATACHAT_MAX_STEPS`, `DATACHAT_RATE_LIMIT_PER_MIN`, `DATACHAT_SESSION_TTL_MIN`, `DATACHAT_LOG_LEVEL` | `smolagents`, `12`, `0`, `60`, `INFO`                  |
 | **DataChat SQL**    | `DATACHAT_SQL_ENABLED`, `DATACHAT_DB_PORT/SCHEMA`, `DATACHAT_SQL_MAX_ROWS/MAX_COLUMNS/MAX_CELL_CHARS`, `DATACHAT_SQL_STATEMENT_TIMEOUT_MS`, `DATACHAT_SQL_INCLUDE_VIEWS` (also gates view reflection), `DATACHAT_SQL_ALLOWED_TABLES/DENIED_TABLES` (tables, views and matviews alike), `DATACHAT_SQL_SCHEMA_TTL_S/SCHEMA_MAX_CHARS/SCHEMA_INCLUDE_FKS`, `DATACHAT_SQL_SCHEMA_PROFILE_VALUES/PROFILE_SAMPLE_ROWS/PROFILE_MAX_VALUES/PROFILE_MAX_VALUE_CHARS`, `DATACHAT_SQL_QUOTE_IDENTIFIERS` | `false`, `5432`/`public`, `200`/`25`/`300`, `10000`, `true`, empty, `3600`/`40000`/`true`, `true`/`50`/`3`/`32`, `true` |
 | **Interviewer**     | `INTERVIEWER_PROVIDER/MODEL`, `INTERVIEWER_MAX_STEPS`, `INTERVIEWER_MAX_TURNS`, `INTERVIEWER_MAX_NOTES`, `INTERVIEWER_MIN_QUESTIONS` (clamped 4–10), `INTERVIEWER_TOKEN_COST` | DataChat's provider/model, `15`, `12`, `30`, `4`, `1` |
+| **Analyst**         | `ANALYST_PROVIDER/MODEL` (task and chart agents), `ANALYST_REPORT_PROVIDER/MODEL` (planner and report agents), `ANALYST_PLAN_MAX_STEPS`, `ANALYST_TASK_MAX_STEPS`, `ANALYST_CHART_MAX_STEPS`, `ANALYST_REPORT_MAX_STEPS`, `ANALYST_TASK_RETRIES` (0–3), `ANALYST_MAX_EXTRA_TASKS` (0–5), `ANALYST_MAX_INSIGHTS` (0–50), `ANALYST_SQL_MAX_ROWS`, `ANALYST_DATASET_MAX_ROWS`, `ANALYST_OUTPUT_MAX_CHARS`, `ANALYST_PREVIEW_MAX_CHARS`, `ANALYST_MAX_CHARTS`, `ANALYST_CHART_MAX_POINTS`, `ANALYST_REPORTS_DIR`, `ANALYST_TOKEN_COST` | DataChat's provider/model (planner/report: the analyst's), `12`, `20`, `15`, `12`, `1`, `2`, `12`, `50`, `100000`, `20000`, `1500`, `20`, `500`, `analyst/reports`, `1` |
 | **Auth**            | `AUTH_GATEWAY_URL`, `STRIPE_SK_KEY`                                                                                      | `http://localhost:3000/validate`, `None`               |
 
 `DATACHAT_DB_HOST`, `DATACHAT_DB_NAME`, `DATACHAT_DB_USER` and `DATACHAT_DB_PASSWORD`
@@ -621,6 +645,7 @@ Blueprints:
 | `rag_bp`        | `routes/rag.py`        | `/`      |
 | `datachat_bp`   | `routes/datachat.py`   | `/`      |
 | `interviewer_bp` | `routes/interviewer.py` | `/`     |
+| `analyst_bp`    | `routes/analyst.py`    | `/`      |
 | `admin_bp`      | `routes/admin.py`      | `/admin` |
 
 ### 7.2 Services (`services/`)
@@ -642,7 +667,8 @@ Pure-Python orchestration. Key services:
   then OCR fallback for scanned PDFs (`MIN_EXTRACTED_TEXT_CHARS = 50`).
 - **`analysis_brief_service.save_approved_brief()` / `get_brief()` / `list_briefs()`**
   — storage of the analysis briefs the user approved in an interview
-  (`analysis_briefs` table). This is where the data analyst reads briefs from.
+  (`analysis_briefs` table). This is where the data analyst reads briefs from;
+  `mark_brief_consumed()` flags a brief once a report was made from it.
 
 ### 7.3 Infrastructure (`infrastructure/`)
 
@@ -658,16 +684,17 @@ Pure-Python orchestration. Key services:
   `(agent kind, API key)` (`activeEngines`), so a user can hold a DataChat session
   and an analysis interview at once (`getAgent`/`createAgent`/`deleteAgent` for
   DataChat, `getInterviewer`/`createInterviewer`/`deleteInterviewer` for the
-  interviewer). This means sessions are **per-process** —
+  interviewer, `getAnalyst`/`createAnalyst`/`deleteAnalyst` for analysis runs). This
+  means sessions are **per-process** —
   relevant when scaling horizontally (see [§16](#16-deployment--cicd)).
 - **`prompt_utils.py`** — `load_prompt(title, default_text=...)` resolution order:
   **DB → in-code default → env var → ""**. `render_prompt(template, **kwargs)` substitutes
   strict `{identifier}` placeholders in one regex pass; every other brace stays
   literal.
 
-### 7.4 DataChat (`datachat/`) and the interviewer (`interviewer/`)
+### 7.4 DataChat (`datachat/`), the interviewer (`interviewer/`) and the analyst (`analyst/`)
 
-See [§11](#11-datachat-engine) and [§11b](#11b-analysis-interviewer).
+See [§11](#11-datachat-engine), [§11b](#11b-analysis-interviewer) and [§11c](#11c-data-analyst).
 
 ### 7.5 Logging
 
@@ -787,7 +814,7 @@ must be enabled. See [§11b](#11b-analysis-interviewer).
 | Method | Path                        | Headers                                    | Body                                                                                   | Returns                                                                                   |
 | ------ | --------------------------- | ------------------------------------------ | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `POST` | `/start-analysis-interview` | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | JSON or form: `lang?`                                                                  | `{Agent active:"active", welcome}` (ends with the goal question). 400 when the SQL datasource is disabled |
-| `POST` | `/analysis-interview`       | `X-API-KEY`, `X-USER-EMAIL`                | `{answer:"..."}` · `{action:"approve"}` · `{action:"revise", answer?:"what to change"}` · `{action:"decline"}` | `{response:{type, value}}`; on approval also `brief_id`                                   |
+| `POST` | `/analysis-interview`       | `X-API-KEY`, `X-USER-EMAIL`                | `{answer:"..."}` · `{action:"approve"}` · `{action:"revise", answer?:"what to change"}` · `{action:"decline"}` | `{response:{type, value}}`; on approval also `brief_id` and `analysis`                    |
 | `POST` | `/end-analysis-interview`   | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | –                                                                                      | Deletes the in-memory interviewer                                                         |
 
 `response.type` is one of:
@@ -797,7 +824,10 @@ must be enabled. See [§11b](#11b-analysis-interviewer).
 - `brief_draft` — `value: {summary, brief, prompt_text}`. **Not stored.** Decide on it
   with `approve`, `revise` (keep working on it) or `decline`; a plain answer is refused.
 - `brief` — the approved brief, same `value` shape; it is now stored, `brief_id` is
-  returned and the session is closed.
+  returned, the data analyst starts on it and the session is closed. `analysis` is
+  `{run_id, status}`, or `{error, code}` when the analysis could not start
+  (`NOT_ENOUGH_TOKENS`, `ANALYSIS_BUSY`, ...): the approval stands anyway, and the brief
+  can be run later with `/start-analysis`.
 - `declined` — `value: {}`; nothing stored, the session is closed.
 - `error` — `value: {message, code}`. `NO_PENDING_DRAFT` and `DRAFT_PENDING` answer
   400, `MISSING_CONFIG` 500; a turn that went wrong (`INVALID_OUTPUT`, `RUN_FAILED`,
@@ -827,7 +857,7 @@ curl -X POST http://127.0.0.1:5000/analysis-interview "${H[@]}" \
 curl -X POST http://127.0.0.1:5000/analysis-interview "${H[@]}" \
   -d '{"action":"revise","answer":"Split by region too"}'
 
-# 4b) Approve: stored, returns brief_id, session closed
+# 4b) Approve: stored, returns brief_id, starts the analyst (analysis.run_id), session closed
 curl -X POST http://127.0.0.1:5000/analysis-interview "${H[@]}" -d '{"action":"approve"}'
 
 # 4c) ...or decline: nothing stored, session closed
@@ -835,6 +865,38 @@ curl -X POST http://127.0.0.1:5000/analysis-interview "${H[@]}" -d '{"action":"d
 
 # Abandon at any point
 curl -X POST http://127.0.0.1:5000/end-analysis-interview "${H[@]}"
+```
+
+### Data analyst (approved brief → HTML report)
+
+An analysis runs in the background: start it, poll its status, fetch the report. One
+run per API key at a time. The SQL datasource must be enabled. See
+[§11c](#11c-data-analyst).
+
+| Method | Path               | Headers                     | Body / query           | Returns                                                                                   |
+| ------ | ------------------ | --------------------------- | ---------------------- | ----------------------------------------------------------------------------------------- |
+| `POST` | `/start-analysis`  | `X-API-KEY`, `X-USER-EMAIL` | `{brief_id}`           | `{analysis:{run_id, status}}`; errors `{analysis:{error, code}}`: `BRIEF_NOT_FOUND` 404, `ANALYSIS_BUSY` 409, `SQL_UNAVAILABLE` 400, `NOT_ENOUGH_TOKENS` 500 |
+| `GET`  | `/analysis-status` | `X-API-KEY`, `X-USER-EMAIL` | `?since=<next_since>`  | `{run_id, brief_id, status, current_task, tasks_done, tasks_total, error, report_ready, events[], next_since}`; 404 `NO_ANALYSIS` |
+| `GET`  | `/analysis-report` | `X-API-KEY`, `X-USER-EMAIL` | `?run_id=`             | The report (`text/html`), to its owner only; 404 `NO_REPORT`                              |
+| `POST` | `/end-analysis`    | `X-API-KEY`, `X-USER-EMAIL` | –                      | `{run_id, status}`: cancels the run if still going and forgets it; 404 `NO_ANALYSIS`      |
+
+`status` is `queued → planning → running → charting → writing_report → completed`, or
+`failed` / `cancelled`. Each event is `{seq, ts, type, message, task_id?, data?}`, `type`
+one of `run_started`, `plan_started`, `plan_ready` (`data: {tasks, exploratory, charts,
+planner, planner_error}`), `task_started`, `step` (`data: {step, tools, error}`: the tools the step
+called, never its data or SQL), `insight` (the text of a finding), `task_retry`,
+`task_completed`, `task_failed`, `charts_started`, `charts_saved` (`data: {charts,
+tables, skipped}`), `charts_failed`, `report_started`, `report_saved`, `run_completed`,
+`run_failed`, `run_cancelled`. Pass the last
+`next_since` back as `since` to receive only new events; poll every few seconds until
+`status` is final.
+
+`ANALYST_TOKEN_COST` is spent when the run starts.
+
+```bash
+curl -X POST http://127.0.0.1:5000/start-analysis "${H[@]}" -d '{"brief_id":42}'
+curl "http://127.0.0.1:5000/analysis-status?since=0" "${H[@]}"
+curl "http://127.0.0.1:5000/analysis-report?run_id=20261014_101500_b42_a1b2c3" "${H[@]}" -o report.html
 ```
 
 ### Response shape — DataChat `response`
@@ -1161,9 +1223,8 @@ discarded before the next message.
 The interviewer is the first step of the data-analyst pipeline: it interviews the user
 about the analysis they want and produces an **analysis brief** — a detailed,
 validated specification that the (upcoming) data-analyst agent will execute to produce
-an HTML report. It is the agentic counterpart of digest-pipeline's `profile_generator`,
-and its brief is modelled on that project's `PROFILE`. Implementation lives in
-`interviewer/`; endpoints in `routes/interviewer.py` ([§8](#8-http-api-reference)).
+an HTML report. Implementation lives in `interviewer/`;
+endpoints in `routes/interviewer.py` ([§8](#8-http-api-reference)).
 
 ### Engine: `InterviewerEngine`
 
@@ -1232,11 +1293,12 @@ The model can only **propose**. While a draft is pending, a plain answer is refu
   before it can propose a refined draft;
 - **decline** (no model call) → nothing is stored and the session is closed.
 
-**Hand-off to the data analyst.** The approved row in `analysis_briefs` (`brief` JSONB,
-`prompt_text`, `status='ready'`), found by the `brief_id` the approval returns, is the
-input of the upcoming data-analyst agent: it will read it through
-`analysis_brief_service.get_brief()` / `list_briefs(status="ready")` and mark it
-`consumed`.
+**Hand-off to the data analyst.** Once the brief is stored, `_approve` passes its
+`brief_id` to `analyst.service.start_analysis()` before the session is closed: the
+analyst loads the row through `analysis_brief_service.get_brief()`, runs it in the
+background ([§11c](#11c-data-analyst)) and marks it `consumed` when the report is
+ready. If the analysis cannot start, the approval still stands and the response's
+`analysis` says why.
 
 ### The brief
 
@@ -1254,6 +1316,174 @@ database the interviewer was shown: every relation and column must exist, every
 `metrics_config` keys must match sub-task output keys exactly. All errors are returned
 at once. `render_brief_prompt(brief)` derives the prompt text for the data analyst;
 both are stored in `analysis_briefs` together with the interview transcript.
+
+---
+
+## 11c. Data Analyst
+
+The analyst runs an approved brief against the SQL datasource and writes an HTML
+report. Code in `analyst/` (a step-by-step guide is in `analyst/README.md`); endpoints in
+`routes/analyst.py` ([§8](#8-http-api-reference)). It's structured as a multi-agent
+layout: small agents with small contexts, each doing one part.
+
+### Any brief, one plan
+
+A brief is written by the interviewer's model, so **its structure is not guaranteed**:
+keys get renamed, nested, dropped or added. The analyst never relies on them. A planner
+turns the brief into a **plan** (`analyst/plan.py`) with one fixed shape — `title`,
+`language`, `audience`, `relations`, `tasks[{id, name, mission, depends_on, outputs,
+exploratory}]`, `charts[{id, description}]`, `report{sections, tone, length}`,
+`metrics_config` — and every later step reads the plan only. The brief itself reaches
+the task agents as context text (`brief_context_text`: every key except tasks, charts,
+report and metrics, whatever they are called).
+
+- `validate_plan()` is the planner's guard: unique snake_case ids, dependencies on
+  earlier tasks only, outputs present and unique, at most `ANALYST_MAX_EXTRA_TASKS`
+  exploratory tasks, no task of the brief depending on an exploratory one, real
+  relations, at least one chart, `metrics_config` keys equal to output keys, and every
+  task id the brief defined kept.
+- `plan_from_brief()` is the fallback when the planner fails: plain code that finds
+  tasks, charts, sections and language under any of their usual names (one level down
+  too), fills in what is missing, and always returns a valid plan. No brief stops a run.
+
+### Orchestration
+
+`analyst/orchestrator.py` (`Orchestrator.execute()`, run by `run_analysis()` in a
+background thread started by `analyst.service.start_analysis()`):
+
+1. loads the brief (owned by the user), whatever its shape;
+2. **plans**: `PlannerAgentEngine`, else `plan_from_brief`; writes `plan.json`;
+3. runs the tasks in plan order, each with a **fresh `TaskAgentEngine`**. A task whose
+   agent failed or left a required output unsaved is retried (`ANALYST_TASK_RETRIES`;
+   exploratory tasks get one attempt only); the retry is told what the failed attempt left
+   and resumes from its variables, placed in its namespace. Three steps before the cap the
+   agent is told to save what it has computed. A task the agent declares impossible (`AGENT_ERROR`) is not retried, and the
+   tasks depending on a failed one are skipped;
+4. **draws the charts**: `ChartAgentEngine`. Should it fail, the report has no charts but
+   is still written;
+5. runs the `ReportAgentEngine` on the results. Should it fail, a plain report is
+   rendered from the task summaries and insights, so a run that analysed the data always
+   ends with a report;
+6. writes `run_metadata.json` and marks the brief `consumed`.
+
+### Agents
+
+All four engines subclass `SmolagentsEngineBase` (`datachat/smolagents_base.py`), like
+the interviewer, and are guarded by `final_answer_checks`.
+
+- **`PlannerAgentEngine`** (`ANALYST_REPORT_MODEL`, `ANALYST_PLAN_MAX_STEPS`): reads the
+  brief as compact JSON, sees the whole schema, probes the data with the statistics tools,
+  and answers `{"kind":"plan","plan":{...}}`. It keeps the brief's tasks, makes vague
+  missions self-contained, adds up to `ANALYST_MAX_EXTRA_TASKS` exploratory tasks
+  (anomalies, concentrations, correlations, trend breaks, data quality) grounded in what
+  it saw, lists the brief's charts or designs 3–6, and maps metric requests to
+  `metrics_config`. Refused until `validate_plan` passes.
+- **`TaskAgentEngine`** (`ANALYST_MODEL`, `ANALYST_TASK_MAX_STEPS`): one task. Its
+  instructions carry the schema of the plan's relations only, the others named in one
+  line (`analyst/sql_prompt.py`), plus the relations above `ANALYST_DATASET_MAX_ROWS`
+  with their estimated row counts (`pg_class.reltuples`) and the rules for them: aggregate
+  in SQL, sample with `TABLESAMPLE` (the planner gets the same note). Its task carries the brief as context text, its own
+  mission and output keys, and a description — not the content — of its inputs and of
+  the datasets loaded so far. Never the other missions or the report. Its namespace
+  holds `datasets` and `inputs`, placed in `agent.state`. Besides its outputs it records
+  notable facts with `record_insight` (text plus computed evidence). Final answer:
+  `{"kind":"task_done","summary"}`, refused while a required output is unsaved; or
+  `{"kind":"error","message"}`.
+- **`ChartAgentEngine`** (`ANALYST_MODEL`, `ANALYST_CHART_MAX_STEPS`): draws every planned
+  chart. Its namespace holds `outputs` (every completed task's outputs, full precision)
+  and `datasets`; it builds the Chart.js configurations in code, so no number goes
+  through the model. Final answer `{"kind":"charts_done","coverage":[{chart, saved,
+  reason}]}`, refused until every planned chart is saved (under a name that exists) or
+  skipped with a reason.
+- **`ReportAgentEngine`** (`ANALYST_REPORT_MODEL`, `ANALYST_REPORT_MAX_STEPS`): reads
+  the results and insights and writes the report sections in markdown, placing charts
+  and tables by name; insights go to an "additional findings" section. It never queries
+  the database and never handles HTML. Final answer: `{"kind":"report_saved"}`, refused
+  until the file is written.
+
+### Tools (`analyst/tools/`)
+
+| Agent   | Tools |
+| ------- | ----- |
+| planner | `sql_stats`, `sql_group_stats`, `sql_correlation`, `sql_outliers`, `sql_engine` |
+| task    | `load_dataset` (SELECT → `datasets[name]`, only shape and 3 rows back), `sql_stats`, `sql_group_stats`, `sql_correlation`, `sql_outliers` (computed in the database), `detect_anomalies`, `run_regression`, `run_forecast` (on a loaded dataset, scikit-learn), `save_sub_task_output` (a table above `ANALYST_OUTPUT_MAX_CHARS` becomes `datasets["<task>.<key>"]` plus its first rows; above `ANALYST_DATASET_MAX_ROWS` it is refused), `record_insight`, `sql_engine` (capped at `ANALYST_SQL_MAX_ROWS`) |
+| chart   | `save_chart` (a Chart.js configuration), `save_table`, `load_dataset`, `sql_engine` |
+| report  | `read_sub_task_state` (outputs as previews, plus insights), `get_sub_task_status`, `save_run_metrics`, `get_delta_section`, `get_all_saved_charts`, `get_html_template`, `save_html_report` |
+
+Every SQL statement a tool builds goes through `sql_guard.validate_select` as the exact
+text that runs; names are resolved against the reflected schema and quoted.
+
+### Sandbox
+
+Every analyst agent, and the interviewer (through the engine base's `_executor()` hook),
+runs its code in `GuardedPythonExecutor` (`analyst/sandbox.py`):
+smolagents' own executor lets code reach a tool's private attributes
+(`sql_engine._datasource`), and so query past the SQL guard. pandas
+and numpy cannot be imported (only `json`, `math`, `statistics`, `datetime`): agents
+compute through the injected DataFrames' methods. Before each snippet runs, its syntax
+tree is checked, and file, network and dynamic access is refused: `to_csv`-like
+methods, `read_*`, `save*`/`load*`/`dump*`, private attributes, `getattr`, `open`,
+`eval`, ... A step the model wrote as an escaped string (literal `\n`, `\"`) is decoded
+first when that makes it parse, and so is a `\n` split by a real line break
+(`unescape_code`), before the check runs.
+The analyst's model calls are cut at 180 s and re-sent up to twice by LiteLLM
+(`analyst/model_options.py`, through the engine base's `_model_options()` hook), so a hung
+provider call no longer fails a whole agent run. The task text tells the agent to build
+outputs from its variables, never from numbers copied out of printed results, and every
+analyst agent's task ends with `CODE_STEP_RULE`: each reply is a code step, never a prose
+announcement.
+
+### Token economy
+
+- Fresh context per task, no manager LLM.
+- Schema scoped to the plan's relations for task and chart agents; large tables named
+  with estimated row counts, so they are aggregated or sampled rather than loaded.
+- Data in DataFrames, not in the context.
+- Outputs capped (`ANALYST_OUTPUT_MAX_CHARS`) and read back by the report agent as
+  previews (`ANALYST_PREVIEW_MAX_CHARS`).
+- HTML rendered by `report_template.py`, never generated or echoed by the model.
+- KPI values filled from the outputs by key (`save_run_metrics`), never relayed by a
+  model.
+- Charts built in code from the namespace, not from numbers in the prompt.
+- A cheaper `ANALYST_MODEL` can run the tasks and charts, and a stronger
+  `ANALYST_REPORT_MODEL` the planning and writing.
+- Spent on purpose: the planner run and the exploration tasks (`ANALYST_MAX_EXTRA_TASKS`,
+  0 turns exploration off).
+- Token usage per agent run is recorded in `run_metadata.json`.
+
+### Report and run folder
+
+Each run gets `ANALYST_REPORTS_DIR/<YYYYmmdd_HHMMSS>_b<brief_id>_<hex>/`:
+
+- `report.html` — one self-contained page (`analyst/templates/report.html`):
+  - KPI cards from the plan's `metrics_config`, with the change since the previous completed run
+    of the same brief;
+  - the sections, with Chart.js charts (CDN, pinned) and escaped tables;
+  - an appendix with any chart or table no section placed;
+  - numbers formatted for the report language (`Intl.NumberFormat`).
+  - Markdown is rendered with HTML disabled: nothing an agent writes reaches the page
+    as raw HTML.
+- `run_metadata.json` — status, owner, timestamps, metrics (the next run's baseline),
+  token usage, models, `planner` (whether its plan was used, its error message, its last
+  step errors), `chart_agent` (done, error, reasons for skipped charts, step errors),
+  `report_agent` (fallback report used, error, step errors).
+- `plan.json` — the plan the run followed.
+- `sub_task_state.json` — every task's status, summary, outputs and `step_errors` (the
+  last 5 step errors across attempts, first line each: they may quote SQL, so they stay
+  out of the progress events); the insights; the chart and table names.
+
+### Progress and lifecycle
+
+`AnalysisRun` (`analyst/run.py`) holds the status and a numbered event list, read by
+`/analysis-status?since=N`. A smolagents step callback emits one `step` event per agent
+step, naming the tools the step called. One run per API key lives in `agent_manager`
+(kind `analyst`); a finished run is replaced by the next start, and `/end-analysis` (or
+replacement) cancels a running one at its next agent step. Runs live in process memory,
+like every session, but reports stay on disk: `/analysis-report` reads them from the run
+folder, checking the owner in `run_metadata.json`.
+
+Each run binds its `run_id` as the logging request id. Usage recording
+(`record_token_consumption`) is not wired yet, because it needs a request context.
 
 ---
 
@@ -1284,6 +1514,15 @@ Known prompt titles used across the codebase:
 | `interviewer_system`                     | Interviewer persona, method, output contract, brief standard |
 | `interviewer_sql_addendum`               | Interviewer schema + SQL rules, appended to `interviewer_system` |
 | `interviewer_turn`                       | Interviewer per-turn task (interview state, latest message, next step) |
+| `analyst_plan_system`                    | Analyst planner: turning any brief into a plan, output contract |
+| `analyst_plan_turn`                      | Analyst planner: the brief as written |
+| `analyst_task_system`                    | Analyst task agent: role, method, insights, output contract |
+| `analyst_task_sql_addendum`              | Analyst planner, task and chart agents: the schema + SQL rules |
+| `analyst_task_turn`                      | Analyst task agent: brief context, the task, its inputs and datasets |
+| `analyst_chart_system`                   | Analyst chart agent: Chart.js rules, coverage contract |
+| `analyst_chart_turn`                     | Analyst chart agent: the charts to draw, the outputs and datasets |
+| `analyst_report_system`                  | Analyst report agent: role, steps, writing rules, output contract |
+| `analyst_report_turn`                    | Analyst report agent: the plan's report requirements and the task summaries |
 
 Manage them via the admin UI (`/admin/prompts`) or the `prompts` table directly.
 
@@ -1307,9 +1546,16 @@ render, so one stale name no longer discards the whole substitution.
 | Placeholder    | Available in             |
 | -------------- | ------------------------ |
 | `{columns}`    | `data_chat_system` — the uploaded dataset's column list |
-| `{sql_schema}` | `data_chat_sql_addendum`, `interviewer_sql_addendum` — the rendered database schema |
+| `{sql_schema}` | `data_chat_sql_addendum`, `interviewer_sql_addendum`, `analyst_task_sql_addendum` — the rendered database schema |
 | `{language}`, `{min_questions}` | `interviewer_system` — the interview language, the minimum questions before a draft |
 | `{interview_state}`, `{latest_message}`, `{next_step}` | `interviewer_turn` |
+| `{language}` | `analyst_task_system`, `analyst_chart_system`, `analyst_report_system` — the report language |
+| `{max_extra}` | `analyst_plan_system` — `ANALYST_MAX_EXTRA_TASKS` |
+| `{brief}` | `analyst_plan_turn` — the brief as compact JSON |
+| `{max_charts}` | `analyst_chart_system` |
+| `{charts}`, `{outputs}`, `{datasets}` | `analyst_chart_turn` |
+| `{brief_context}`, `{sub_task}`, `{inputs}`, `{datasets}` | `analyst_task_turn` |
+| `{brief_report}`, `{tasks}` | `analyst_report_turn` |
 
 If an override omits `{sql_schema}`, the schema is appended after the template rather
 than dropped, so an addendum stored before the placeholder existed keeps working. A
@@ -1405,6 +1651,16 @@ To add, say, `POST /summarize_text`:
   `tests/test_interviewer_brief.py` (brief schema and rendering),
   `tests/test_interviewer_routes.py` (HTTP contract), `tests/test_analysis_brief_service.py`
   (storage) and `tests/test_agent_manager.py` (per-kind sessions).
+- **Data analyst:** `tests/test_analyst_plan.py` (briefs of many shapes → valid plans,
+  `validate_plan`), `tests/test_analyst_orchestrator.py` (planning and its fallback,
+  order, retries, skipped dependents, charts, report fallback, cancellation, metadata;
+  scripted fake engines),
+  `tests/test_analyst_agents.py` (engines built through `__post_init__` as for the
+  interviewer), `tests/test_analyst_sql_tools.py`, `tests/test_analyst_sql_prompt.py` and `tests/test_analyst_data_tools.py`
+  (tools, on `tests/fake_sql_datasource.py` and small DataFrames),
+  `tests/test_analyst_sandbox.py`, `tests/test_analyst_report.py` (metrics, delta,
+  rendering), `tests/test_analyst_state.py` and `tests/test_analyst_routes.py`
+  (service checks and HTTP contract). Shared builders: `tests/analyst_helpers.py`.
 - When writing tests, follow the same pattern: `unittest.mock.patch.dict` for env,
   and mock `infrastructure.*` boundaries. Services are designed to be tested without
   Flask.

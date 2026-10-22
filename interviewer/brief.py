@@ -4,14 +4,12 @@ brief.py
 
 The analysis brief: what the interviewer produces and the data analyst consumes.
 
-A brief is a plain JSON-compatible dict, modelled on digest-pipeline's PROFILE
-and adapted to an analyst that reads the database directly. It is written by
-the model, so nothing about it is trusted: validate_brief() checks every field
+A brief is a plain JSON-compatible dict, adapted to an analyst that reads the database directly. 
+It is written by the model, so nothing about it is trusted: validate_brief() checks every field
 against the schema below *and* against the database the interviewer was shown
 — a brief naming a column that does not exist would send the analyst after
 data that is not there. Its error list is replayed to the model, which fixes
-the brief and proposes it again (the validate -> repair loop digest-pipeline
-runs by hand).
+the brief and proposes it again (the validate -> repair loop).
 
 render_brief_prompt() turns a valid brief into the long prompt text handed to
 the data analyst. The dict stays the source of truth; the text is derived.
