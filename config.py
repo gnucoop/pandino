@@ -211,6 +211,55 @@ class InterviewerConfig:
     min_questions: int
 
 
+@dataclass(frozen=True)
+class AnalystConfig:
+    """
+    Data analyst settings.
+
+    The analyst runs an approved analysis brief against the same read-only SQL
+    datasource as DataChat (DatachatSqlConfig): a planner agent turns the brief
+    into a plan, one task agent runs each planned task, a chart agent draws the
+    charts and a report agent assembles the HTML report. Its models and limits
+    are its own.
+    """
+
+    # Model of the task and chart agents, which compute on the data.
+    provider: str
+    model: str
+    # Model of the planner and report agents, which reason about the brief and
+    # write the report.
+    report_provider: str
+    report_model: str
+
+    plan_max_steps: int
+    task_max_steps: int
+    chart_max_steps: int
+    report_max_steps: int
+    # Further attempts at a sub-task whose agent failed or left a required
+    # output unsaved.
+    task_retries: int
+    # Exploration tasks the planner may add to the brief's own tasks (0: none).
+    max_extra_tasks: int
+    # Notable facts the task agents may record with record_insight, per run.
+    max_insights: int
+
+    # Rows sql_engine may return into the agent's context.
+    sql_max_rows: int
+    # Rows load_dataset may load into a DataFrame, which stays out of the context.
+    dataset_max_rows: int
+
+    # Size of one saved sub-task output, as JSON characters.
+    output_max_chars: int
+    # Size of one output value as the report agent reads it.
+    preview_max_chars: int
+    max_charts: int
+    chart_max_points: int
+
+    # Where each run gets its own folder (report.html, run_metadata.json,
+    # sub_task_state.json). Relative paths resolve against the working directory.
+    reports_dir: str
+
+
 # ---------------------------------------------------------------------------
 # Top-level config
 # ---------------------------------------------------------------------------
@@ -229,6 +278,7 @@ class AppConfig:
     datachat: DatachatConfig
     datachat_sql: DatachatSqlConfig
     interviewer: InterviewerConfig
+    analyst: AnalystConfig
 
     auth_gateway_url: str
     stripe_key: Optional[str]
@@ -240,6 +290,7 @@ class AppConfig:
     audio_form_token_cost: int
     compare_docs_token_cost: int
     interviewer_token_cost: int
+    analyst_token_cost: int
 
     # Technical accounting identity used only by the legacy Dino fallback of
     # /storeragfile. Optional[str] = None means "no technical identity
@@ -513,6 +564,35 @@ def load_config() -> AppConfig:
         min_questions=_env_int("INTERVIEWER_MIN_QUESTIONS", 4, minimum=4, maximum=10),
     )
 
+    analyst_provider = os.environ.get("ANALYST_PROVIDER", models.datachat_provider).strip()
+    analyst_model = os.environ.get("ANALYST_MODEL", models.datachat_model).strip()
+    analyst = AnalystConfig(
+        provider=analyst_provider,
+        model=analyst_model,
+        report_provider=os.environ.get("ANALYST_REPORT_PROVIDER", analyst_provider).strip(),
+        report_model=os.environ.get("ANALYST_REPORT_MODEL", analyst_model).strip(),
+        plan_max_steps=_env_int("ANALYST_PLAN_MAX_STEPS", 12, minimum=1, maximum=30),
+        task_max_steps=_env_int("ANALYST_TASK_MAX_STEPS", 20, minimum=1, maximum=50),
+        chart_max_steps=_env_int("ANALYST_CHART_MAX_STEPS", 15, minimum=1, maximum=40),
+        report_max_steps=_env_int("ANALYST_REPORT_MAX_STEPS", 12, minimum=1, maximum=30),
+        task_retries=_env_int("ANALYST_TASK_RETRIES", 1, minimum=0, maximum=3),
+        max_extra_tasks=_env_int("ANALYST_MAX_EXTRA_TASKS", 2, minimum=0, maximum=5),
+        max_insights=_env_int("ANALYST_MAX_INSIGHTS", 12, minimum=0, maximum=50),
+        sql_max_rows=_env_int("ANALYST_SQL_MAX_ROWS", 50, minimum=1, maximum=1000),
+        dataset_max_rows=_env_int(
+            "ANALYST_DATASET_MAX_ROWS", 100000, minimum=1, maximum=1000000
+        ),
+        output_max_chars=_env_int(
+            "ANALYST_OUTPUT_MAX_CHARS", 20000, minimum=1000, maximum=200000
+        ),
+        preview_max_chars=_env_int(
+            "ANALYST_PREVIEW_MAX_CHARS", 1500, minimum=200, maximum=20000
+        ),
+        max_charts=_env_int("ANALYST_MAX_CHARTS", 20, minimum=1, maximum=100),
+        chart_max_points=_env_int("ANALYST_CHART_MAX_POINTS", 500, minimum=10, maximum=5000),
+        reports_dir=os.environ.get("ANALYST_REPORTS_DIR", "").strip() or "analyst/reports",
+    )
+
     # A misconfigured SQL datasource disables itself; it does not stop the
     # application from booting. The CSV DataChat path, and every other feature,
     # work without it, and failing here would take them all down over a feature
@@ -536,6 +616,7 @@ def load_config() -> AppConfig:
         datachat=datachat,
         datachat_sql=datachat_sql,
         interviewer=interviewer,
+        analyst=analyst,
         auth_gateway_url=os.environ.get(
             "AUTH_GATEWAY_URL", "http://localhost:3000/validate"
         ),
@@ -549,4 +630,5 @@ def load_config() -> AppConfig:
         or None,
         admin_rag_usage_username=os.environ.get("ADMIN_RAG_USAGE_USERNAME") or None,
         interviewer_token_cost=int(os.environ.get("INTERVIEWER_TOKEN_COST", "1")),
+        analyst_token_cost=int(os.environ.get("ANALYST_TOKEN_COST", "1")),
     )
