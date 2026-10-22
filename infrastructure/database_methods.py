@@ -1616,3 +1616,23 @@ def build_list_analysis_briefs_query(
         col_approved=sql.Identifier("approved_at"),
     )
     return query, tuple(params)
+
+
+def build_update_analysis_brief_status_query(
+    brief_id: int,
+    status: str,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to change the status of an analysis brief.
+
+    :param brief_id: ID of the brief.
+    :param status: New status ('ready', 'consumed' or 'archived'; the table
+        CHECK constraint refuses anything else).
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL("UPDATE {table} SET {col_status} = %s WHERE {col_id} = %s").format(
+        table=sql.Identifier("analysis_briefs"),
+        col_status=sql.Identifier("status"),
+        col_id=sql.Identifier("id"),
+    )
+    return query, (status, brief_id)
