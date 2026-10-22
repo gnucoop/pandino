@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from smolagents import CodeAgent, LiteLLMModel
+from smolagents.local_python_executor import PythonExecutor
 
 import datachat.sql_datasource as sql_datasource
 from datachat.sql_datasource import SqlDatasource
@@ -115,6 +116,14 @@ class SmolagentsEngineBase:
     def _check_final_answer(self, *args: Any, **kwargs: Any) -> bool:
         raise NotImplementedError
 
+    def _executor(self) -> Optional[PythonExecutor]:
+        """The executor the agent's code runs in; smolagents' default when None."""
+        return None
+
+    def _model_options(self) -> dict[str, Any]:
+        """Extra build_litellm_model() options (timeout, num_retries); none by default."""
+        return {}
+
     # --- init helpers ---
 
     def _set_missing_config(self) -> None:
@@ -127,6 +136,7 @@ class SmolagentsEngineBase:
                 provider=self._provider,
                 configured_model=self._configured_model,
                 temperature=0.0,
+                **self._model_options(),
             )
         except Exception:
             return None
@@ -181,6 +191,9 @@ class SmolagentsEngineBase:
             "max_steps": self._max_steps,
             "additional_authorized_imports": ["json"],
         }
+        executor = self._executor()
+        if executor is not None:
+            base_kwargs["executor"] = executor
 
         try:
             agent = CodeAgent(**{**base_kwargs, "final_answer_checks": [self._check_final_answer]})
