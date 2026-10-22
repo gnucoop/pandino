@@ -31,6 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Optional, Tuple
 
+from analyst.sandbox import GuardedPythonExecutor
 from config import InterviewerConfig
 from datachat.engine_interface import EngineBootstrapResult
 from datachat.final_answer_contract import (
@@ -53,6 +54,7 @@ from interviewer.prompts import (
     NEXT_STEP_AFTER_REJECTION,
     NEXT_STEP_GATE_NOT_MET,
     NEXT_STEP_OPEN,
+    NEXT_STEP_OUTPUT_FORMAT,
     NEXT_STEP_TURN_LIMIT,
 )
 from interviewer.state import QUESTION_TOPICS, InterviewState
@@ -168,6 +170,12 @@ class InterviewerEngine(SmolagentsEngineBase):
     def _extra_tools(self) -> list[Any]:
         return [RecordFindingTool(self._state)]
 
+    def _executor(self) -> GuardedPythonExecutor:
+        # The analyst's guarded executor: smolagents' default one lets the code
+        # reach a tool's private attributes (sql_engine._datasource), and so run
+        # queries past the SQL guard or read the database configuration.
+        return GuardedPythonExecutor()
+
     # --- final answer ---
 
     def _evaluate(self, output: Any) -> Tuple[Optional[dict[str, Any]], Optional[str], Optional[str]]:
@@ -227,7 +235,7 @@ class InterviewerEngine(SmolagentsEngineBase):
             template,
             interview_state=self._state.render_for_task(),
             latest_message=str(latest_message or "").strip() or "(no message)",
-            next_step=self._next_step(),
+            next_step=f"{self._next_step()}\n{NEXT_STEP_OUTPUT_FORMAT}",
         )
 
     def _missing_config_error(self) -> dict[str, Any]:
