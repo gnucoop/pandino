@@ -17,7 +17,9 @@ import pytest
 import datachat.schema_snapshot_loader as loader
 from config import InterviewerConfig
 from interviewer.bootstrap_static import get_opening_question, get_static_bootstrap_html
+from analyst.sandbox import GuardedPythonExecutor
 from interviewer.engine import InterviewerEngine
+from interviewer.prompts import NEXT_STEP_OUTPUT_FORMAT
 from tests.fake_sql_datasource import FakeDatasource, operational_error
 
 COLUMNS = [
@@ -171,10 +173,26 @@ def test_the_instructions_carry_the_schema_and_the_minimum(built):
     assert "{sql_schema}" not in instructions
 
 
+def test_the_agent_code_runs_through_the_sandbox_guard(built):
+    _, agent_cls = built
+    assert type(agent_cls.call_args.kwargs["executor"]) is GuardedPythonExecutor
+
+
 def test_the_final_answer_guard_is_installed(built):
     engine, agent_cls = built
 
     assert agent_cls.call_args.kwargs["final_answer_checks"] == [engine._check_final_answer]
+
+
+def test_the_interviewer_keeps_litellm_s_call_defaults():
+    with patch("datachat.smolagents_base.build_litellm_model", return_value=object()) as build_model, \
+         patch("datachat.smolagents_base.sql_datasource.get_datasource",
+               return_value=FakeDatasource(tables=["orders"], columns=COLUMNS)), \
+         patch("datachat.smolagents_base.CodeAgent"):
+        InterviewerEngine(api_key="k", user_name="tester", config=make_config(), lang="ENG")
+
+    assert "timeout" not in build_model.call_args.kwargs
+    assert "num_retries" not in build_model.call_args.kwargs
 
 
 def test_no_database_means_no_interviewer():
@@ -243,6 +261,16 @@ def test_the_transcript_is_carried_into_the_next_turn(engine):
     assert "[user] I want revenue by country" in second_task
     assert "[interviewer] [goal] About goal?" in second_task
     assert "LATEST USER MESSAGE\nTo set targets" in second_task
+
+
+def test_every_turn_reminds_the_model_to_answer_in_code(engine):
+    script(engine, question("goal"), question("data"))
+
+    engine.chat("I want revenue by country")
+    engine.chat("To set targets")
+
+    for task in engine.tasks:
+        assert task.rstrip().endswith(NEXT_STEP_OUTPUT_FORMAT)
 
 
 def test_recorded_findings_reach_later_turns(engine):

@@ -357,3 +357,78 @@ def test_interviewer_min_questions_never_drops_below_four(raw, expected):
     env = {**REQUIRED_ENV, "INTERVIEWER_MIN_QUESTIONS": raw}
     with patch.dict("os.environ", env, clear=True):
         assert load_config().interviewer.min_questions == expected
+
+
+# ---------------------------------------------------------------------------
+# Data analyst
+# ---------------------------------------------------------------------------
+
+
+def test_analyst_defaults_follow_the_datachat_model():
+    env = {**REQUIRED_ENV, "DATACHAT_MODEL": "my/model", "DATACHAT_PROVIDER": "Mistral"}
+    with patch.dict("os.environ", env, clear=True):
+        cfg = load_config()
+
+    analyst = cfg.analyst
+    assert (analyst.provider, analyst.model) == ("Mistral", "my/model")
+    assert (analyst.report_provider, analyst.report_model) == ("Mistral", "my/model")
+    assert analyst.plan_max_steps == 12
+    assert analyst.task_max_steps == 20
+    assert analyst.chart_max_steps == 15
+    assert analyst.report_max_steps == 12
+    assert analyst.task_retries == 1
+    assert analyst.max_extra_tasks == 2
+    assert analyst.max_insights == 12
+    assert analyst.sql_max_rows == 50
+    assert analyst.dataset_max_rows == 100000
+    assert analyst.output_max_chars == 20000
+    assert analyst.preview_max_chars == 1500
+    assert analyst.max_charts == 20
+    assert analyst.chart_max_points == 500
+    assert analyst.reports_dir == "analyst/reports"
+    assert cfg.analyst_token_cost == 1
+
+
+def test_analyst_report_model_defaults_to_the_analyst_model():
+    env = {
+        **REQUIRED_ENV,
+        "ANALYST_MODEL": "task/model",
+        "ANALYST_PROVIDER": "Anthropic",
+        "ANALYST_TOKEN_COST": "5",
+    }
+    with patch.dict("os.environ", env, clear=True):
+        cfg = load_config()
+
+    assert (cfg.analyst.report_provider, cfg.analyst.report_model) == ("Anthropic", "task/model")
+    assert cfg.analyst_token_cost == 5
+
+
+def test_analyst_report_model_can_differ():
+    env = {
+        **REQUIRED_ENV,
+        "ANALYST_MODEL": "task/model",
+        "ANALYST_REPORT_MODEL": "report/model",
+        "ANALYST_REPORTS_DIR": "/srv/reports",
+    }
+    with patch.dict("os.environ", env, clear=True):
+        cfg = load_config()
+
+    assert cfg.analyst.model == "task/model"
+    assert cfg.analyst.report_model == "report/model"
+    assert cfg.analyst.reports_dir == "/srv/reports"
+
+
+@pytest.mark.parametrize(
+    "name,raw,attribute,expected",
+    [
+        ("ANALYST_TASK_RETRIES", "9", "task_retries", 3),
+        ("ANALYST_MAX_EXTRA_TASKS", "9", "max_extra_tasks", 5),
+        ("ANALYST_MAX_INSIGHTS", "-1", "max_insights", 0),
+        ("ANALYST_TASK_MAX_STEPS", "0", "task_max_steps", 1),
+        ("ANALYST_SQL_MAX_ROWS", "5000", "sql_max_rows", 1000),
+        ("ANALYST_DATASET_MAX_ROWS", "abc", "dataset_max_rows", 100000),
+    ],
+)
+def test_analyst_limits_are_clamped(name, raw, attribute, expected):
+    with patch.dict("os.environ", {**REQUIRED_ENV, name: raw}, clear=True):
+        assert getattr(load_config().analyst, attribute) == expected

@@ -15,6 +15,7 @@ from infrastructure.database_methods import (
     build_get_analysis_brief_query,
     build_insert_analysis_brief_query,
     build_list_analysis_briefs_query,
+    build_update_analysis_brief_status_query,
 )
 
 BRIEF = {"name": "Revenue by region", "mission": "..."}
@@ -70,6 +71,13 @@ def test_list_applies_only_the_filters_given():
     assert params == ("ready", 5)
 
 
+def test_status_update_targets_one_brief():
+    query, params = build_update_analysis_brief_status_query(7, "consumed")
+
+    assert query.as_string(None) == 'UPDATE "analysis_briefs" SET "status" = %s WHERE "id" = %s'
+    assert params == ("consumed", 7)
+
+
 # ---------------------------------------------------------------------------
 # database_pg wrapper
 # ---------------------------------------------------------------------------
@@ -97,6 +105,15 @@ def test_save_rolls_back_on_failure(monkeypatch):
 
     conn.rollback.assert_called_once()
     conn.close.assert_called_once()
+
+
+def test_status_update_reports_whether_the_brief_exists(monkeypatch):
+    conn = MagicMock()
+    conn.cursor.return_value.rowcount = 0
+    monkeypatch.setattr(database_pg, "connect", lambda: conn)
+
+    assert database_pg.set_analysis_brief_status(7, "consumed") is False
+    conn.commit.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -130,3 +147,11 @@ def test_the_service_wraps_storage_errors(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Failed to save analysis brief: db down"):
         service.save_approved_brief(user_email="a@b.c", brief=BRIEF, prompt_text="p")
+
+
+def test_marking_a_brief_consumed(monkeypatch):
+    calls = []
+    monkeypatch.setattr(service, "set_analysis_brief_status", lambda *args: calls.append(args) or True)
+
+    assert service.mark_brief_consumed(7) is True
+    assert calls == [(7, "consumed")]

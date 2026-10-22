@@ -3,8 +3,8 @@ Route-level tests for the analysis interviewer endpoints.
 
 They pin the HTTP contract: the SQL datasource is required, starting is free
 and tokens are spent only on usable turns, a draft is never stored, approval
-stores the brief and returns its id, and approving or declining ends the
-session. No database and no LLM are contacted — the engine is a
+stores the brief, returns its id and starts the analyst on it, and approving
+or declining ends the session. No database and no LLM are contacted — the engine is a
 scripted fake and every collaborator the routes reach for is patched.
 """
 
@@ -79,7 +79,10 @@ def _make_app() -> Flask:
 @pytest.fixture
 def env(monkeypatch):
     """Patch everything past validation; record token spending and saved briefs."""
-    state = SimpleNamespace(spent=[], saved=[], engine=FakeEngine(), tokens=10)
+    state = SimpleNamespace(
+        spent=[], saved=[], analyses=[], engine=FakeEngine(), tokens=10,
+        analysis=({"run_id": "run-1", "status": "queued"}, 200),
+    )
 
     monkeypatch.setattr(agent_manager, "activeEngines", {})
     monkeypatch.setattr(interviewer_route, "assert_valid_api_key", lambda *a: None)
@@ -97,6 +100,12 @@ def env(monkeypatch):
         return {"brief_id": 42, "name": kwargs["brief"]["name"]}
 
     monkeypatch.setattr(interviewer_route, "save_approved_brief", fake_save)
+
+    def fake_start_analysis(**kwargs):
+        state.analyses.append(kwargs)
+        return state.analysis
+
+    monkeypatch.setattr(interviewer_route, "start_analysis_payload", fake_start_analysis)
     state.app = _make_app()
     return state
 
@@ -240,6 +249,31 @@ def test_approval_stores_the_brief_and_returns_its_id(started):
     assert started.spent == []  # approval is not a model call
 
 
+def test_approval_hands_the_brief_to_the_analyst(started):
+    started.engine._results = [DRAFT]
+    _turn(started, {"answer": "a short report"})
+
+    body = _turn(started, {"action": "approve"}).get_json()
+
+    assert body["analysis"] == {"run_id": "run-1", "status": "queued"}
+    assert started.analyses[0]["brief_id"] == 42
+    assert started.analyses[0]["api_key"] == "key-123"
+    assert started.analyses[0]["user_email"] == "tester@example.com"
+
+
+def test_an_analysis_that_cannot_start_does_not_undo_the_approval(started):
+    started.engine._results = [DRAFT]
+    _turn(started, {"answer": "a short report"})
+    started.analysis = ({"error": "Not enough tokens.", "code": "NOT_ENOUGH_TOKENS"}, 500)
+
+    response = _turn(started, {"action": "approve"})
+
+    assert response.status_code == 200
+    assert response.get_json()["brief_id"] == 42
+    assert response.get_json()["analysis"]["code"] == "NOT_ENOUGH_TOKENS"
+    assert agent_manager.getInterviewer("key-123") is None
+
+
 def test_approval_ends_the_session(started):
     started.engine._results = [DRAFT]
     _turn(started, {"answer": "a short report"})
@@ -264,6 +298,7 @@ def test_a_failed_save_leaves_the_draft_pending(started, monkeypatch):
     assert response.status_code == 500
     assert started.engine.pending_draft is not None
     assert ("approve",) not in started.engine.calls
+    assert started.analyses == []
     assert agent_manager.getInterviewer("key-123") is started.engine
 
 
