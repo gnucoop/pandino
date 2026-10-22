@@ -8,6 +8,7 @@ from datachat.engine_interface import DataChatEngine
 # at the same time under the same Api Key, so the kind is part of the key.
 DATACHAT = "datachat"
 INTERVIEWER = "interviewer"
+ANALYST = "analyst"
 
 # Engines with a /datachat run in progress, keyed by id(engine) rather than by
 # Api Key or by the engine itself: SmolagentsEngine is a dataclass, so it is
@@ -87,6 +88,21 @@ def createInterviewer(api_key, factory: Callable[[], Any]) -> Any:
 # Deletes the interviewer from active agents.
 def deleteInterviewer(api_key, user_name) -> Any | None:
     return _delete(INTERVIEWER, api_key, user_name)
+
+
+# Retrieves the analysis run associated with an Api Key
+def getAnalyst(api_key) -> Any | None:
+    return _get(ANALYST, api_key)
+
+
+# Retrieves the analysis run or creates one with the given factory.
+def createAnalyst(api_key, factory: Callable[[], Any]) -> Any:
+    return _get_or_create(ANALYST, api_key, factory)
+
+
+# Deletes the analysis run from active agents, cancelling it if still running.
+def deleteAnalyst(api_key, user_name) -> Any | None:
+    return _delete(ANALYST, api_key, user_name)
 
 
 # Lists all active agents
