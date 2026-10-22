@@ -11,6 +11,7 @@ env/
 venv/
 cache/
 exports/
+analyst/reports/
 .env
 .env.backup
 tmp/
