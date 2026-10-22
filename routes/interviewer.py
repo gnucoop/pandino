@@ -14,8 +14,8 @@ SQL datasource, and ends with a brief the user approves:
 - POST /end-analysis-interview    closes the session at any point
 
 Only an approved brief is stored (analysis_briefs, status 'ready'); drafts live
-in the session. The stored row, found by the returned brief_id, is what the
-data analyst will run (see services.analysis_brief_service.get_brief).
+in the session. Approval hands the stored brief's id to the data analyst, which
+starts analysing it in the background (routes.analyst follows the run).
 """
 
 from typing import Any, Optional
@@ -27,6 +27,7 @@ from infrastructure.database_pg import edit_tokens, get_user_tokens
 from datachat.sql_datasource import get_datasource as get_sql_datasource
 from interviewer.engine_factory import create_interviewer_engine
 from services.analysis_brief_service import save_approved_brief
+from analyst.service import start_analysis_payload
 from routes.utils import assert_valid_api_key
 
 interviewer_bp = Blueprint("interviewer", __name__)
@@ -190,7 +191,9 @@ def analysisInterview() -> Response | tuple[Response, int]:
         return jsonify({"error": "Interviewer not active for this Api Key"}), 400
 
     if action in ("approve", "decline"):
-        response, status = _approve(engine, user_email) if action == "approve" else _decline(engine)
+        response, status = (
+            _approve(engine, str(api_key), user_email) if action == "approve" else _decline(engine)
+        )
         if status == 200:
             # The interview is over. X-USER-NAME is not required here, and
             # deleteInterviewer only checks that some user is named.
@@ -216,13 +219,16 @@ def _no_pending_draft_response(verb: str) -> tuple[Response, int]:
     )
 
 
-def _approve(engine, user_email: str) -> tuple[Response, int]:
+def _approve(engine, api_key: str, user_email: str) -> tuple[Response, int]:
     """
-    Store the pending draft, then mark it approved.
+    Store the pending draft, mark it approved, and start the data analyst on it.
 
     Stored first: should the database refuse it, the draft is still pending
-    and the user can simply approve again. No model call, no tokens spent.
-    The stored row (status 'ready') is the hand-off to the data analyst.
+    and the user can simply approve again. No model call, no tokens spent by
+    the interviewer; the analysis spends its own (ANALYST_TOKEN_COST). Should
+    it not start (no tokens, a run already going), the approval still stands:
+    the response says why under "analysis", and the stored brief (status
+    'ready') can be run later with /start-analysis.
     """
     draft = engine.pending_draft
     if draft is None:
@@ -241,7 +247,16 @@ def _approve(engine, user_email: str) -> tuple[Response, int]:
         return jsonify({"error": "Failed to save the analysis brief"}), 500
 
     result = engine.approve()
-    return jsonify({"response": _to_response(result), "brief_id": saved["brief_id"]}), 200
+    analysis, _ = start_analysis_payload(
+        api_key=api_key,
+        user_email=user_email,
+        brief_id=saved["brief_id"],
+        config=current_app.config["MAUI_CONFIG"],
+    )
+    return (
+        jsonify({"response": _to_response(result), "brief_id": saved["brief_id"], "analysis": analysis}),
+        200,
+    )
 
 
 def _decline(engine) -> tuple[Response, int]:
