@@ -68,6 +68,7 @@ from infrastructure.database_methods import (
     build_insert_analysis_brief_query,
     build_get_analysis_brief_query,
     build_list_analysis_briefs_query,
+    build_update_analysis_brief_status_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -1490,6 +1491,33 @@ def list_analysis_briefs(
         }
         for brief_id, owner, name, status_value, approved_at in rows
     ]
+
+
+def set_analysis_brief_status(brief_id: int, status: str) -> bool:
+    """
+    Changes the status of an analysis brief.
+
+    :param brief_id: ID of the brief.
+    :param status: New status ('ready', 'consumed' or 'archived').
+    :return: True if the brief exists.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_update_analysis_brief_status_query(brief_id, status)
+        cursor.execute(query, params)
+        updated = cursor.rowcount > 0
+        conn.commit()
+        return updated
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        cursor.close()
+        conn.close()
 
 
 def get_users_for_admin(page=1, limit=50, search=None):

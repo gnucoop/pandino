@@ -6,8 +6,8 @@ Persistence of the analysis briefs produced by the interviewer.
 
 A brief reaches this service only after the user has approved it: nothing the
 interviewer merely proposes is ever stored. This is also where the data
-analyst will read briefs from. Flask-free, so both the HTTP layer and a
-background agent can use it.
+analyst reads briefs from, and marks them consumed once a report is made.
+Flask-free, so both the HTTP layer and a background agent can use it.
 """
 
 from typing import Any, Optional, TypedDict
@@ -16,6 +16,7 @@ from infrastructure.database_pg import (
     get_analysis_brief,
     list_analysis_briefs,
     save_analysis_brief,
+    set_analysis_brief_status,
 )
 
 
@@ -88,3 +89,17 @@ def list_briefs(
         return list_analysis_briefs(user_email=user_email, status=status, limit=limit)
     except Exception as e:
         raise RuntimeError(f"Failed to list analysis briefs: {e}") from e
+
+
+def mark_brief_consumed(brief_id: int) -> bool:
+    """
+    Mark a brief as consumed: the analyst produced a report from it. It can
+    still be run again.
+
+    :return: True if the brief exists.
+    :raises RuntimeError: if the database could not be written.
+    """
+    try:
+        return set_analysis_brief_status(brief_id, "consumed")
+    except Exception as e:
+        raise RuntimeError(f"Failed to update analysis brief {brief_id}: {e}") from e
