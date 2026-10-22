@@ -49,6 +49,11 @@ tags:
       Interviews the user about the analysis they want and produces an analysis
       brief for approval (start → answer/reject → approve → end). Requires the SQL
       datasource.
+  - name: Data Analyst
+    description: >-
+      Runs an approved analysis brief in the background and produces an HTML report
+      (start → poll status → fetch report). Started automatically when a brief is
+      approved. Requires the SQL datasource.
 
 components:
   securitySchemes:
@@ -234,6 +239,56 @@ components:
                 code:
                   type: string
                   enum: [INVALID_OUTPUT, RUN_FAILED, AGENT_ERROR, NO_PENDING_DRAFT, DRAFT_PENDING, MISSING_CONFIG]
+    AnalysisStart:
+      type: object
+      description: >-
+        A started analysis ({run_id, status}), or why it could not start ({error, code}).
+      properties:
+        run_id: {type: string, example: 20261014_101500_b42_a1b2c3}
+        status: {type: string, enum: [queued]}
+        error: {type: string}
+        code:
+          type: string
+          enum: [SQL_UNAVAILABLE, BRIEF_NOT_FOUND, BRIEF_UNAVAILABLE, TOKENS_UNAVAILABLE, NOT_ENOUGH_TOKENS, ANALYSIS_BUSY]
+        user_tokens: {type: integer, description: With NOT_ENOUGH_TOKENS.}
+    AnalysisEvent:
+      type: object
+      description: >-
+        One progress event. `step` events carry data {step, tools, error}: the tools
+        the agent step called, never its data or SQL. `plan_ready` carries {tasks,
+        exploratory, charts, planner, planner_error}; `charts_saved` carries {charts, tables, skipped};
+        `insight` carries the text of a finding as its message.
+      properties:
+        seq: {type: integer}
+        ts: {type: number, description: Unix time.}
+        type:
+          type: string
+          enum: [run_started, plan_started, plan_ready, task_started, step, insight,
+                 task_retry, task_completed, task_failed, charts_started, charts_saved,
+                 charts_failed, report_started, report_saved, run_completed, run_failed,
+                 run_cancelled]
+        message: {type: string}
+        task_id: {type: string, description: The sub-task, when the event concerns one.}
+        data: {type: object}
+    AnalysisStatus:
+      type: object
+      properties:
+        run_id: {type: string}
+        brief_id: {type: integer}
+        status:
+          type: string
+          enum: [queued, planning, running, charting, writing_report, completed, failed, cancelled]
+        current_task: {type: string, nullable: true}
+        tasks_done: {type: integer}
+        tasks_total: {type: integer}
+        error: {type: string, nullable: true}
+        report_ready: {type: boolean}
+        events:
+          type: array
+          items: {$ref: '#/components/schemas/AnalysisEvent'}
+        next_since:
+          type: integer
+          description: Pass it back as `since` to receive only newer events.
 
 security:
   - apiKey: []
@@ -1082,8 +1137,9 @@ paths:
         `{"answer": "..."}` (action `answer`, the default) answers the open
         questions; the first answer states the goal. Refused with `DRAFT_PENDING`
         while a draft awaits a decision. On a pending draft:
-        `{"action": "approve"}` stores it (`analysis_briefs`, status `ready`, the
-        hand-off to the data analyst), returns `brief_id` and closes the session;
+        `{"action": "approve"}` stores it (`analysis_briefs`, status `ready`),
+        returns `brief_id`, starts the data analyst on it (`analysis`) and closes the
+        session;
         `{"action": "revise", "answer": "what to change"}` keeps working on it:
         the interviewer asks follow-up questions, one per turn, then proposes a
         refined draft;
@@ -1118,6 +1174,12 @@ paths:
                   brief_id:
                     type: integer
                     description: Present when a brief was approved and stored.
+                  analysis:
+                    allOf:
+                      - $ref: '#/components/schemas/AnalysisStart'
+                    description: >-
+                      Present on approval: the analysis started on the brief, or why it
+                      could not (the approval stands; run it later with /start-analysis).
         "400":
           description: >-
             Missing answer / body / header, invalid action, no session, no pending
@@ -1154,3 +1216,104 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+
+  /start-analysis:
+    post:
+      tags: [Data Analyst]
+      summary: Start analysing an approved brief
+      description: >-
+        Runs a stored brief of the user in the background and returns its run id.
+        One run per API key at a time; a finished one is replaced. Spends
+        ANALYST_TOKEN_COST when the run starts.
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [brief_id]
+              properties:
+                brief_id: {type: integer}
+      responses:
+        "200":
+          description: The analysis started.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  analysis: {$ref: '#/components/schemas/AnalysisStart'}
+        "400":
+          description: Missing header, invalid brief_id, or SQL datasource unavailable (SQL_UNAVAILABLE).
+        "404":
+          description: The brief does not exist or belongs to another user (BRIEF_NOT_FOUND).
+        "409":
+          description: An analysis is already running for this key (ANALYSIS_BUSY).
+        "500":
+          description: Not enough tokens, or the brief or the tokens could not be read.
+
+  /analysis-status:
+    get:
+      tags: [Data Analyst]
+      summary: State and progress of the key's analysis
+      description: >-
+        Poll it every few seconds until `status` is completed, failed or cancelled,
+        passing the last `next_since` as `since` to receive only new events.
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+        - name: since
+          in: query
+          schema: {type: integer, default: 0}
+      responses:
+        "200":
+          description: The run's state and the events after `since`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnalysisStatus'
+        "404":
+          description: No analysis for this key (NO_ANALYSIS).
+
+  /analysis-report:
+    get:
+      tags: [Data Analyst]
+      summary: The HTML report of a run
+      description: >-
+        Served to the user who started the run only. Reports stay available after
+        the run has left the server's memory.
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+        - name: run_id
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: The report, a self-contained HTML page (Chart.js from a CDN).
+          content:
+            text/html:
+              schema: {type: string}
+        "404":
+          description: Unknown run, another user's run, or no report (NO_REPORT).
+
+  /end-analysis:
+    post:
+      tags: [Data Analyst]
+      summary: Cancel and forget the key's analysis
+      description: A running analysis stops at its next agent step. Reports already written stay on disk.
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+      responses:
+        "200":
+          description: The run that was cancelled or forgotten.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  run_id: {type: string}
+                  status: {type: string}
+        "404":
+          description: No analysis for this key (NO_ANALYSIS).
