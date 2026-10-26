@@ -73,8 +73,8 @@ flows through it, and what every file is for. Read it top to bottom once; afterw
 │  AnalysisRun.progress ◄── events (plan_ready, task_started, step, …)      │
 └─────────────────────────────────────┬─────────────────────────────────────┘
                                       ▼
-                ANALYST_REPORTS_DIR/<run_id>/
-                  plan.json · report.html · run_metadata.json · sub_task_state.json
+                analysis_reports (one row per run_id, saved as the run goes)
+                  metadata · plan · state · html
 ```
 
 Four ideas carry the whole design:
@@ -181,16 +181,16 @@ execute()
  ├─ _load_brief()      get_brief()  — any shape is accepted
  ├─ _plan(brief)       PlannerAgentEngine.run()
  │                     └─ failed? ─► plan_from_brief()   (code, never fails)
- │                     ─► RunState.from_plan()  ─► plan.json
+ │                     ─► RunState.from_plan()  ─► _save(RUNNING)
  ├─ for each task (plan order):
  │     _run_task(task) ───────────────────────────────────────────┐
- │     state.persist()                                            │
+ │     _save(RUNNING)                                             │
  ├─ nothing completed? ─► fail                                     │
- ├─ _draw_charts()     ChartAgentEngine.run()                      │
+ ├─ _draw_charts()     ChartAgentEngine.run()  ─► _save(CHARTING)  │
  │                     └─ failed? ─► charts_failed, go on          │
  ├─ _write_report()    ReportAgentEngine.run()                     │
  │                     └─ failed? ─► _write_fallback_report()      │
- ├─ _write_metadata(COMPLETED)   run_metadata.json                 │
+ ├─ _save(COMPLETED)   the analysis_reports row, with the html     │
  └─ _mark_consumed()   analysis_briefs.status = 'consumed'         │
                                                                    │
 _run_task(task)  ◄─────────────────────────────────────────────────┘
@@ -207,11 +207,13 @@ _run_task(task)  ◄────────────────────
 ```
 
 Errors: anything that should stop the run raises `AnalysisAborted(message)`; `_finish()`
-sets `failed` (or `cancelled`), writes the metadata and emits the last event. An
+sets `failed` (or `cancelled`), saves the run and emits the last event. An
 unexpected exception becomes "internal error" — the run never crashes the server.
 
-The orchestrator also counts tokens per agent run (`_count_tokens`: `plan`, each task,
-`charts`, `report`) for `run_metadata.json`.
+`_save(status)` stores the whole run through `services/analysis_report_service.save_report`:
+one `analysis_reports` row per `run_id`, inserted then updated in place, so the row shows
+the run's progress. The orchestrator also counts tokens per agent run (`_count_tokens`:
+`plan`, each task, `charts`, `report`) for its metadata.
 
 ### Step 5 — The plan: any brief, one shape
 
@@ -261,7 +263,7 @@ error to the model until the plan is right. What it does with the brief:
 
 Its schema ends with the large-tables note (`sql_prompt.large_relations_note`), so missions
 aggregate or sample the big relations. Its code runs in `GuardedPythonExecutor` like the
-task and chart agents' (see Step 10). Should it fail, `run_metadata.json` → `planner` keeps
+task and chart agents' (see Step 10). Should it fail, the run's metadata → `planner` keeps
 its error message and last step errors, and the code plan (`plan_from_brief`) is used.
 
 Model: `ANALYST_REPORT_MODEL` (the "lead analyst" model); steps: `ANALYST_PLAN_MAX_STEPS`.
@@ -272,7 +274,7 @@ Model: `ANALYST_REPORT_MODEL` (the "lead analyst" model); steps: `ANALYST_PLAN_M
 
 ```
 RunState
- ├─ brief (raw, for context), plan, run_id, brief_id, run_dir
+ ├─ brief (raw, for context), plan, run_id, brief_id
  ├─ tasks:    {task_id: TaskRecord}      in plan order
  │              TaskRecord: mission, depends_on, required, exploratory,
  │                          status, outputs{}, summary, error, attempts
@@ -281,13 +283,13 @@ RunState
  ├─ charts:   {name: {title, spec, task_id}}   spec = Chart.js config
  ├─ tables:   {name: {title, columns, rows, task_id}}
  ├─ metrics, delta                        KPI values and previous-run comparison
- └─ html, report_path                     the rendered report
+ └─ html, report_saved                    the rendered report, final once saved
 ```
 
 Useful members: `dependency_outputs(task_id)` (what a task receives as `inputs`),
 `merged_outputs()`, `missing_outputs()` on a task, the plan-backed properties `title`,
-`language`, `audience`, `charts_requested`, `metrics_config`, and `persist()`
-(writes `sub_task_state.json`).
+`language`, `audience`, `charts_requested`, `metrics_config`, and `snapshot()` (the
+JSON-compatible part, stored as the run's `state`).
 
 📄 `analyst/values.py` — small helpers used everywhere:
 `to_native()` (numpy/pandas → plain JSON), `preview()` (JSON cut to N chars),
@@ -390,10 +392,10 @@ class attributes `name`, `description`, `inputs`, `output_type`; a `forward()` t
 | `read_sub_task_state` | status, summary, **previews** of the outputs, and the insights |
 | `get_sub_task_status` | which tasks completed / failed |
 | `save_run_metrics` | fills the KPI values from the outputs, by key |
-| `get_delta_section` | compares with the previous run of the same brief |
+| `get_delta_section` | compares with the previous completed run of the same brief (its stored metadata) |
 | `get_all_saved_charts` | names and titles of charts and tables |
 | `get_html_template` | renders the report from markdown sections (kept in `RunState`) |
-| `save_html_report` | writes `report.html` |
+| `save_html_report` | marks the rendered report as the run's report (the orchestrator stores it) |
 
 **Shared helpers**
 
@@ -484,7 +486,7 @@ read_sub_task_state ─► save_run_metrics ─► get_delta_section ─► get_
 
 Insights get their own **"additional findings"** section (titled in the report language),
 after what the brief asked for and before the caveats. The guard refuses `report_saved`
-until `report.html` really exists.
+until `save_html_report` really saved the rendered report.
 
 ### Step 13 — Rendering the report
 
@@ -494,7 +496,7 @@ until `report.html` really exists.
 
 - **KPI cards** from the plan's `metrics_config`, with values filled by
   `metrics.py::fill_metrics()` and the change vs the previous run
-  (`find_previous_run()` + `compute_delta()`). A category saved as a dataset reference (a
+  (`analysis_report_service.previous_report_metadata()` + `compute_delta()`). A category saved as a dataset reference (a
   table above the output cap) counts its table's rows, not the reference's keys;
 - **sections**: markdown rendered with HTML **disabled** (nothing an agent writes becomes
   raw HTML), plus the charts and tables placed by name;
@@ -527,7 +529,13 @@ GET /analysis-status?since=0      → {status, current_task, tasks_done, events[
 GET /analysis-status?since=7      → only the new events
 … until status is completed / failed / cancelled
 GET /analysis-report?run_id=…     → the HTML
+GET /analysis-reports?brief_id=…  → the user's runs (no HTML), newest first
 ```
+
+Both report endpoints check the API key (`assert_valid_api_key`) and only ever return the
+caller's own runs. The report comes with `X-Content-Type-Options: nosniff` and a
+`Content-Security-Policy` allowing only its inline scripts and Chart.js from jsDelivr; a
+frontend should show it in a sandboxed `<iframe sandbox="allow-scripts" [srcdoc]>`.
 
 An Angular service can expose it as an Observable:
 
@@ -541,18 +549,23 @@ status$ = (since = 0) => timer(0, 3000).pipe(
 
 `POST /end-analysis` cancels the run (it stops at the next agent step) and forgets it.
 
-### Step 15 — What stays on disk
+### Step 15 — What is stored
 
-📁 `ANALYST_REPORTS_DIR/<run_id>/` (default `analyst/reports/`, gitignored)
+📄 `services/analysis_report_service.py` → table `analysis_reports` (one row per `run_id`,
+created by `database_pg.init`). Nothing is written to disk.
 
-| File | Content | Used by |
+| Column | Content | Used by |
 | --- | --- | --- |
-| `plan.json` | the plan the run followed | inspection: what the planner made of the brief |
-| `report.html` | the report | `GET /analysis-report` |
-| `run_metadata.json` | owner, status, timestamps, **metrics**, tokens per agent, models; `planner` (plan used?, error, last step errors), `chart_agent` (done?, error, reasons for skipped charts, step errors), `report_agent` (fallback report?, error, step errors) | owner check for the report; the **next run of the same brief** compares its metrics with these |
-| `sub_task_state.json` | every task's status, summary, outputs, `step_errors` (the last 5 step errors across attempts, first line each); insights; chart and table names | debugging / inspection: why a task failed |
+| `run_id`, `brief_id`, `user_email`, `title`, `status` | who, what, where the run is (`planning` … `completed` / `failed` / `cancelled`) | `GET /analysis-reports`; owner check |
+| `metadata` (JSONB) | timestamps, **metrics**, task statuses, tokens per agent, models; `planner` (plan used?, error, last step errors), `chart_agent` (done?, error, reasons for skipped charts, step errors), `report_agent` (fallback report?, error, step errors) | the **next run of the same brief** compares its metrics with the latest completed run's |
+| `plan` (JSONB) | the plan the run followed | inspection: what the planner made of the brief |
+| `state` (JSONB) | every task's status, summary, outputs, `step_errors` (the last 5 across attempts, first line each); insights; chart and table names | debugging / inspection: why a task failed |
+| `html` (TEXT) | the report, once it exists | `GET /analysis-report` |
+| `started_at`, `finished_at`, `created_at`, `updated_at` | timestamps | ordering, the previous-run lookup |
 
-Runs live in memory (one per API key), but reports stay on disk after the run is gone.
+The row is saved after planning, after each task, after the charts and at the end, so it
+also shows a run in progress. Runs live in memory (one per API key), but their rows stay
+after the run is gone.
 
 ---
 
@@ -560,13 +573,13 @@ Runs live in memory (one per API key), but reports stay on disk after the run is
 
 | File | Contains | Used by |
 | --- | --- | --- |
-| `routes/analyst.py` | the 4 HTTP endpoints | client |
+| `routes/analyst.py` | the 5 HTTP endpoints | client |
 | `routes/interviewer.py` | `_approve()` → starts the analyst | client |
-| `analyst/service.py` | `start_analysis`, `start_analysis_payload`, `end_analysis`, `report_path`, `_spawn` | routes |
+| `analyst/service.py` | `start_analysis`, `start_analysis_payload`, `end_analysis`, `_spawn` | routes |
 | `analyst/run.py` | `AnalysisRun`, `ProgressLog`, the statuses | service, orchestrator, routes |
 | `analyst/orchestrator.py` | `Orchestrator`, `run_analysis`, `step_callback` | service (thread) |
 | `analyst/plan.py` | `validate_plan`, `plan_from_brief`, `brief_context_text`, `normalize_plan` | planner, orchestrator, agents |
-| `analyst/state.py` | `RunState`, `TaskRecord`, `write_json` | orchestrator, agents, tools |
+| `analyst/state.py` | `RunState`, `TaskRecord` | orchestrator, agents, tools |
 | `analyst/planner_agent.py` | `PlannerAgentEngine` | orchestrator |
 | `analyst/task_agent.py` | `TaskAgentEngine` | orchestrator |
 | `analyst/chart_agent.py` | `ChartAgentEngine` | orchestrator |
@@ -574,7 +587,7 @@ Runs live in memory (one per API key), but reports stay on disk after the run is
 | `analyst/sandbox.py` | `GuardedPythonExecutor`, `check_code`, `unescape_code` | every analyst agent, interviewer |
 | `analyst/sql_prompt.py` | `build_scoped_sql_addendum`, `scope_relations`, `large_relations_note` | planner, task and chart agents |
 | `analyst/prompts.py` | prompt defaults and titles | all agents |
-| `analyst/metrics.py` | `fill_metrics`, `find_previous_run`, `compute_delta` | report tools, orchestrator |
+| `analyst/metrics.py` | `fill_metrics`, `compute_delta` | report tools, orchestrator |
 | `analyst/model_options.py` | `AnalystModelOptions`: model calls cut at 180 s and re-sent up to 2 times by LiteLLM | the four analyst engines |
 | `analyst/report_template.py` | `render_report` | `get_html_template`, fallback |
 | `analyst/templates/report.html` | Jinja2 page: KPI cards, sections, Chart.js | `render_report` |
@@ -585,6 +598,8 @@ Runs live in memory (one per API key), but reports stay on disk after the run is
 | `config.py` | `AnalystConfig` (`ANALYST_*`) | everything |
 | `infrastructure/agent_manager.py` | `getAnalyst` / `createAnalyst` / `deleteAnalyst` | service |
 | `services/analysis_brief_service.py` | `get_brief`, `mark_brief_consumed` | service, orchestrator |
+| `services/analysis_report_service.py` | `save_report`, `get_report_html`, `list_reports`, `previous_report_metadata` | orchestrator, `get_delta_section`, routes |
+| `infrastructure/database_pg.py` / `database_methods.py` | the `analysis_reports` table and its queries | the report service |
 | `main.py` | registers `analyst_bp` | Flask |
 
 Reused without changes: `datachat/smolagents_base.py` (engine base), `datachat/sql_guard.py`,
@@ -608,7 +623,7 @@ run_analysis() ─► Orchestrator.execute() ◄══════════�
   │               ├─ sql_stats() / sql_group_stats() / … ──► database
   │               └─ final_answer(plan) ─► validate_plan()      (guard)
   │           └─ failed? ─► plan_from_brief()
-  │           ─► RunState.from_plan() ─► plan.json
+  │           ─► RunState.from_plan() ─► _save() ─► analysis_reports
   ├─ _run_task() ─► TaskAgentEngine.run() ─► CodeAgent.run()
   │                   ├─ load_dataset() ──► database ─► RunState.datasets
   │                   ├─ sql_*() ─────────► database
@@ -621,13 +636,15 @@ run_analysis() ─► Orchestrator.execute() ◄══════════�
   ├─ _write_report() ─► ReportAgentEngine.run() ─► CodeAgent.run()
   │                   ├─ read_sub_task_state() ◄─ RunState (outputs, insights)
   │                   ├─ save_run_metrics() ──► metrics.py
+  │                   ├─ get_delta_section() ◄─ previous_report_metadata() ◄─ analysis_reports
   │                   ├─ get_html_template() ─► report_template.py ─► RunState.html
-  │                   └─ save_html_report() ──► report.html
-  ├─ _write_metadata() ─► run_metadata.json
+  │                   └─ save_html_report() ──► RunState.report_saved
+  ├─ _save(COMPLETED) ─► save_report() ─► analysis_reports (metadata, plan, state, html)
   └─ _mark_consumed() ──► analysis_briefs.status = 'consumed'
 
 GET  /analysis-status ─► get_run() ─► AnalysisRun.status_payload()  (events from step_callback)
-GET  /analysis-report ─► report_path() ─► owner check in run_metadata.json ─► report.html
+GET  /analysis-report ─► get_report_html(run_id, user) ─► analysis_reports.html
+GET  /analysis-reports ► list_reports(user, brief_id) ─► analysis_reports (no html)
 POST /end-analysis ────► end_analysis() ─► deleteAnalyst() ─► AnalysisRun.close() ─► cancel
 ```
 
@@ -654,7 +671,7 @@ POST /end-analysis ────► end_analysis() ─► deleteAnalyst() ─► 
 
 Spent on purpose: the planner run and the exploration tasks (`ANALYST_MAX_EXTRA_TASKS`,
 0 turns exploration off), which is what makes the analyst look beyond the brief.
-Tokens actually used are recorded per agent run in `run_metadata.json` → `tokens`.
+Tokens actually used are recorded per agent run in the run's metadata → `tokens`.
 
 ---
 
@@ -677,7 +694,6 @@ Tokens actually used are recorded per agent run in `run_metadata.json` → `toke
 | `ANALYST_PREVIEW_MAX_CHARS` | 1500 | size of one output as the report agent reads it |
 | `ANALYST_MAX_CHARTS` | 20 | charts per report |
 | `ANALYST_CHART_MAX_POINTS` | 500 | data points per chart |
-| `ANALYST_REPORTS_DIR` | `analyst/reports` | where run folders go |
 | `ANALYST_TOKEN_COST` | 1 | user tokens spent when a run starts |
 
 The SQL datasource settings (`DATACHAT_SQL_*`: timeout, allowed tables, …) apply to the
@@ -693,6 +709,7 @@ H=(-H "Content-Type: application/json" -H "X-API-KEY: $KEY" -H "X-USER-EMAIL: me
 curl -X POST http://127.0.0.1:5000/start-analysis "${H[@]}" -d '{"brief_id": 42}'
 curl "http://127.0.0.1:5000/analysis-status?since=0" "${H[@]}"          # repeat with next_since
 curl "http://127.0.0.1:5000/analysis-report?run_id=<run_id>" "${H[@]}" -o report.html
+curl "http://127.0.0.1:5000/analysis-reports?brief_id=42" "${H[@]}"     # the runs of a brief
 curl -X POST http://127.0.0.1:5000/end-analysis "${H[@]}"              # cancel / forget
 ```
 
@@ -701,7 +718,7 @@ The tests are a good second reading path — each one is small and shows one beh
 | Test file | Shows |
 | --- | --- |
 | `tests/test_analyst_plan.py` | briefs of many shapes → valid plans; what `validate_plan` refuses |
-| `tests/test_analyst_orchestrator.py` | the whole flow with fake agents: planning and its fallback, order, retry, skip, charts, report fallback, cancel, metadata |
+| `tests/test_analyst_orchestrator.py` | the whole flow with fake agents: planning and its fallback, order, retry, skip, charts, report fallback, cancel, what is saved and when |
 | `tests/test_analyst_agents.py` | what each agent receives (tools, schema, task text) and its guards |
 | `tests/test_analyst_sql_tools.py` | the SQL each tool builds, and what the guard refuses |
 | `tests/test_analyst_sql_prompt.py` | the large tables note: catalog query, formatting, fallbacks |
@@ -709,7 +726,8 @@ The tests are a good second reading path — each one is small and shows one beh
 | `tests/test_analyst_sandbox.py` | which code runs and which is refused |
 | `tests/test_analyst_report.py` | metrics, previous-run delta, rendering and its safety |
 | `tests/test_analyst_state.py` | `RunState`, `ProgressLog`, value conversion |
-| `tests/test_analyst_routes.py` | start checks, polling, report ownership, cancel |
+| `tests/test_analyst_routes.py` | start checks, polling, report and list ownership, auth headers, cancel |
+| `tests/test_analysis_report_service.py` | the `analysis_reports` queries, their wrappers and the service |
 
 ```bash
 venv/bin/python -m pytest tests/test_analyst_*.py -q
