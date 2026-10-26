@@ -17,8 +17,10 @@ run_analysis(): one analysis of one brief, from the stored brief to the report.
 5. run the ReportAgentEngine on the results. Should it fail, a plain report is
    rendered from the task summaries and insights, so a run that analysed the
    data always ends with a report;
-6. write run_metadata.json (status, metrics for the next run's comparison,
-   token usage) and mark the brief consumed.
+6. store the run (analysis_reports: status, metadata with the metrics the next
+   run compares with, plan, state, report) and mark the brief consumed. The
+   row is also saved along the way, after planning, each task and the charts,
+   so it shows the run's progress.
 
 Everything a client sees goes through run.progress; cancellation is checked
 between tasks and, through the step callback, between agent steps.
@@ -29,13 +31,12 @@ from __future__ import annotations
 import logging
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Callable, Optional
 
 import datachat.schema_snapshot_loader as schema_snapshot_loader
 import datachat.sql_datasource as sql_datasource
 from analyst.chart_agent import ChartAgentEngine
-from analyst.metrics import METADATA_FILE, fill_metrics
+from analyst.metrics import fill_metrics
 from analyst.plan import plan_from_brief
 from analyst.planner_agent import PlannerAgentEngine
 from analyst.report_agent import ReportAgentEngine
@@ -50,14 +51,14 @@ from analyst.run import (
     WRITING_REPORT,
     AnalysisRun,
 )
-from analyst.state import RunState, TaskRecord, write_json
+from analyst.state import RunState, TaskRecord
 from analyst.state import COMPLETED as TASK_COMPLETED
 from analyst.state import FAILED as TASK_FAILED
 from analyst.state import RUNNING as TASK_RUNNING
 from analyst.task_agent import TaskAgentEngine
-from analyst.tools.save_html_report_tool import REPORT_FILE
 from config import AnalystConfig
 from services.analysis_brief_service import get_brief, mark_brief_consumed
+from services.analysis_report_service import save_report
 from utils.logging_config import reset_request_context, set_request_context
 
 logger = logging.getLogger(__name__)
@@ -69,8 +70,6 @@ _NO_RETRY_CODES = ("AGENT_ERROR", "MISSING_CONFIG")
 # Step errors kept per task (and for the planner), each cut to its first line.
 _MAX_STEP_ERRORS = 5
 _STEP_ERROR_CHARS = 300
-
-PLAN_FILE = "plan.json"
 
 
 class AnalysisAborted(Exception):
@@ -164,13 +163,13 @@ class Orchestrator:
             self.state = self._plan(self._load_brief())
             run.tasks_total = len(self.state.tasks)
             run.status = RUNNING
-            self._write_metadata(RUNNING)
+            self._save(RUNNING)
 
             for task in self.state.ordered_tasks():
                 self._check_cancelled()
                 self._run_task(task)
                 run.tasks_done += 1
-                self.state.persist()
+                self._save(RUNNING)
 
             completed = [t for t in self.state.ordered_tasks() if t.status == TASK_COMPLETED]
             if not completed:
@@ -181,7 +180,7 @@ class Orchestrator:
             self._check_cancelled()
             self._write_report()
 
-            self._write_metadata(COMPLETED)
+            self._save(COMPLETED)
             self._mark_consumed()
             run.report_ready = True
             run.current_task = None
@@ -244,9 +243,7 @@ class Orchestrator:
             brief_id=run.brief_id,
             brief=brief,
             plan=plan,
-            run_dir=Path(self.config.reports_dir) / run.run_id,
         )
-        write_json(state.run_dir / PLAN_FILE, plan)
         exploratory = sum(1 for t in state.ordered_tasks() if t.exploratory)
         run.progress.emit(
             "plan_ready",
@@ -362,7 +359,7 @@ class Orchestrator:
         else:
             logger.warning("event=analyst_charts_failed run_id=%s code=%s", run.run_id, result.get("code"))
             run.progress.emit("charts_failed", result.get("message") or "The charts could not be drawn.")
-        self.state.persist()
+        self._save(CHARTING)
 
     def _write_report(self) -> None:
         run = self.run
@@ -383,7 +380,7 @@ class Orchestrator:
         self._count_tokens("report", engine)
         self._check_cancelled()
 
-        fallback = result["kind"] != "report_saved" or self.state.report_path is None
+        fallback = result["kind"] != "report_saved" or not self.state.report_saved
         self.report_agent = {
             "fallback": fallback,
             "error": (result.get("message") or "No report was saved.") if fallback else None,
@@ -426,9 +423,7 @@ class Orchestrator:
             sections=sections,
             footer=f"Maui · analysis brief #{state.brief_id} · run {state.run_id}",
         )
-        state.report_path = state.run_dir / REPORT_FILE
-        state.report_path.parent.mkdir(parents=True, exist_ok=True)
-        state.report_path.write_text(state.html, encoding="utf-8")
+        state.report_saved = True
 
     # --- helpers ---
 
@@ -452,12 +447,13 @@ class Orchestrator:
         filled.pop("missing")
         return filled
 
-    def _write_metadata(self, status: str, error: Optional[str] = None) -> None:
+    def _save(self, status: str, error: Optional[str] = None) -> None:
+        """Store the run as it is now (analysis_reports, one row per run_id)."""
         state = self.state
         if state is None:
             return
-        finished = status in (COMPLETED, FAILED, CANCELLED)
-        write_json(state.run_dir / METADATA_FILE, {
+        finished_at = _now() if status in (COMPLETED, FAILED, CANCELLED) else None
+        metadata = {
             "run_id": state.run_id,
             "brief_id": state.brief_id,
             "title": state.title,
@@ -465,7 +461,7 @@ class Orchestrator:
             "status": status,
             "error": error,
             "started_at": self.started_at,
-            "finished_at": _now() if finished else None,
+            "finished_at": finished_at,
             "metrics": self._metrics() if status == COMPLETED else None,
             "tasks": {t.id: t.status for t in state.ordered_tasks()},
             "planner": self.planner,
@@ -478,8 +474,20 @@ class Orchestrator:
                 "charts": self.config.model,
                 "report": self.config.report_model,
             },
-            "report": REPORT_FILE if state.report_path else None,
-        })
+        }
+        save_report(
+            run_id=state.run_id,
+            brief_id=state.brief_id,
+            user_email=self.run.user_email,
+            title=state.title,
+            status=status,
+            metadata=metadata,
+            plan=state.plan,
+            state=state.snapshot(),
+            html=state.html if state.report_saved else None,
+            started_at=self.started_at,
+            finished_at=finished_at,
+        )
 
     def _mark_consumed(self) -> None:
         try:
@@ -494,8 +502,8 @@ class Orchestrator:
         run.error = message
         run.current_task = None
         try:
-            self._write_metadata(status, message)
-        except OSError:
+            self._save(status, message)
+        except RuntimeError:
             logger.exception("event=analyst_metadata_failed run_id=%s", run.run_id)
         run.progress.emit("run_cancelled" if status == CANCELLED else "run_failed", message)
         logger.info("event=analyst_run_end run_id=%s status=%s", run.run_id, status)

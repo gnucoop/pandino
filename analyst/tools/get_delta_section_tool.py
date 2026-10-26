@@ -2,8 +2,9 @@ from typing import Any, ClassVar
 
 from smolagents import Tool
 
-from analyst.metrics import compute_delta, find_previous_run
+from analyst.metrics import compute_delta
 from analyst.state import RunState
+from services.analysis_report_service import previous_report_metadata
 
 
 class GetDeltaSectionTool(Tool):
@@ -38,9 +39,7 @@ class GetDeltaSectionTool(Tool):
                     "text": "No metrics to compare (none tracked, or save_run_metrics not called yet).",
                 }
 
-            previous = find_previous_run(
-                self._state.run_dir.parent, self._state.brief_id, self._state.run_id
-            )
+            previous = previous_report_metadata(self._state.brief_id, self._state.run_id)
             if previous is None or not isinstance(previous.get("metrics"), dict):
                 return {"kind": "text", "text": "This is the first run of this brief: nothing to compare."}
 

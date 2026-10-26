@@ -146,9 +146,9 @@ class ReportAgentEngine(AnalystModelOptions, SmolagentsEngineBase):
         payload, passed, kind, reason = coerce_final_payload(output, _REPORT_KIND_VALIDATORS)
         if not passed or payload is None:
             return payload, kind, _contract_failure_message(reason)
-        if kind == "report_saved" and self.state.report_path is None:
+        if kind == "report_saved" and not self.state.report_saved:
             return payload, kind, (
-                "The report is not saved yet: render it with get_html_template, write it "
+                "The report is not saved yet: render it with get_html_template, save it "
                 "with save_html_report, then answer again."
             )
         return payload, kind, None
