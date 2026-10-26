@@ -23,10 +23,23 @@ from tests.fake_sql_datasource import FakeDatasource
 
 DONE = {"kind": "task_done", "summary": "ok"}
 
+# What the orchestrator stored per run_id (analysis_report_service.save_report),
+# and every save in order: reset for each test by the environment fixture.
+SAVED: dict = {}
+SAVES: list = []
+
 
 @pytest.fixture(autouse=True)
 def environment(monkeypatch):
     loader.invalidate_snapshot()
+    SAVED.clear()
+    SAVES.clear()
+
+    def save_report(**row):
+        SAVED[row["run_id"]] = row
+        SAVES.append(row)
+
+    monkeypatch.setattr(orchestrator, "save_report", save_report)
     env = {"brief": valid_brief(), "consumed": []}
     monkeypatch.setattr(
         orchestrator, "get_brief",
@@ -120,10 +133,8 @@ class SavingReportEngine:
         self.token_usage = {"input": 50, "output": 5}
 
     def run(self):
-        path = self.state.run_dir / "report.html"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("<html>report</html>")
-        self.state.report_path = path
+        self.state.html = "<html>report</html>"
+        self.state.report_saved = True
         return {"kind": "report_saved"}
 
 
@@ -136,12 +147,12 @@ class FailingReportEngine:
 
 
 def execute(
-    tmp_path, task_behaviour=succeed, report=SavingReportEngine, retries=1, run=None,
+    task_behaviour=succeed, report=SavingReportEngine, retries=1, run=None,
     planner=None, charts=SavingChartEngine,
 ):
     run = run or make_run()
     engine = task_engine(task_behaviour)
-    config = make_config(reports_dir=str(tmp_path), task_retries=retries)
+    config = make_config(task_retries=retries)
     Orchestrator(
         run, config,
         planner_engine=planner or planner_engine(),
@@ -156,8 +167,8 @@ def events(run):
     return [e["type"] for e in run.progress.since(0)[0]]
 
 
-def metadata(tmp_path):
-    return json.loads((tmp_path / "r1" / "run_metadata.json").read_text())
+def metadata():
+    return SAVED["r1"]["metadata"]
 
 
 # ---------------------------------------------------------------------------
@@ -165,8 +176,8 @@ def metadata(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_a_run_executes_every_task_in_order_then_writes_the_report(tmp_path, environment):
-    run, calls = execute(tmp_path)
+def test_a_run_executes_every_task_in_order_then_writes_the_report(environment):
+    run, calls = execute()
 
     assert calls == ["data_preparation", "by_country", "final_summary"]
     assert run.status == "completed" and run.report_ready
@@ -181,18 +192,31 @@ def test_a_run_executes_every_task_in_order_then_writes_the_report(tmp_path, env
     ]
     assert environment["consumed"] == [3]
 
-    meta = metadata(tmp_path)
+    meta = metadata()
     assert meta["status"] == "completed"
     assert meta["metrics"]["metrics"] == {"total_revenue": 99.5}
     assert meta["tokens"]["by_country"] == {"input": 10, "output": 1}
     assert meta["tokens"]["report"] == {"input": 50, "output": 5}
     assert meta["tokens"]["plan"] == {"input": 30, "output": 3}
     assert meta["tokens"]["charts"] == {"input": 20, "output": 2}
-    assert meta["report"] == "report.html"
     assert meta["chart_agent"] == {"done": True, "error": None, "skipped": [], "step_errors": []}
     assert meta["report_agent"] == {"fallback": False, "error": None, "step_errors": []}
-    assert (tmp_path / "r1" / "sub_task_state.json").exists()
-    assert json.loads((tmp_path / "r1" / "plan.json").read_text())["title"] == "Revenue by country"
+
+    row = SAVED["r1"]
+    assert (row["brief_id"], row["user_email"], row["status"]) == (3, "u@x", "completed")
+    assert row["html"] == "<html>report</html>"
+    assert row["plan"]["title"] == "Revenue by country"
+    assert row["state"]["tasks"]["by_country"]["outputs"] == {"total_revenue": 99.5}
+    assert row["started_at"] and row["finished_at"]
+
+
+def test_the_run_is_saved_as_it_progresses_and_gets_its_report_last():
+    execute()
+
+    # After planning, after each of the 3 tasks, after the charts, at the end.
+    assert [save["status"] for save in SAVES] == ["running"] * 4 + ["charting", "completed"]
+    assert all(save["html"] is None for save in SAVES[:-1])
+    assert all(save["finished_at"] is None for save in SAVES[:-1])
 
 
 # ---------------------------------------------------------------------------
@@ -200,20 +224,20 @@ def test_a_run_executes_every_task_in_order_then_writes_the_report(tmp_path, env
 # ---------------------------------------------------------------------------
 
 
-def test_a_failed_attempt_is_retried(tmp_path):
+def test_a_failed_attempt_is_retried():
     def flaky(task, attempt):
         if task.id == "by_country" and attempt == 1:
             return {"kind": "error", "message": "missing outputs", "code": "INVALID_OUTPUT"}
         return succeed(task, attempt)
 
-    run, calls = execute(tmp_path, flaky)
+    run, calls = execute(flaky)
 
     assert calls.count("by_country") == 2
     assert "task_retry" in events(run)
     assert run.status == "completed"
 
 
-def test_a_failed_exploratory_task_is_not_retried(tmp_path):
+def test_a_failed_exploratory_task_is_not_retried():
     def planned(brief):
         plan = plan_from_brief(brief, {"orders": ()})
         plan["tasks"].insert(2, {"id": "explore", "name": "Explore", "mission": "Look around.",
@@ -225,15 +249,15 @@ def test_a_failed_exploratory_task_is_not_retried(tmp_path):
             return {"kind": "error", "message": "missing outputs", "code": "INVALID_OUTPUT"}
         return succeed(task, attempt)
 
-    run, calls = execute(tmp_path, flaky, retries=3, planner=planner_engine(planned))
+    run, calls = execute(flaky, retries=3, planner=planner_engine(planned))
 
     assert calls.count("explore") == 1
     assert calls.count("by_country") == 2
-    assert metadata(tmp_path)["tasks"]["explore"] == "failed"
+    assert metadata()["tasks"]["explore"] == "failed"
     assert run.status == "completed"
 
 
-def test_a_retry_receives_what_the_failed_attempt_computed(tmp_path):
+def test_a_retry_receives_what_the_failed_attempt_computed():
     seen = []
 
     def flaky(task, attempt):
@@ -247,34 +271,34 @@ def test_a_retry_receives_what_the_failed_attempt_computed(tmp_path):
     engine.variables = lambda self: {"partial": 42}
     run = make_run()
     Orchestrator(
-        run, make_config(reports_dir=str(tmp_path), task_retries=1),
+        run, make_config(task_retries=1),
         planner_engine=planner_engine(), task_engine=engine,
         chart_engine=SavingChartEngine, report_engine=SavingReportEngine,
     ).execute()
 
     assert seen == [{}, {"partial": 42}]
-    assert metadata(tmp_path)["tasks"]["by_country"] == "completed"
+    assert metadata()["tasks"]["by_country"] == "completed"
 
 
-def test_an_impossible_task_is_not_retried_and_its_dependents_are_skipped(tmp_path):
+def test_an_impossible_task_is_not_retried_and_its_dependents_are_skipped():
     def impossible(task, attempt):
         if task.id == "by_country":
             return {"kind": "error", "message": "No data.", "code": "AGENT_ERROR"}
         return succeed(task, attempt)
 
-    run, calls = execute(tmp_path, impossible)
+    run, calls = execute(impossible)
 
     assert calls == ["data_preparation", "by_country"]
-    meta = metadata(tmp_path)
+    meta = metadata()
     assert meta["tasks"] == {"data_preparation": "completed", "by_country": "failed", "final_summary": "failed"}
     assert run.status == "completed"
 
 
-def test_a_run_with_nothing_completed_fails_without_a_report(tmp_path, environment):
+def test_a_run_with_nothing_completed_fails_without_a_report(environment):
     def broken(task, attempt):
         return {"kind": "error", "message": "boom", "code": "RUN_FAILED"}
 
-    run, calls = execute(tmp_path, broken, retries=0)
+    run, calls = execute(broken, retries=0)
 
     assert run.status == "failed"
     assert "nothing to report" in run.error
@@ -282,9 +306,9 @@ def test_a_run_with_nothing_completed_fails_without_a_report(tmp_path, environme
     assert environment["consumed"] == []
 
 
-def test_a_missing_brief_fails_the_run(tmp_path, environment):
+def test_a_missing_brief_fails_the_run(environment):
     environment["brief"] = None
-    run, calls = execute(tmp_path)
+    run, calls = execute()
     assert run.status == "failed" and "not found" in run.error
     assert calls == []
 
@@ -294,25 +318,25 @@ def test_a_missing_brief_fails_the_run(tmp_path, environment):
 # ---------------------------------------------------------------------------
 
 
-def test_the_planner_plan_drives_the_run(tmp_path):
+def test_the_planner_plan_drives_the_run():
     def planned(brief):
         plan = plan_from_brief(brief, {"orders": ()})
         plan["tasks"].insert(2, {"id": "explore", "name": "Explore", "mission": "Look around.",
                                  "depends_on": [], "outputs": ["oddities"], "exploratory": True})
         return {"kind": "plan", "plan": plan}
 
-    run, calls = execute(tmp_path, planner=planner_engine(planned))
+    run, calls = execute(planner=planner_engine(planned))
 
     assert calls == ["data_preparation", "by_country", "explore", "final_summary"]
     ready = [e for e in run.progress.since(0)[0] if e["type"] == "plan_ready"][0]
     assert ready["data"] == {"tasks": 4, "exploratory": 1, "charts": 1, "planner": True, "planner_error": None}
-    assert metadata(tmp_path)["planner"] == {"used": True, "error": None, "step_errors": []}
+    assert metadata()["planner"] == {"used": True, "error": None, "step_errors": []}
 
 
-def test_a_failed_planner_falls_back_to_the_code_plan(tmp_path):
+def test_a_failed_planner_falls_back_to_the_code_plan():
     message = "The planner failed: litellm.Timeout: Request timed out"
     failing = planner_engine(lambda brief: {"kind": "error", "message": message, "code": "RUN_FAILED"})
-    run, calls = execute(tmp_path, planner=failing)
+    run, calls = execute(planner=failing)
 
     assert run.status == "completed"
     assert calls == ["data_preparation", "by_country", "final_summary"]
@@ -320,10 +344,10 @@ def test_a_failed_planner_falls_back_to_the_code_plan(tmp_path):
     assert ready["data"]["planner"] is False
     # Why it failed is kept, not only that it did.
     assert ready["data"]["planner_error"] == message
-    assert metadata(tmp_path)["planner"] == {"used": False, "error": message, "step_errors": []}
+    assert metadata()["planner"] == {"used": False, "error": message, "step_errors": []}
 
 
-def test_the_errors_of_a_failed_task_steps_are_kept_in_the_state(tmp_path):
+def test_the_errors_of_a_failed_task_steps_are_kept_in_the_state():
     def failing(task, attempt):
         if task.id == "data_preparation":
             for step in range(1, 5):
@@ -343,13 +367,12 @@ def test_the_errors_of_a_failed_task_steps_are_kept_in_the_state(tmp_path):
     engine.__init__ = capture
     run = make_run()
     Orchestrator(
-        run, make_config(reports_dir=str(tmp_path), task_retries=1),
+        run, make_config(task_retries=1),
         planner_engine=planner_engine(), task_engine=engine,
         chart_engine=SavingChartEngine, report_engine=SavingReportEngine,
     ).execute()
 
-    state = json.loads((tmp_path / "r1" / "sub_task_state.json").read_text())
-    errors = state["tasks"]["data_preparation"]["step_errors"]
+    errors = SAVED["r1"]["state"]["tasks"]["data_preparation"]["step_errors"]
     # Two attempts of four errors each: the last five are kept, first line only.
     assert len(errors) == 5
     assert errors[0] == "attempt 1, step 4: RuntimeError: QUERY_TIMEOUT on step 4"
@@ -361,47 +384,47 @@ def test_the_errors_of_a_failed_task_steps_are_kept_in_the_state(tmp_path):
     "brief",
     [{"goal": "Why did margins fall?"}, {"fasi": [{"titolo": "Conta", "obiettivo": "Contare gli ordini"}]}, "just text"],
 )
-def test_a_brief_of_any_shape_gets_analysed(tmp_path, environment, brief):
+def test_a_brief_of_any_shape_gets_analysed(environment, brief):
     environment["brief"] = brief
     failing = planner_engine(lambda b: {"kind": "error", "message": "x", "code": "RUN_FAILED"})
 
-    run, calls = execute(tmp_path, planner=failing)
+    run, calls = execute(planner=failing)
 
     assert run.status == "completed", run.error
     assert calls
 
 
-def test_a_missing_planner_configuration_fails_the_run(tmp_path):
+def test_a_missing_planner_configuration_fails_the_run():
     missing = planner_engine(lambda b: {"kind": "error", "message": "x", "code": "MISSING_CONFIG"})
-    run, calls = execute(tmp_path, planner=missing)
+    run, calls = execute(planner=missing)
     assert run.status == "failed" and "not configured" in run.error
     assert calls == []
 
 
-def test_failed_charts_do_not_stop_the_report(tmp_path):
-    run, _ = execute(tmp_path, charts=FailingChartEngine)
+def test_failed_charts_do_not_stop_the_report():
+    run, _ = execute(charts=FailingChartEngine)
 
     assert run.status == "completed"
     assert "charts_failed" in events(run)
-    assert metadata(tmp_path)["chart_agent"] == {
+    assert metadata()["chart_agent"] == {
         "done": False, "error": "model down", "skipped": [], "step_errors": [],
     }
 
 
-def test_the_reasons_for_skipped_charts_are_kept(tmp_path):
+def test_the_reasons_for_skipped_charts_are_kept():
     class SkippingChartEngine(SavingChartEngine):
         def run(self):
             return {"kind": "charts_done", "saved": 0,
                     "skipped": [{"chart": "revenue", "reason": "no output holds revenue by country"}]}
 
-    execute(tmp_path, charts=SkippingChartEngine)
+    execute(charts=SkippingChartEngine)
 
-    assert metadata(tmp_path)["chart_agent"]["skipped"] == [
+    assert metadata()["chart_agent"]["skipped"] == [
         {"chart": "revenue", "reason": "no output holds revenue by country"}
     ]
 
 
-def test_insights_are_reported_as_progress(tmp_path):
+def test_insights_are_reported_as_progress():
     class InsightTaskEngine(task_engine(succeed)):
         def run(self):
             if self.task.id == "by_country":
@@ -409,7 +432,7 @@ def test_insights_are_reported_as_progress(tmp_path):
             return super().run()
 
     run = make_run()
-    config = make_config(reports_dir=str(tmp_path))
+    config = make_config()
     Orchestrator(run, config, planner_engine=planner_engine(), task_engine=InsightTaskEngine,
                  chart_engine=SavingChartEngine, report_engine=SavingReportEngine).execute()
 
@@ -417,23 +440,23 @@ def test_insights_are_reported_as_progress(tmp_path):
     assert insight["message"] == "Italy is 80% of revenue." and insight["task_id"] == "by_country"
 
 
-def test_a_failed_report_agent_falls_back_to_a_plain_report(tmp_path):
-    run, _ = execute(tmp_path, report=FailingReportEngine)
+def test_a_failed_report_agent_falls_back_to_a_plain_report():
+    run, _ = execute(report=FailingReportEngine)
 
     assert run.status == "completed"
-    html = (tmp_path / "r1" / "report.html").read_text()
+    html = SAVED["r1"]["html"]
     assert "Revenue by country" in html and "<h2>By country</h2>" in html
-    assert metadata(tmp_path)["report_agent"] == {"fallback": True, "error": "model down", "step_errors": []}
+    assert metadata()["report_agent"] == {"fallback": True, "error": "model down", "step_errors": []}
 
 
-def test_an_internal_error_fails_the_run_cleanly(tmp_path):
+def test_an_internal_error_fails_the_run_cleanly():
     def crash(task, attempt):
         raise RuntimeError("bug")
 
-    run, _ = execute(tmp_path, crash)
+    run, _ = execute(crash)
     assert run.status == "failed"
     assert run.error == "The analysis failed because of an internal error."
-    assert metadata(tmp_path)["status"] == "failed"
+    assert metadata()["status"] == "failed"
 
 
 # ---------------------------------------------------------------------------
@@ -441,14 +464,14 @@ def test_an_internal_error_fails_the_run_cleanly(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_a_cancelled_run_stops_between_tasks(tmp_path, environment):
+def test_a_cancelled_run_stops_between_tasks(environment):
     run = make_run()
 
     def cancel_after_first(task, attempt):
         run.cancel()
         return succeed(task, attempt)
 
-    run, calls = execute(tmp_path, cancel_after_first, run=run)
+    run, calls = execute(cancel_after_first, run=run)
 
     assert calls == ["data_preparation"]
     assert run.status == "cancelled"

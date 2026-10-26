@@ -29,8 +29,8 @@ def brief(**overrides):
     return base
 
 
-def make_state(tmp_path, **overrides):
-    return state_for(tmp_path, brief(**overrides), brief_id=7)
+def make_state(**overrides):
+    return state_for(brief(**overrides), brief_id=7)
 
 
 # ---------------------------------------------------------------------------
@@ -80,15 +80,15 @@ def test_closing_a_run_cancels_it():
 # ---------------------------------------------------------------------------
 
 
-def test_tasks_run_by_order(tmp_path):
-    state = make_state(tmp_path)
+def test_tasks_run_by_order():
+    state = make_state()
     assert [t.id for t in state.ordered_tasks()] == ["prep", "trend", "final_summary"]
     assert state.tasks["prep"].required == ["volumes"]
     assert state.tasks["prep"].order == 1
 
 
-def test_dependency_outputs_hold_only_the_dependencies(tmp_path):
-    state = make_state(tmp_path)
+def test_dependency_outputs_hold_only_the_dependencies():
+    state = make_state()
     state.tasks["prep"].outputs = {"volumes": [1, 2]}
     state.tasks["trend"].outputs = {"slope": 0.5}
 
@@ -96,8 +96,8 @@ def test_dependency_outputs_hold_only_the_dependencies(tmp_path):
     assert set(state.dependency_outputs("final_summary")) == {"prep", "trend"}
 
 
-def test_missing_outputs_lists_unsaved_required_keys(tmp_path):
-    task = make_state(tmp_path).tasks["prep"]
+def test_missing_outputs_lists_unsaved_required_keys():
+    task = make_state().tasks["prep"]
     assert task.missing_outputs() == ["volumes"]
     task.outputs["notes"] = "x"
     assert task.missing_outputs() == ["volumes"]
@@ -105,25 +105,23 @@ def test_missing_outputs_lists_unsaved_required_keys(tmp_path):
     assert task.missing_outputs() == []
 
 
-def test_merged_outputs_let_later_tasks_win(tmp_path):
-    state = make_state(tmp_path)
+def test_merged_outputs_let_later_tasks_win():
+    state = make_state()
     state.tasks["prep"].outputs = {"value": 1, "a": "x"}
     state.tasks["trend"].outputs = {"value": 2}
     assert state.merged_outputs() == {"value": 2, "a": "x"}
 
 
-def test_persist_writes_the_json_part(tmp_path):
-    state = make_state(tmp_path)
+def test_the_snapshot_is_the_json_part():
+    state = make_state()
     state.datasets["trips"] = pd.DataFrame({"mese": ["2026-01"], "viaggi": [7300]})
     state.tasks["prep"].outputs = {"volumes": [7300]}
     state.charts["c1"] = {"title": "Trips", "spec": {}, "task_id": "prep"}
-    state.persist()
 
-    saved = json.loads((tmp_path / "r1" / "sub_task_state.json").read_text())
+    saved = json.loads(json.dumps(state.snapshot()))
     assert saved["tasks"]["prep"]["outputs"] == {"volumes": [7300]}
     assert saved["datasets"] == {"trips": ["mese", "viaggi"]}
     assert saved["charts"] == {"c1": "Trips"}
-    assert not list((tmp_path / "r1").glob("*.tmp"))
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +172,8 @@ def test_describe_names_the_shape_without_content():
     assert describe([1, 2]) == "list of 2"
 
 
-def test_the_state_reads_title_language_and_charts_from_the_plan(tmp_path):
-    state = make_state(tmp_path)
+def test_the_state_reads_title_language_and_charts_from_the_plan():
+    state = make_state()
     state.plan.update(title="Forecast", language="Italian", charts=[{"id": "c1", "description": "Bars"}])
 
     assert (state.title, state.language) == ("Forecast", "Italian")
@@ -183,9 +181,7 @@ def test_the_state_reads_title_language_and_charts_from_the_plan(tmp_path):
     assert state.metrics_config is None
 
 
-def test_insights_are_persisted(tmp_path):
-    state = make_state(tmp_path)
+def test_insights_are_in_the_snapshot():
+    state = make_state()
     state.insights.append({"task_id": "prep", "text": "Fact.", "evidence": "1"})
-    state.persist()
-    saved = json.loads((tmp_path / "r1" / "sub_task_state.json").read_text())
-    assert saved["insights"][0]["text"] == "Fact."
+    assert state.snapshot()["insights"][0]["text"] == "Fact."

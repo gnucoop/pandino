@@ -43,8 +43,8 @@ def reset_snapshot_cache():
 
 
 @pytest.fixture
-def state(tmp_path):
-    return make_state(tmp_path)
+def state():
+    return make_state()
 
 
 def build(engine_cls, module, datasource=None, **kwargs):
@@ -315,13 +315,13 @@ def test_the_report_task_carries_the_report_shape_and_task_summaries(state):
     assert "Check amount." not in task                 # a task's mission
 
 
-def test_report_saved_is_refused_until_the_file_is_written(state):
+def test_report_saved_is_refused_until_the_report_is_saved(state):
     engine, _ = build(ReportAgentEngine, "analyst.report_agent", state=state)
     script(engine, {"kind": "report_saved"})
     assert engine.run()["code"] == "INVALID_OUTPUT"
     assert "not saved yet" in engine.guard_errors[0]
 
-    state.report_path = state.run_dir / "report.html"
+    state.report_saved = True
     script(engine, {"kind": "report_saved"})
     assert engine.run() == {"kind": "report_saved"}
 
@@ -460,8 +460,8 @@ def test_too_many_exploratory_tasks_are_turned_down():
 # ---------------------------------------------------------------------------
 
 
-def chart_state(tmp_path):
-    state = make_state(tmp_path)
+def chart_state():
+    state = make_state()
     state.plan["charts"] = [{"id": "c1", "description": "Bars"}, {"id": "c2", "description": "Heatmap"}]
     state.tasks["by_country"].status = COMPLETED
     state.tasks["by_country"].outputs = {"total_revenue": {"IT": 10.0, "FR": 5.0}}
@@ -473,8 +473,8 @@ def a_chart():
     return {"title": "Bars", "spec": {"type": "bar", "data": {"datasets": [{"data": [1]}]}}, "task_id": "charts"}
 
 
-def test_the_chart_agent_gets_drawing_tools_the_sandbox_and_all_outputs(tmp_path):
-    state = chart_state(tmp_path)
+def test_the_chart_agent_gets_drawing_tools_the_sandbox_and_all_outputs():
+    state = chart_state()
     engine, agent_cls = build(ChartAgentEngine, "analyst.chart_agent", state=state)
     kwargs = agent_cls.call_args.kwargs
 
@@ -488,8 +488,8 @@ def test_the_chart_agent_gets_drawing_tools_the_sandbox_and_all_outputs(tmp_path
     assert "row_count" not in task
 
 
-def test_every_requested_chart_must_be_covered(tmp_path):
-    state = chart_state(tmp_path)
+def test_every_requested_chart_must_be_covered():
+    state = chart_state()
     engine, _ = build(ChartAgentEngine, "analyst.chart_agent", state=state)
 
     def save():
@@ -506,8 +506,8 @@ def test_every_requested_chart_must_be_covered(tmp_path):
     assert "no reason given" in engine.guard_errors[0]
 
 
-def test_covered_charts_are_reported_with_the_skipped_ones(tmp_path):
-    state = chart_state(tmp_path)
+def test_covered_charts_are_reported_with_the_skipped_ones():
+    state = chart_state()
     engine, _ = build(ChartAgentEngine, "analyst.chart_agent", state=state)
 
     def save():

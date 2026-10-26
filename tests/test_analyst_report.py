@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from analyst.metrics import compute_delta, fill_metrics, find_previous_run
+from analyst.metrics import compute_delta, fill_metrics
 from analyst.state import COMPLETED, FAILED
 from analyst.tools.get_all_saved_charts_tool import GetAllSavedChartsTool
 from analyst.tools.get_delta_section_tool import GetDeltaSectionTool
@@ -27,7 +27,7 @@ METRICS_CONFIG = {
 
 
 @pytest.fixture
-def state(tmp_path):
+def state():
     plan = {
         "title": "Forecast 2027",
         "language": "Italian",
@@ -42,7 +42,7 @@ def state(tmp_path):
         "report": {"sections": ["Sintesi"], "tone": "", "length": ""},
         "metrics_config": METRICS_CONFIG,
     }
-    state = make_state(tmp_path, {"anything": "goes"}, plan=plan, run_id="run_2", brief_id=7)
+    state = make_state({"anything": "goes"}, plan=plan, run_id="run_2", brief_id=7)
     state.tasks["prep"].status = COMPLETED
     state.tasks["prep"].summary = "Scenarios computed."
     state.tasks["prep"].outputs = {
@@ -65,13 +65,21 @@ def state(tmp_path):
     return state
 
 
-def write_previous_run(state, metrics, *, run_id="run_1", status="completed", finished_at="2026-09-01T10:00:00"):
-    folder = state.run_dir.parent / run_id
-    folder.mkdir(parents=True)
-    (folder / "run_metadata.json").write_text(json.dumps({
-        "run_id": run_id, "brief_id": state.brief_id, "status": status,
-        "finished_at": finished_at, "metrics": metrics,
-    }))
+@pytest.fixture
+def previous_runs(monkeypatch):
+    """
+    The stored metadata of the previous completed run, by brief, as
+    analysis_report_service.previous_report_metadata finds it; the lookups made
+    are recorded.
+    """
+    runs = {"by_brief": {}, "asked": []}
+
+    def lookup(brief_id, run_id):
+        runs["asked"].append((brief_id, run_id))
+        return runs["by_brief"].get(brief_id)
+
+    monkeypatch.setattr("analyst.tools.get_delta_section_tool.previous_report_metadata", lookup)
+    return runs
 
 
 # ---------------------------------------------------------------------------
@@ -137,14 +145,10 @@ def test_delta_marks_improvements_by_direction():
     assert delta["categories"]["revenue_scenarios"]["removed"] == [4]
 
 
-def test_the_previous_run_is_the_latest_completed_one_of_the_brief(state):
-    write_previous_run(state, {}, run_id="old", finished_at="2026-08-01")
-    write_previous_run(state, {}, run_id="new", finished_at="2026-09-01")
-    write_previous_run(state, {}, run_id="failed", status="failed", finished_at="2026-10-01")
-
-    previous = find_previous_run(state.run_dir.parent, 7, "run_2")
-    assert previous["run_id"] == "new"
-    assert find_previous_run(state.run_dir.parent, 8, "run_2") is None
+def test_the_delta_asks_for_the_previous_run_of_this_brief_but_this_one(state, previous_runs):
+    SaveRunMetricsTool(state).forward()
+    GetDeltaSectionTool(state).forward()
+    assert previous_runs["asked"] == [(7, "run_2")]
 
 
 # ---------------------------------------------------------------------------
@@ -168,14 +172,17 @@ def test_sub_task_status_lists_failures(state):
     assert result["failed"] == ["final_summary"]
 
 
-def test_save_run_metrics_then_delta(state):
+def test_save_run_metrics_then_delta(state, previous_runs):
     result = SaveRunMetricsTool(state).forward()
     assert result["metrics"]["headline_margin"] == 8300000
     assert result["categories"] == {"revenue_scenarios": "2 items"}
 
     assert "first run" in GetDeltaSectionTool(state).forward()["text"]
 
-    write_previous_run(state, {"metrics": {"headline_margin": 8000000}, "categories": {}})
+    previous_runs["by_brief"][7] = {
+        "run_id": "run_1", "status": "completed", "finished_at": "2026-09-01T10:00:00",
+        "metrics": {"metrics": {"headline_margin": 8000000}, "categories": {}},
+    }
     delta = GetDeltaSectionTool(state).forward()
     assert delta["metrics"]["headline_margin"]["change"] == 300000
     assert state.delta["previous_run_at"] == "2026-09-01"
@@ -207,7 +214,8 @@ def test_the_report_is_rendered_saved_and_safe(state):
 
     saved = SaveHtmlReportTool(state).forward()
     assert saved["kind"] == "text"
-    html = (state.run_dir / "report.html").read_text()
+    assert state.report_saved is True
+    html = state.html
 
     assert "<strong>margine</strong>" in html
     assert "<script>alert(1)</script>" not in html

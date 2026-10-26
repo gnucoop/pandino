@@ -385,7 +385,6 @@ def test_analyst_defaults_follow_the_datachat_model():
     assert analyst.preview_max_chars == 1500
     assert analyst.max_charts == 20
     assert analyst.chart_max_points == 500
-    assert analyst.reports_dir == "analyst/reports"
     assert cfg.analyst_token_cost == 1
 
 
@@ -408,14 +407,12 @@ def test_analyst_report_model_can_differ():
         **REQUIRED_ENV,
         "ANALYST_MODEL": "task/model",
         "ANALYST_REPORT_MODEL": "report/model",
-        "ANALYST_REPORTS_DIR": "/srv/reports",
     }
     with patch.dict("os.environ", env, clear=True):
         cfg = load_config()
 
     assert cfg.analyst.model == "task/model"
     assert cfg.analyst.report_model == "report/model"
-    assert cfg.analyst.reports_dir == "/srv/reports"
 
 
 @pytest.mark.parametrize(

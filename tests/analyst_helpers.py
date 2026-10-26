@@ -30,7 +30,6 @@ def make_config(**overrides):
         preview_max_chars=500,
         max_charts=10,
         chart_max_points=100,
-        reports_dir="unused",
     )
     params.update(overrides)
     return AnalystConfig(**params)
@@ -78,10 +77,8 @@ class Run:
         self.token_usage = token_usage
 
 
-def make_state(tmp_path, brief=None, *, plan=None, run_id="r1", brief_id=3):
+def make_state(brief=None, *, plan=None, run_id="r1", brief_id=3):
     """A RunState for `brief`, planned by the code fallback unless `plan` is given."""
     brief = brief if brief is not None else valid_brief()
     plan = plan if plan is not None else plan_from_brief(brief, {"orders": ("country", "amount")})
-    return RunState.from_plan(
-        run_id=run_id, brief_id=brief_id, brief=brief, plan=plan, run_dir=tmp_path / run_id
-    )
+    return RunState.from_plan(run_id=run_id, brief_id=brief_id, brief=brief, plan=plan)
