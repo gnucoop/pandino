@@ -255,10 +255,6 @@ class AnalystConfig:
     max_charts: int
     chart_max_points: int
 
-    # Where each run gets its own folder (report.html, run_metadata.json,
-    # sub_task_state.json). Relative paths resolve against the working directory.
-    reports_dir: str
-
 
 # ---------------------------------------------------------------------------
 # Top-level config
@@ -590,7 +586,6 @@ def load_config() -> AppConfig:
         ),
         max_charts=_env_int("ANALYST_MAX_CHARTS", 20, minimum=1, maximum=100),
         chart_max_points=_env_int("ANALYST_CHART_MAX_POINTS", 500, minimum=10, maximum=5000),
-        reports_dir=os.environ.get("ANALYST_REPORTS_DIR", "").strip() or "analyst/reports",
     )
 
     # A misconfigured SQL datasource disables itself; it does not stop the
