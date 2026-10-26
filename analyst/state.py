@@ -15,7 +15,8 @@ context text. The agents reach the state through their tools:
 - the report agent reads all of it back, in bounded previews, and turns it
   into the report.
 
-persist() writes the JSON-compatible part next to the report, for inspection.
+snapshot() is the JSON-compatible part, which the orchestrator stores with the
+run (analysis_reports.state), for inspection.
 
 Tasks run in plan order: validate_plan() guarantees that every dependency
 comes before the task depending on it.
@@ -23,10 +24,7 @@ comes before the task depending on it.
 
 from __future__ import annotations
 
-import json
-import os
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Mapping, Optional
 
 import pandas as pd
@@ -80,7 +78,6 @@ class RunState:
     brief_id: int
     brief: dict[str, Any]
     plan: dict[str, Any]
-    run_dir: Path
 
     tasks: dict[str, TaskRecord] = field(default_factory=dict)
     datasets: dict[str, pd.DataFrame] = field(default_factory=dict)
@@ -94,15 +91,16 @@ class RunState:
     metrics: Optional[dict[str, Any]] = None
     # Comparison with the previous completed run of the same brief, from get_delta_section.
     delta: Optional[dict[str, Any]] = None
-    # The rendered report, from get_html_template, until save_html_report writes it.
+    # The rendered report, from get_html_template; final once save_html_report
+    # marks it saved, and stored with the run by the orchestrator.
     html: Optional[str] = None
-    report_path: Optional[Path] = None
+    report_saved: bool = False
 
     @classmethod
     def from_plan(
-        cls, *, run_id: str, brief_id: int, brief: dict[str, Any], plan: dict[str, Any], run_dir: Path
+        cls, *, run_id: str, brief_id: int, brief: dict[str, Any], plan: dict[str, Any]
     ) -> "RunState":
-        state = cls(run_id=run_id, brief_id=brief_id, brief=brief, plan=plan, run_dir=run_dir)
+        state = cls(run_id=run_id, brief_id=brief_id, brief=brief, plan=plan)
         state.tasks = {
             t["id"]: TaskRecord.from_plan(t, order) for order, t in enumerate(plan["tasks"], start=1)
         }
@@ -173,14 +171,3 @@ class RunState:
             "insights": self.insights,
             "metrics": self.metrics,
         }
-
-    def persist(self) -> None:
-        write_json(self.run_dir / "sub_task_state.json", self.snapshot())
-
-
-def write_json(path: Path, payload: Any) -> None:
-    """Write atomically: a reader never sees a half-written file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    os.replace(tmp, path)
