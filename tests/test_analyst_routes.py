@@ -4,7 +4,7 @@ HTTP contract of the analyst endpoints. No database, no LLM and no thread:
 every collaborator is patched and the run is never actually spawned.
 """
 
-import json
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -19,9 +19,13 @@ HEADERS = {"X-API-KEY": "key-123", "X-USER-EMAIL": "tester@example.com", "X-USER
 
 
 @pytest.fixture
-def env(monkeypatch, tmp_path):
-    state = SimpleNamespace(spent=[], spawned=[], tokens=10, brief={"brief": {"name": "B"}})
-    config = SimpleNamespace(analyst_token_cost=3, analyst=SimpleNamespace(reports_dir=str(tmp_path)))
+def env(monkeypatch):
+    state = SimpleNamespace(
+        spent=[], spawned=[], tokens=10, brief={"brief": {"name": "B"}},
+        # Stored runs: run_id -> {"user_email", "html", "listed"} (analysis_report_service).
+        reports={}, key_checks=[],
+    )
+    config = SimpleNamespace(analyst_token_cost=3)
 
     monkeypatch.setattr(agent_manager, "activeEngines", {})
     monkeypatch.setattr(service, "get_sql_datasource", lambda: object())
@@ -29,14 +33,27 @@ def env(monkeypatch, tmp_path):
     monkeypatch.setattr(service, "get_user_tokens", lambda email: state.tokens)
     monkeypatch.setattr(service, "edit_tokens", lambda email, qty: state.spent.append(qty))
     monkeypatch.setattr(service, "_spawn", lambda run, cfg: state.spawned.append(run))
-    monkeypatch.setattr(analyst_route, "assert_valid_api_key", lambda *a: None)
+    monkeypatch.setattr(analyst_route, "assert_valid_api_key", lambda *a: state.key_checks.append(a))
+
+    def get_report_html(run_id, user_email):
+        report = state.reports.get(run_id)
+        return report["html"] if report and report["user_email"] == user_email else None
+
+    def list_reports(user_email, brief_id=None, limit=50):
+        return [
+            {"run_id": run_id, "brief_id": r["brief_id"]}
+            for run_id, r in state.reports.items()
+            if r["user_email"] == user_email and brief_id in (None, r["brief_id"])
+        ][:limit]
+
+    monkeypatch.setattr(analyst_route, "get_report_html", get_report_html)
+    monkeypatch.setattr(analyst_route, "list_reports", list_reports)
 
     app = Flask(__name__)
     app.config["MAUI_CONFIG"] = config
     app.register_blueprint(analyst_route.analyst_bp)
     state.client = app.test_client()
     state.config = config
-    state.reports_dir = tmp_path
     return state
 
 
@@ -118,31 +135,59 @@ def test_status_without_a_run_is_404(env):
     assert env.client.get("/analysis-status", headers=HEADERS).status_code == 404
 
 
-def write_run(env, run_id, owner, report=True):
-    folder = env.reports_dir / run_id
-    folder.mkdir()
-    (folder / "run_metadata.json").write_text(json.dumps({"user_email": owner}))
-    if report:
-        (folder / "report.html").write_text("<html>ok</html>")
+def store_run(env, run_id, owner, *, brief_id=7, html="<html>ok</html>"):
+    env.reports[run_id] = {"user_email": owner, "brief_id": brief_id, "html": html}
 
 
 def test_the_report_is_served_to_its_owner_only(env):
-    run_id = "20261014_101500_b7_a1b2c3"
-    write_run(env, run_id, "tester@example.com")
+    store_run(env, "r_mine", "tester@example.com")
+    store_run(env, "r_other", "someone@else.com")
 
-    response = env.client.get(f"/analysis-report?run_id={run_id}", headers=HEADERS)
+    response = env.client.get("/analysis-report?run_id=r_mine", headers=HEADERS)
     assert response.status_code == 200
     assert response.mimetype == "text/html"
-    assert b"<html>ok</html>" in response.data
+    assert response.data == b"<html>ok</html>"
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert "default-src 'none'" in response.headers["Content-Security-Policy"]
+    assert env.key_checks == [("key-123", "tester@example.com")]
 
-    other = "20261014_101500_b7_d4e5f6"
-    write_run(env, other, "someone@else.com")
-    assert env.client.get(f"/analysis-report?run_id={other}", headers=HEADERS).status_code == 404
+    for run_id in ("r_other", "unknown", ""):
+        response = env.client.get(f"/analysis-report?run_id={run_id}", headers=HEADERS)
+        assert response.status_code == 404 and response.get_json()["code"] == "NO_REPORT"
 
 
-@pytest.mark.parametrize("run_id", ["../../etc", "", "20261014_101500_b7_zzzzzz"])
-def test_report_paths_cannot_be_forged(env, run_id):
-    assert env.client.get(f"/analysis-report?run_id={run_id}", headers=HEADERS).status_code == 404
+def test_a_run_without_its_report_yet_is_404(env):
+    store_run(env, "r_running", "tester@example.com", html=None)
+    assert env.client.get("/analysis-report?run_id=r_running", headers=HEADERS).status_code == 404
+
+
+def test_the_list_holds_the_user_runs_and_filters_by_brief(env):
+    store_run(env, "r1", "tester@example.com", brief_id=7)
+    store_run(env, "r2", "tester@example.com", brief_id=8)
+    store_run(env, "r3", "someone@else.com", brief_id=7)
+
+    body = env.client.get("/analysis-reports", headers=HEADERS).get_json()
+    assert [r["run_id"] for r in body["reports"]] == ["r1", "r2"]
+
+    body = env.client.get("/analysis-reports?brief_id=8", headers=HEADERS).get_json()
+    assert [r["run_id"] for r in body["reports"]] == ["r2"]
+    assert env.key_checks == [("key-123", "tester@example.com")] * 2
+
+
+@pytest.mark.parametrize("path", ["/analysis-reports", "/analysis-report?run_id=r1"])
+def test_the_report_endpoints_need_the_auth_headers(env, path):
+    assert env.client.get(path, headers={"X-API-KEY": "key-123"}).status_code == 400
+    assert env.key_checks == []
+
+
+def test_a_database_failure_is_500(env, monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError("down")
+
+    monkeypatch.setattr(analyst_route, "list_reports", broken)
+    monkeypatch.setattr(analyst_route, "get_report_html", broken)
+    assert env.client.get("/analysis-reports", headers=HEADERS).status_code == 500
+    assert env.client.get("/analysis-report?run_id=r1", headers=HEADERS).status_code == 500
 
 
 def test_ending_cancels_and_forgets_the_run(env):
@@ -159,7 +204,7 @@ def test_ending_cancels_and_forgets_the_run(env):
 
 def test_run_ids_name_the_brief():
     run_id = service.new_run_id(12)
-    assert service._RUN_ID_RE.match(run_id) and "_b12_" in run_id
+    assert re.fullmatch(r"\d{8}_\d{6}_b12_[0-9a-f]{6}", run_id)
 
 
 def test_a_run_is_owned_by_its_user():

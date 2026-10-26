@@ -25,14 +25,14 @@ def datasets():
 
 
 @pytest.fixture
-def state(tmp_path):
+def state():
     brief = {
         "sub_tasks": [
             {"id": "prep", "name": "Prep", "order": 1, "depends_on": [], "mission": "m",
              "outputs": {"required": ["total", "series"]}},
         ]
     }
-    return make_state(tmp_path, brief)
+    return make_state(brief)
 
 
 # ---------------------------------------------------------------------------
