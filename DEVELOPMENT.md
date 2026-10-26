@@ -173,7 +173,7 @@ pandino/
 │   ├── report_agent.py         #   ReportAgentEngine(SmolagentsEngineBase): writes the report
 │   ├── run.py                  #   AnalysisRun: status, progress events, cancellation
 │   ├── state.py                #   RunState: plan, outputs, insights, datasets, charts, tables
-│   ├── service.py              #   start_analysis(), report_path() (Flask-free)
+│   ├── service.py              #   start_analysis(), end_analysis() (Flask-free)
 │   ├── sandbox.py              #   GuardedPythonExecutor: no file/network access from agent code
 │   ├── sql_prompt.py           #   Schema addendum scoped to the plan's relations, large tables note
 │   ├── metrics.py              #   metrics_config values, previous-run comparison
@@ -181,8 +181,7 @@ pandino/
 │   ├── report_template.py      #   HTML rendering (templates/report.html, Chart.js)
 │   ├── values.py               #   numpy/pandas → JSON, bounded previews
 │   ├── prompts.py              #   In-code prompt defaults (DB-overridable)
-│   ├── tools/                  #   20 tools: SQL, DataFrame analysis, saving, insights, report
-│   └── reports/                #   Default ANALYST_REPORTS_DIR, one folder per run (gitignored)
+│   └── tools/                  #   20 tools: SQL, DataFrame analysis, saving, insights, report
 │
 ├── llm/
 │   └── litellm_factory.py      #   build_litellm_model() for Smolagents
@@ -297,7 +296,7 @@ Known direct env reads still exist and are intentional:
 | **DataChat engine** | `DATACHAT_ENGINE`, `DATACHAT_MAX_STEPS`, `DATACHAT_RATE_LIMIT_PER_MIN`, `DATACHAT_SESSION_TTL_MIN`, `DATACHAT_LOG_LEVEL` | `smolagents`, `12`, `0`, `60`, `INFO`                  |
 | **DataChat SQL**    | `DATACHAT_SQL_ENABLED`, `DATACHAT_DB_PORT/SCHEMA`, `DATACHAT_SQL_MAX_ROWS/MAX_COLUMNS/MAX_CELL_CHARS`, `DATACHAT_SQL_STATEMENT_TIMEOUT_MS`, `DATACHAT_SQL_INCLUDE_VIEWS` (also gates view reflection), `DATACHAT_SQL_ALLOWED_TABLES/DENIED_TABLES` (tables, views and matviews alike), `DATACHAT_SQL_SCHEMA_TTL_S/SCHEMA_MAX_CHARS/SCHEMA_INCLUDE_FKS`, `DATACHAT_SQL_SCHEMA_PROFILE_VALUES/PROFILE_SAMPLE_ROWS/PROFILE_MAX_VALUES/PROFILE_MAX_VALUE_CHARS`, `DATACHAT_SQL_QUOTE_IDENTIFIERS` | `false`, `5432`/`public`, `200`/`25`/`300`, `10000`, `true`, empty, `3600`/`40000`/`true`, `true`/`50`/`3`/`32`, `true` |
 | **Interviewer**     | `INTERVIEWER_PROVIDER/MODEL`, `INTERVIEWER_MAX_STEPS`, `INTERVIEWER_MAX_TURNS`, `INTERVIEWER_MAX_NOTES`, `INTERVIEWER_MIN_QUESTIONS` (clamped 4–10), `INTERVIEWER_TOKEN_COST` | DataChat's provider/model, `15`, `12`, `30`, `4`, `1` |
-| **Analyst**         | `ANALYST_PROVIDER/MODEL` (task and chart agents), `ANALYST_REPORT_PROVIDER/MODEL` (planner and report agents), `ANALYST_PLAN_MAX_STEPS`, `ANALYST_TASK_MAX_STEPS`, `ANALYST_CHART_MAX_STEPS`, `ANALYST_REPORT_MAX_STEPS`, `ANALYST_TASK_RETRIES` (0–3), `ANALYST_MAX_EXTRA_TASKS` (0–5), `ANALYST_MAX_INSIGHTS` (0–50), `ANALYST_SQL_MAX_ROWS`, `ANALYST_DATASET_MAX_ROWS`, `ANALYST_OUTPUT_MAX_CHARS`, `ANALYST_PREVIEW_MAX_CHARS`, `ANALYST_MAX_CHARTS`, `ANALYST_CHART_MAX_POINTS`, `ANALYST_REPORTS_DIR`, `ANALYST_TOKEN_COST` | DataChat's provider/model (planner/report: the analyst's), `12`, `20`, `15`, `12`, `1`, `2`, `12`, `50`, `100000`, `20000`, `1500`, `20`, `500`, `analyst/reports`, `1` |
+| **Analyst**         | `ANALYST_PROVIDER/MODEL` (task and chart agents), `ANALYST_REPORT_PROVIDER/MODEL` (planner and report agents), `ANALYST_PLAN_MAX_STEPS`, `ANALYST_TASK_MAX_STEPS`, `ANALYST_CHART_MAX_STEPS`, `ANALYST_REPORT_MAX_STEPS`, `ANALYST_TASK_RETRIES` (0–3), `ANALYST_MAX_EXTRA_TASKS` (0–5), `ANALYST_MAX_INSIGHTS` (0–50), `ANALYST_SQL_MAX_ROWS`, `ANALYST_DATASET_MAX_ROWS`, `ANALYST_OUTPUT_MAX_CHARS`, `ANALYST_PREVIEW_MAX_CHARS`, `ANALYST_MAX_CHARTS`, `ANALYST_CHART_MAX_POINTS`, `ANALYST_TOKEN_COST` | DataChat's provider/model (planner/report: the analyst's), `12`, `20`, `15`, `12`, `1`, `2`, `12`, `50`, `100000`, `20000`, `1500`, `20`, `500`, `1` |
 | **Auth**            | `AUTH_GATEWAY_URL`, `STRIPE_SK_KEY`                                                                                      | `http://localhost:3000/validate`, `None`               |
 
 `DATACHAT_DB_HOST`, `DATACHAT_DB_NAME`, `DATACHAT_DB_USER` and `DATACHAT_DB_PASSWORD`
@@ -354,6 +353,7 @@ Created by `database_pg.init_db()` (`infrastructure/database_pg.py:107`):
 | `feedback`  | User thumbs-up/down on answers, optionally linked to `logs.id`                                  |
 | `rag_files` | Tracking of ingested documents (`file_id`, namespace, chunk_count, language)                    |
 | `analysis_briefs` | User-approved analysis briefs from the interviewer: `user_email, name, brief (JSONB), prompt_text, transcript (JSONB), model, provider, status (ready/consumed/archived), approved_at` |
+| `analysis_reports` | Data analyst runs, one row per `run_id` updated as the run progresses: `brief_id, user_email, title, status, metadata (JSONB: metrics, tokens, agents' errors), plan (JSONB), state (JSONB: task outputs, insights, step errors), html (the report), started_at, finished_at` |
 
 > **Plus** one PGVector table **per namespace** (e.g. `dino`, `farm`) created
 > lazily by `ensure_pgvector_namespace_ready()` (`infrastructure/vector_store.py:57`).
@@ -462,7 +462,8 @@ there *does* surface as a non-zero exit.
 
 On a database with none of these tables, `init_db` creates the full
 repository-defined schema in one go — `users`, `logs`, `costs`, `prompts`,
-`feedback`, `rag_files` and `operational_events` (`init_db()`,
+`feedback`, `rag_files`, `operational_events`, `analysis_briefs` and
+`analysis_reports` (`init_db()`,
 `database_pg.py:121-198`; the resulting shape is pinned by
 `tests/test_database_schema_fresh.py`):
 
@@ -1352,7 +1353,7 @@ report and metrics, whatever they are called).
 background thread started by `analyst.service.start_analysis()`):
 
 1. loads the brief (owned by the user), whatever its shape;
-2. **plans**: `PlannerAgentEngine`, else `plan_from_brief`; writes `plan.json`;
+2. **plans**: `PlannerAgentEngine`, else `plan_from_brief`; saves the run row with its plan;
 3. runs the tasks in plan order, each with a **fresh `TaskAgentEngine`**. A task whose
    agent failed or left a required output unsaved is retried (`ANALYST_TASK_RETRIES`;
    exploratory tasks get one attempt only); the retry is told what the failed attempt left
@@ -1364,7 +1365,9 @@ background thread started by `analyst.service.start_analysis()`):
 5. runs the `ReportAgentEngine` on the results. Should it fail, a plain report is
    rendered from the task summaries and insights, so a run that analysed the data always
    ends with a report;
-6. writes `run_metadata.json` and marks the brief `consumed`.
+6. saves the run, report included, and marks the brief `consumed`. The run's
+   `analysis_reports` row is also saved after each task and after the charts, so it
+   shows the progress.
 
 ### Agents
 
@@ -1449,13 +1452,15 @@ announcement.
   `ANALYST_REPORT_MODEL` the planning and writing.
 - Spent on purpose: the planner run and the exploration tasks (`ANALYST_MAX_EXTRA_TASKS`,
   0 turns exploration off).
-- Token usage per agent run is recorded in `run_metadata.json`.
+- Token usage per agent run is recorded in the run's metadata.
 
-### Report and run folder
+### Report and stored run
 
-Each run gets `ANALYST_REPORTS_DIR/<YYYYmmdd_HHMMSS>_b<brief_id>_<hex>/`:
+Each run (`run_id` = `<YYYYmmdd_HHMMSS>_b<brief_id>_<hex>`) is one row of
+`analysis_reports`, written through `services/analysis_report_service.py`; nothing is
+written to disk:
 
-- `report.html` — one self-contained page (`analyst/templates/report.html`):
+- `html` — the report, one self-contained page (`analyst/templates/report.html`):
   - KPI cards from the plan's `metrics_config`, with the change since the previous completed run
     of the same brief;
   - the sections, with Chart.js charts (CDN, pinned) and escaped tables;
@@ -1463,14 +1468,15 @@ Each run gets `ANALYST_REPORTS_DIR/<YYYYmmdd_HHMMSS>_b<brief_id>_<hex>/`:
   - numbers formatted for the report language (`Intl.NumberFormat`).
   - Markdown is rendered with HTML disabled: nothing an agent writes reaches the page
     as raw HTML.
-- `run_metadata.json` — status, owner, timestamps, metrics (the next run's baseline),
-  token usage, models, `planner` (whether its plan was used, its error message, its last
-  step errors), `chart_agent` (done, error, reasons for skipped charts, step errors),
-  `report_agent` (fallback report used, error, step errors).
-- `plan.json` — the plan the run followed.
-- `sub_task_state.json` — every task's status, summary, outputs and `step_errors` (the
-  last 5 step errors across attempts, first line each: they may quote SQL, so they stay
-  out of the progress events); the insights; the chart and table names.
+- `metadata` — status, owner, timestamps, metrics (the next run's baseline: the latest
+  completed run of the same brief, `previous_report_metadata`), token usage, models,
+  `planner` (whether its plan was used, its error message, its last step errors),
+  `chart_agent` (done, error, reasons for skipped charts, step errors), `report_agent`
+  (fallback report used, error, step errors).
+- `plan` — the plan the run followed.
+- `state` — every task's status, summary, outputs and `step_errors` (the last 5 step
+  errors across attempts, first line each: they may quote SQL, so they stay out of the
+  progress events); the insights; the chart and table names.
 
 ### Progress and lifecycle
 
@@ -1479,8 +1485,11 @@ Each run gets `ANALYST_REPORTS_DIR/<YYYYmmdd_HHMMSS>_b<brief_id>_<hex>/`:
 step, naming the tools the step called. One run per API key lives in `agent_manager`
 (kind `analyst`); a finished run is replaced by the next start, and `/end-analysis` (or
 replacement) cancels a running one at its next agent step. Runs live in process memory,
-like every session, but reports stay on disk: `/analysis-report` reads them from the run
-folder, checking the owner in `run_metadata.json`.
+like every session, but their rows stay in the database: `/analysis-reports` lists the
+caller's runs (without the HTML, optionally for one `brief_id`), and `/analysis-report`
+returns one report, both after `assert_valid_api_key` and only for the caller's own runs.
+The report is served with `X-Content-Type-Options: nosniff` and a CSP allowing only its
+inline scripts and Chart.js from jsDelivr.
 
 Each run binds its `run_id` as the logging request id. Usage recording
 (`record_token_consumption`) is not wired yet, because it needs a request context.

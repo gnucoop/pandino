@@ -1281,8 +1281,11 @@ paths:
       tags: [Data Analyst]
       summary: The HTML report of a run
       description: >-
-        Served to the user who started the run only. Reports stay available after
-        the run has left the server's memory.
+        Read from the analysis_reports table and served to the user who started the
+        run only, so it stays available after the run has left the server's memory.
+        Sent with X-Content-Type-Options nosniff and a Content-Security-Policy allowing
+        only the report's inline scripts and Chart.js from jsDelivr; show it in a
+        sandboxed iframe (sandbox="allow-scripts", srcdoc).
       parameters:
         - $ref: '#/components/parameters/UserEmailHeader'
         - name: run_id
@@ -1296,13 +1299,64 @@ paths:
             text/html:
               schema: {type: string}
         "404":
-          description: Unknown run, another user's run, or no report (NO_REPORT).
+          description: Unknown run, another user's run, or a run without a report yet (NO_REPORT).
+        "500":
+          description: The database could not be read (REPORT_UNAVAILABLE).
+
+  /analysis-reports:
+    get:
+      tags: [Data Analyst]
+      summary: The user's analysis runs
+      description: >-
+        The caller's runs, newest first, without their HTML: whether each has a report
+        (has_report) and its tracked metrics. Runs in progress are listed too.
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+        - name: brief_id
+          in: query
+          required: false
+          description: Only the runs of this brief.
+          schema: {type: integer}
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer, default: 50, minimum: 1, maximum: 200}
+      responses:
+        "200":
+          description: The runs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reports:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        run_id: {type: string}
+                        brief_id: {type: integer}
+                        title: {type: string, nullable: true}
+                        status:
+                          type: string
+                          enum: [queued, planning, running, charting, writing_report, completed, failed, cancelled]
+                        started_at: {type: string, format: date-time, nullable: true}
+                        finished_at: {type: string, format: date-time, nullable: true}
+                        metrics:
+                          type: object
+                          nullable: true
+                          description: '{metrics: {key: number}, categories: {key: [items]}} of a completed run.'
+                        has_report: {type: boolean}
+        "400":
+          description: limit is not an integer.
+        "500":
+          description: The database could not be read (REPORTS_UNAVAILABLE).
 
   /end-analysis:
     post:
       tags: [Data Analyst]
       summary: Cancel and forget the key's analysis
-      description: A running analysis stops at its next agent step. Reports already written stay on disk.
+      description: A running analysis stops at its next agent step. Stored runs and reports are kept.
       parameters:
         - $ref: '#/components/parameters/UserEmailHeader'
       responses:
