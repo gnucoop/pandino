@@ -124,7 +124,7 @@ _SQL_ADDENDUM_DEFAULT = textwrap.dedent(
 )
 
 # Appended to the system instructions only when the chart tool is registered,
-# that is when a dataframe is loaded (see _data_tools()).
+# that is when a dataframe is loaded or the SQL datasource is ready (see _data_tools()).
 _CHART_ADDENDUM = textwrap.dedent(
     """\
     CHARTS
@@ -165,6 +165,25 @@ _ANALYTICAL_HONESTY_ADDENDUM = textwrap.dedent(
     - To sort text into themes when the user gave no categories: run keywords, propose
       a small set of categories from the recurring terms, then classify_match, and
       say the categories are your proposal. There is no automatic clustering tool.
+    """
+)
+
+# Appended only to a SQL-only session (no dataframe): the dataframe tools are
+# registered there too, but they have no dataset to fall back on and work on the
+# rows passed in their data argument. Code-owned, like _CHART_ADDENDUM.
+_QUERY_RESULTS_ADDENDUM = textwrap.dedent(
+    """\
+    ANALYZING QUERY RESULTS
+    - No dataset is uploaded: every analysis tool (chart, plot, aggregate, sentiment_analysis,
+      keywords, classify_match, correlation, ...) works only on the rows passed in its data
+      argument. Never call one without data.
+    - Pass it the sql_engine result as it is:
+      rows = sql_engine(query="SELECT ...")
+      chart(kind="bar", x="<column>", y="<column>", data=rows)
+    - Compute totals, counts and averages in SQL. Use the tools for what SQL cannot do:
+      charts, plots, sentiment, keywords, classification, correlation.
+    - Select only the columns the tool needs. The rows are capped: a result computed on
+      truncated rows covers only those rows.
     """
 )
 
@@ -557,12 +576,23 @@ class SmolagentsEngine(DataChatEngine):
             len(snapshot.relations),
             len(rendered),
         )
-        return instructions + "\n\n" + addendum
+        instructions = instructions + "\n\n" + addendum
+        if self.data is None:
+            # SQL-only session: the dataframe tools are registered on the query results.
+            instructions = "\n\n".join(
+                [instructions, _CHART_ADDENDUM, _ANALYTICAL_HONESTY_ADDENDUM, _QUERY_RESULTS_ADDENDUM]
+            )
+        return instructions
 
     def _data_tools(self) -> list[Any]:
-        """DATA tools, or an empty list when data (csv datasource) is None."""
+        """
+        DATA tools, or an empty list when there is neither a dataframe nor a ready
+        SQL datasource. Each tool works on the rows passed in its data argument
+        (e.g. a sql_engine result) and falls back to the dataframe, if any.
+        _sql_ready is set by _build_instructions(), which must run first.
+        """
         datasource = self.data
-        if datasource is None:
+        if datasource is None and not self._sql_ready:
             return []
         return [
             DescribeTool(datasource),
