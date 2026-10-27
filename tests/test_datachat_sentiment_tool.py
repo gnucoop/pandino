@@ -141,11 +141,14 @@ def _bare_engine(data):
     return engine
 
 
-def test_registered_only_with_a_dataframe():
+def test_registered_with_a_dataframe_or_a_ready_sql_datasource():
     assert "sentiment_analysis" in [t.name for t in _bare_engine(pd.DataFrame({"a": [1]}))._data_tools()]
+    no_source = _bare_engine(None)
+    assert no_source._data_tools() == []
+    assert no_source._sql_tools(None) == []
     sql_only = _bare_engine(None)
-    assert sql_only._data_tools() == []
-    assert sql_only._sql_tools(None) == []
+    sql_only._sql_ready = True
+    assert "sentiment_analysis" in [t.name for t in sql_only._data_tools()]
 
 
 def test_engine_holds_no_sentiment_state():

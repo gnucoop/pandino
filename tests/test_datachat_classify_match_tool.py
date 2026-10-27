@@ -112,13 +112,16 @@ def _bare_engine(data):
     return engine
 
 
-def test_registered_only_with_a_dataframe_and_after_existing_tools():
+def test_registered_with_a_dataframe_or_sql_and_after_existing_tools():
     names = [t.name for t in _bare_engine(pd.DataFrame({"a": [1]}))._data_tools()]
     assert names[-2:] == ["sentiment_analysis", "classify_match"]
     assert names.count("classify_match") == 1
+    no_source = _bare_engine(None)
+    assert no_source._data_tools() == []
+    assert no_source._sql_tools(None) == []
     sql_only = _bare_engine(None)
-    assert sql_only._data_tools() == []
-    assert sql_only._sql_tools(None) == []
+    sql_only._sql_ready = True
+    assert "classify_match" in [t.name for t in sql_only._data_tools()]
 
 
 def test_engine_holds_no_classify_state():

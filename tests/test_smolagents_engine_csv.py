@@ -71,11 +71,19 @@ def test_no_sql_tool_without_a_datasource(engine):
     assert engine._sql_tools(None) == []
 
 
-def test_without_data_there_are_no_dataframe_tools(engine):
-    """A SQL-only session carries no dataframe, so it carries no pandas tools."""
+def test_without_data_nor_sql_there_are_no_dataframe_tools(engine):
+    """With neither a dataframe nor SQL, the tools would have no rows to work on."""
     engine.data = None
 
     assert engine._data_tools() == []
+
+
+def test_a_sql_only_session_builds_the_dataframe_tools_too(engine):
+    """They work on the sql_engine results passed in their data argument."""
+    engine.data = None
+    engine._sql_ready = True
+
+    assert [t.name for t in engine._data_tools()] == EXPECTED_TOOLS
 
 
 # ---------------------------------------------------------------------------
