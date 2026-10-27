@@ -161,7 +161,7 @@ class CompareGroupsTool(Tool):
         },
     }
 
-    def __init__(self, df: pd.DataFrame) -> None:
+    def __init__(self, df: Optional[pd.DataFrame]) -> None:
         super().__init__()
         self._df = df
 
@@ -185,8 +185,10 @@ class CompareGroupsTool(Tool):
                     df = pd.DataFrame(data)
                 except Exception:
                     return {"kind": "error", "message": "Invalid data: could not build a table from records.", "code": "INVALID_DATA"}
-            else:
+            elif self._df is not None:
                 df = self._df
+            else:
+                return {"kind": "error", "message": "No data: there is no dataset and no data was passed.", "code": "INVALID_DATA"}
 
             return self._compare(df, metric, group_col, group_a, group_b, inherits_more_rows_available(data))
 

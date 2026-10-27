@@ -221,7 +221,7 @@ class ClassifyMatchTool(Tool):
         },
     }
 
-    def __init__(self, df: pd.DataFrame, *, model: Any, provider: str, model_name: str) -> None:
+    def __init__(self, df: Optional[pd.DataFrame], *, model: Any, provider: str, model_name: str) -> None:
         super().__init__()
         self._df = df
         self._model = model
@@ -261,8 +261,10 @@ class ClassifyMatchTool(Tool):
                     df = pd.DataFrame(data)
                 except Exception:
                     return _reject("INVALID_DATA")
-            else:
+            elif self._df is not None:
                 df = self._df
+            else:
+                return {"kind": "error", "message": "No data: there is no dataset and no data was passed.", "code": "INVALID_DATA"}
 
             if col not in df.columns:
                 return _reject("INVALID_COLUMN")
