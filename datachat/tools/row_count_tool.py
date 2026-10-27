@@ -1,5 +1,5 @@
 import logging
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Optional
 
 import pandas as pd
 from smolagents import Tool
@@ -36,7 +36,7 @@ class RowCountTool(Tool):
         }
     }
 
-    def __init__(self, df: pd.DataFrame) -> None:
+    def __init__(self, df: Optional[pd.DataFrame]) -> None:
         super().__init__()
         self._df = df
 
@@ -53,8 +53,10 @@ class RowCountTool(Tool):
                     return {"kind": "error", "message": "Invalid data: expected a list of records.", "code": "INVALID_DATA"}
 
                 n_rows = int(len(data))
-            else:
+            elif self._df is not None:
                 n_rows = int(len(self._df))
+            else:
+                return {"kind": "error", "message": "No data: there is no dataset and no data was passed.", "code": "INVALID_DATA"}
 
             logger.info("event=tool_call_result n_rows=%s", n_rows)
 

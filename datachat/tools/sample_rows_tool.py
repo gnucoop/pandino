@@ -1,5 +1,5 @@
 import logging
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Optional
 
 import pandas as pd
 from smolagents import Tool
@@ -111,7 +111,7 @@ class SampleRowsTool(Tool):
         },
     }
 
-    def __init__(self, df: pd.DataFrame) -> None:
+    def __init__(self, df: Optional[pd.DataFrame]) -> None:
         super().__init__()
         self._df = df  # bound dataframe
 
@@ -153,8 +153,14 @@ class SampleRowsTool(Tool):
                         "message": "Invalid data: could not build a table from records.",
                         "code": "INVALID_DATA",
                     }
-            else:
+            elif self._df is not None:
                 df = self._df
+            else:
+                return {
+                    "kind": "error",
+                    "message": "No data: there is no dataset and no data was passed.",
+                    "code": "INVALID_DATA",
+                }
 
             # -----------------------------
             # Column selection

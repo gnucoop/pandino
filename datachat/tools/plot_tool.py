@@ -1,7 +1,7 @@
 import os
 import uuid
 import logging
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Optional
 
 import pandas as pd
 import numpy as np
@@ -158,7 +158,7 @@ class PlotTool(Tool):
         },
     }
 
-    def __init__(self, df: pd.DataFrame, output_dir: str) -> None:
+    def __init__(self, df: Optional[pd.DataFrame], output_dir: str) -> None:
         super().__init__()
         self._df = df
         self._output_dir = output_dir
@@ -210,9 +210,15 @@ class PlotTool(Tool):
                         "message": "Invalid data: could not build a table from records.",
                         "code": "INVALID_DATA",
                     }
-            else:
+            elif self._df is not None:
                 df = self._df
                 using_intermediate_data = False
+            else:
+                return {
+                    "kind": "error",
+                    "message": "No data: there is no dataset and no data was passed.",
+                    "code": "INVALID_DATA",
+                }
 
             kind_clean = (kind or "").strip().lower()
             x_clean = (x or "").strip()
