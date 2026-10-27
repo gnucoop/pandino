@@ -8,12 +8,8 @@ from utils.operational_persistence import register_operational_persistence
 
 DATACHAT_RUNTIME_LOGGER = bootstrap_logging()
 
-# Temporary, for debugging hung model calls: LiteLLM logs every request and
-# response in full (prompts included). After bootstrap_logging(), which pins
-# the LiteLLM logger to WARNING.
-import litellm  # noqa: E402
-
-litellm._turn_on_debug()
+# import litellm  # noqa: E402
+# litellm._turn_on_debug()
 
 logger = logging.getLogger(__name__)
 
