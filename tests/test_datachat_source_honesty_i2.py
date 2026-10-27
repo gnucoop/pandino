@@ -111,6 +111,15 @@ def test_multi_hop_filter_then_aggregate_stays_partial():
         assert _facts(tab).more_rows_available is True
 
 
+def test_a_sql_only_session_chains_without_a_dataframe():
+    """No CSV: the tools are built with None and work on the sql_engine result alone."""
+    with _app.test_request_context("/datachat"):
+        src = _partial_source()
+        agg = AggregateTool(None).forward(group_by="region", op="sum", metric="amount", data=src)
+        assert agg["kind"] == "table"
+        assert _facts(agg).more_rows_available is True
+
+
 def test_untrusted_input_asserts_nothing():
     with _app.test_request_context("/datachat"):
         rows = _rows()

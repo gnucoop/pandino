@@ -515,7 +515,8 @@ def _bare_engine(data):
     return engine
 
 
-def test_chart_is_registered_and_taught_only_with_a_dataframe(monkeypatch):
+def test_chart_is_registered_and_taught_only_with_a_data_source(monkeypatch):
+    """The SQL-only case is covered in test_smolagents_engine_sql_tools.py."""
     monkeypatch.setattr(
         "datachat.smolagents_engine.load_prompt",
         lambda title, default_text="", **kwargs: default_text,
@@ -524,6 +525,6 @@ def test_chart_is_registered_and_taught_only_with_a_dataframe(monkeypatch):
     assert "chart" in [t.name for t in with_df._data_tools()]
     assert "CHARTS" in with_df._build_instructions(None)
 
-    sql_only = _bare_engine(None)
-    assert sql_only._data_tools() == []
-    assert "CHARTS" not in sql_only._build_instructions(None)
+    no_source = _bare_engine(None)
+    assert no_source._data_tools() == []
+    assert "CHARTS" not in no_source._build_instructions(None)

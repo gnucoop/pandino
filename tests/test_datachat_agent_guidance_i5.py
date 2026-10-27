@@ -114,12 +114,14 @@ def test_charts_route_distributions_by_column_kind(df):
 # --- SQL-only session ------------------------------------------------------------
 
 
-def test_sql_only_session_gets_sql_completeness_but_no_dataframe_guidance():
+def test_sql_only_session_gets_sql_completeness_and_the_query_results_guidance():
+    """The dataframe tools are registered on the query results, so their guidance is too."""
     with _prompts():
         text = _engine(None)._build_instructions(_datasource())
 
-    assert "CHARTS" not in text
-    assert "ANALYTICAL HONESTY" not in text
+    assert "CHARTS" in text
+    assert "ANALYTICAL HONESTY" in text
+    assert "ANALYZING QUERY RESULTS" in text
     sql = _sql_section(text)
     assert "GROUP BY" in sql and "COUNT/SUM/AVG/MIN/MAX" in sql
     assert "narrow the query and run it again" not in sql
