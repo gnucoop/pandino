@@ -103,7 +103,7 @@ pandino/
 │   ├── rag.py                  #   /completion.json, /agentchat
 │   ├── datachat.py             #   /startdatachat, /datachat, /enddatachat
 │   ├── interviewer.py          #   /start-analysis-interview, /analysis-interview, /end-analysis-interview, /analysis-briefs, /analysis-brief
-│   ├── analyst.py              #   /start-analysis, /analysis-status, /analysis-report, /end-analysis
+│   ├── analyst.py              #   /start-analysis, /analysis-status, /analysis-reports, /analysis-report(-html), /end-analysis
 │   ├── admin.py                #   /admin/* (web UI)
 │   └── utils.py                #   assert_valid_api_key() shared helper
 │
@@ -880,7 +880,8 @@ run per API key at a time. The SQL datasource must be enabled. See
 | ------ | ------------------ | --------------------------- | ---------------------- | ----------------------------------------------------------------------------------------- |
 | `POST` | `/start-analysis`  | `X-API-KEY`, `X-USER-EMAIL` | `{brief_id}`           | `{analysis:{run_id, status}}`; errors `{analysis:{error, code}}`: `BRIEF_NOT_FOUND` 404, `ANALYSIS_BUSY` 409, `SQL_UNAVAILABLE` 400, `NOT_ENOUGH_TOKENS` 500 |
 | `GET`  | `/analysis-status` | `X-API-KEY`, `X-USER-EMAIL` | `?since=<next_since>`  | `{run_id, brief_id, status, current_task, tasks_done, tasks_total, error, report_ready, events[], next_since}`; 404 `NO_ANALYSIS` |
-| `GET`  | `/analysis-report` | `X-API-KEY`, `X-USER-EMAIL` | `?run_id=`             | The report (`text/html`), to its owner only; 404 `NO_REPORT`                              |
+| `GET`  | `/analysis-report` | `X-API-KEY`, `X-USER-EMAIL` | `?run_id=`             | `{report:{id, run_id, brief_id, user_email, title, status, metadata, plan, state, html, started_at, finished_at, created_at, updated_at}}`: the whole run, `html` null until the report exists, to its owner only; 404 `NO_REPORT` |
+| `GET`  | `/analysis-report-html` | `X-API-KEY`, `X-USER-EMAIL` | `?run_id=`        | The report (`text/html`), to its owner only; 404 `NO_REPORT`                              |
 | `POST` | `/end-analysis`    | `X-API-KEY`, `X-USER-EMAIL` | –                      | `{run_id, status}`: cancels the run if still going and forgets it; 404 `NO_ANALYSIS`      |
 
 `status` is `queued → planning → running → charting → writing_report → completed`, or
@@ -899,7 +900,8 @@ tables, skipped}`), `charts_failed`, `report_started`, `report_saved`, `run_comp
 ```bash
 curl -X POST http://127.0.0.1:5000/start-analysis "${H[@]}" -d '{"brief_id":42}'
 curl "http://127.0.0.1:5000/analysis-status?since=0" "${H[@]}"
-curl "http://127.0.0.1:5000/analysis-report?run_id=20261014_101500_b42_a1b2c3" "${H[@]}" -o report.html
+curl "http://127.0.0.1:5000/analysis-report?run_id=20261014_101500_b42_a1b2c3" "${H[@]}"
+curl "http://127.0.0.1:5000/analysis-report-html?run_id=20261014_101500_b42_a1b2c3" "${H[@]}" -o report.html
 ```
 
 ### Response shape — DataChat `response`
@@ -1488,8 +1490,9 @@ step, naming the tools the step called. One run per API key lives in `agent_mana
 (kind `analyst`); a finished run is replaced by the next start, and `/end-analysis` (or
 replacement) cancels a running one at its next agent step. Runs live in process memory,
 like every session, but their rows stay in the database: `/analysis-reports` lists the
-caller's runs (without the HTML, optionally for one `brief_id`), and `/analysis-report`
-returns one report, both after `assert_valid_api_key` and only for the caller's own runs.
+caller's runs (without the HTML, optionally for one `brief_id`), `/analysis-report`
+returns one whole run as JSON and `/analysis-report-html` its report, all after
+`assert_valid_api_key` and only for the caller's own runs.
 The report is served with `X-Content-Type-Options: nosniff` and a CSP allowing only its
 inline scripts and Chart.js from jsDelivr.
 
