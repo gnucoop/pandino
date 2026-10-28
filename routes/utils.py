@@ -1,6 +1,7 @@
 """Shared HTTP-layer utilities used across route Blueprints."""
 
-from typing import Optional
+from datetime import datetime
+from typing import Any, Optional
 
 from flask import abort
 from infrastructure.database_pg import validate_api_key
@@ -30,3 +31,11 @@ def assert_valid_api_key(api_key: str, user_email: str) -> Optional[str]:
             abort(403, description="Invalid API key")
     bind_request_context(app_id=client)
     return client
+
+
+def iso_timestamps(row: dict[str, Any]) -> dict[str, Any]:
+    """
+    A database row with its timestamps as ISO 8601 strings, as the list endpoints
+    return them, rather than the HTTP dates jsonify would write.
+    """
+    return {k: v.isoformat() if isinstance(v, datetime) else v for k, v in row.items()}

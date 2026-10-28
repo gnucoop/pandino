@@ -11,7 +11,10 @@ ends with an HTML report:
                           last `next_since` as `since` to get only new events
 - GET  /analysis-reports  the user's runs, newest first (optionally of one
                           brief), with their metrics and whether a report exists
-- GET  /analysis-report   the report of a run, as HTML
+- GET  /analysis-report   a run with every stored column, as JSON: its HTML
+                          report (null until it exists), metadata, plan, state
+                          and timestamps
+- GET  /analysis-report-html  the report of a run, as HTML
 - POST /end-analysis      cancels the run if still going, and forgets it
 
 One run per Api Key at a time. Runs and reports are stored in the database
@@ -23,8 +26,8 @@ from typing import Optional
 from flask import Blueprint, Response, current_app, jsonify, request
 
 from analyst.service import end_analysis, get_run, start_analysis_payload
-from routes.utils import assert_valid_api_key
-from services.analysis_report_service import get_report_html, list_reports
+from routes.utils import assert_valid_api_key, iso_timestamps
+from services.analysis_report_service import get_report, get_report_html, list_reports
 
 # The report runs its own inline scripts and Chart.js from jsDelivr, nothing
 # else: no other origin, no form, no base URL change.
@@ -97,6 +100,27 @@ def analysisStatus() -> Response | tuple[Response, int]:
 
 @analyst_bp.route("/analysis-report", methods=["GET"])
 def analysisReport() -> Response | tuple[Response, int]:
+    api_key, user_email, _ = _read_headers()
+    missing = _missing_header_response(api_key, user_email)
+    if missing is not None:
+        return missing
+
+    assert_valid_api_key(api_key, user_email)
+
+    try:
+        report = get_report(request.args.get("run_id", ""), str(user_email))
+    except RuntimeError:
+        return jsonify({"error": "Could not load the report", "code": "REPORT_UNAVAILABLE"}), 500
+    if report is None:
+        return jsonify({"error": "Report not found", "code": "NO_REPORT"}), 404
+
+    # The html is the model's own document: a client must render it sandboxed
+    # (e.g. an iframe without allow-same-origin), as /analysis-report-html's CSP does.
+    return jsonify({"report": iso_timestamps(report)}), 200
+
+
+@analyst_bp.route("/analysis-report-html", methods=["GET"])
+def analysisReportHtml() -> Response | tuple[Response, int]:
     api_key, user_email, _ = _read_headers()
     missing = _missing_header_response(api_key, user_email)
     if missing is not None:
