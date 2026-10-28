@@ -5,6 +5,7 @@ every collaborator is patched and the run is never actually spawned.
 """
 
 import re
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -39,6 +40,12 @@ def env(monkeypatch):
         report = state.reports.get(run_id)
         return report["html"] if report and report["user_email"] == user_email else None
 
+    def get_report(run_id, user_email):
+        report = state.reports.get(run_id)
+        if not report or report["user_email"] != user_email:
+            return None
+        return {"run_id": run_id, **report, "started_at": datetime(2026, 10, 20, 8, 0, tzinfo=timezone.utc)}
+
     def list_reports(user_email, brief_id=None, limit=50):
         return [
             {"run_id": run_id, "brief_id": r["brief_id"]}
@@ -47,6 +54,7 @@ def env(monkeypatch):
         ][:limit]
 
     monkeypatch.setattr(analyst_route, "get_report_html", get_report_html)
+    monkeypatch.setattr(analyst_route, "get_report", get_report)
     monkeypatch.setattr(analyst_route, "list_reports", list_reports)
 
     app = Flask(__name__)
@@ -139,11 +147,11 @@ def store_run(env, run_id, owner, *, brief_id=7, html="<html>ok</html>"):
     env.reports[run_id] = {"user_email": owner, "brief_id": brief_id, "html": html}
 
 
-def test_the_report_is_served_to_its_owner_only(env):
+def test_the_report_html_is_served_to_its_owner_only(env):
     store_run(env, "r_mine", "tester@example.com")
     store_run(env, "r_other", "someone@else.com")
 
-    response = env.client.get("/analysis-report?run_id=r_mine", headers=HEADERS)
+    response = env.client.get("/analysis-report-html?run_id=r_mine", headers=HEADERS)
     assert response.status_code == 200
     assert response.mimetype == "text/html"
     assert response.data == b"<html>ok</html>"
@@ -152,13 +160,37 @@ def test_the_report_is_served_to_its_owner_only(env):
     assert env.key_checks == [("key-123", "tester@example.com")]
 
     for run_id in ("r_other", "unknown", ""):
+        response = env.client.get(f"/analysis-report-html?run_id={run_id}", headers=HEADERS)
+        assert response.status_code == 404 and response.get_json()["code"] == "NO_REPORT"
+
+
+def test_a_run_without_its_report_html_yet_is_404(env):
+    store_run(env, "r_running", "tester@example.com", html=None)
+    assert env.client.get("/analysis-report-html?run_id=r_running", headers=HEADERS).status_code == 404
+
+
+def test_the_report_row_is_served_to_its_owner_only(env):
+    store_run(env, "r_mine", "tester@example.com")
+    store_run(env, "r_other", "someone@else.com")
+
+    response = env.client.get("/analysis-report?run_id=r_mine", headers=HEADERS)
+    assert response.status_code == 200
+    report = response.get_json()["report"]
+    assert report["run_id"] == "r_mine" and report["brief_id"] == 7
+    assert report["html"] == "<html>ok</html>"
+    assert report["started_at"] == "2026-10-20T08:00:00+00:00"
+    assert env.key_checks == [("key-123", "tester@example.com")]
+
+    for run_id in ("r_other", "unknown", ""):
         response = env.client.get(f"/analysis-report?run_id={run_id}", headers=HEADERS)
         assert response.status_code == 404 and response.get_json()["code"] == "NO_REPORT"
 
 
-def test_a_run_without_its_report_yet_is_404(env):
+def test_a_run_without_its_report_yet_is_served_without_html(env):
     store_run(env, "r_running", "tester@example.com", html=None)
-    assert env.client.get("/analysis-report?run_id=r_running", headers=HEADERS).status_code == 404
+
+    response = env.client.get("/analysis-report?run_id=r_running", headers=HEADERS)
+    assert response.status_code == 200 and response.get_json()["report"]["html"] is None
 
 
 def test_the_list_holds_the_user_runs_and_filters_by_brief(env):
@@ -174,7 +206,9 @@ def test_the_list_holds_the_user_runs_and_filters_by_brief(env):
     assert env.key_checks == [("key-123", "tester@example.com")] * 2
 
 
-@pytest.mark.parametrize("path", ["/analysis-reports", "/analysis-report?run_id=r1"])
+@pytest.mark.parametrize(
+    "path", ["/analysis-reports", "/analysis-report?run_id=r1", "/analysis-report-html?run_id=r1"]
+)
 def test_the_report_endpoints_need_the_auth_headers(env, path):
     assert env.client.get(path, headers={"X-API-KEY": "key-123"}).status_code == 400
     assert env.key_checks == []
@@ -186,8 +220,10 @@ def test_a_database_failure_is_500(env, monkeypatch):
 
     monkeypatch.setattr(analyst_route, "list_reports", broken)
     monkeypatch.setattr(analyst_route, "get_report_html", broken)
+    monkeypatch.setattr(analyst_route, "get_report", broken)
     assert env.client.get("/analysis-reports", headers=HEADERS).status_code == 500
     assert env.client.get("/analysis-report?run_id=r1", headers=HEADERS).status_code == 500
+    assert env.client.get("/analysis-report-html?run_id=r1", headers=HEADERS).status_code == 500
 
 
 def test_ending_cancels_and_forgets_the_run(env):
