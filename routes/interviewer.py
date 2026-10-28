@@ -12,12 +12,18 @@ SQL datasource, and ends with a brief the user approves:
     revise   keeps working on the pending draft: Q->A goes on
     decline  drops the pending draft and closes the session, storing nothing
 - POST /end-analysis-interview    closes the session at any point
+- GET  /analysis-briefs           the user's stored briefs, newest first, without
+                                  their content (optionally of one status)
+- GET  /analysis-brief            one stored brief of the user, by brief_id, with
+                                  its content, prompt text and transcript
 
 Only an approved brief is stored (analysis_briefs, status 'ready'); drafts live
 in the session. Approval hands the stored brief's id to the data analyst, which
-starts analysing it in the background (routes.analyst follows the run).
+starts analysing it in the background (routes.analyst follows the run). A user
+only ever sees their own briefs.
 """
 
+from datetime import datetime
 from typing import Any, Optional
 
 from flask import Blueprint, Response, jsonify, request, current_app
@@ -26,7 +32,7 @@ from infrastructure.agent_manager import getInterviewer, createInterviewer, dele
 from infrastructure.database_pg import edit_tokens, get_user_tokens
 from datachat.sql_datasource import get_datasource as get_sql_datasource
 from interviewer.engine_factory import create_interviewer_engine
-from services.analysis_brief_service import save_approved_brief
+from services.analysis_brief_service import get_brief, list_briefs, save_approved_brief
 from analyst.service import start_analysis_payload
 from routes.utils import assert_valid_api_key
 
@@ -37,6 +43,10 @@ interviewer_bp = Blueprint("interviewer", __name__)
 _ERROR_HTTP_STATUS = {"NO_PENDING_DRAFT": 400, "DRAFT_PENDING": 400, "MISSING_CONFIG": 500}
 
 _ACTIONS = ("answer", "approve", "revise", "decline")
+
+# The statuses of a stored brief (the analysis_briefs CHECK constraint).
+_BRIEF_STATUSES = ("ready", "consumed", "archived")
+_MAX_LISTED_BRIEFS = 200
 
 
 def _read_headers() -> tuple[Optional[str], Optional[str], Optional[str]]:
@@ -284,3 +294,54 @@ def endAnalysisInterview() -> Response | tuple[Response, int]:
         return jsonify({"Agent deleted succesfully": "active"})
     else:
         return jsonify({"Agent was not active for this key": api_key})
+
+
+@interviewer_bp.route("/analysis-briefs", methods=["GET"])
+def analysisBriefs() -> Response | tuple[Response, int]:
+    api_key, user_email, _ = _read_headers()
+    missing = _missing_header_response(api_key, user_email)
+    if missing is not None:
+        return missing
+
+    assert_valid_api_key(api_key, user_email)
+
+    status = request.args.get("status") or None
+    if status is not None and status not in _BRIEF_STATUSES:
+        return jsonify({"error": "status must be one of " + ", ".join(_BRIEF_STATUSES)}), 400
+    try:
+        limit = min(max(int(request.args.get("limit", 50)), 1), _MAX_LISTED_BRIEFS)
+    except ValueError:
+        return jsonify({"error": "limit must be an integer"}), 400
+
+    try:
+        briefs = list_briefs(user_email=str(user_email), status=status, limit=limit)
+    except RuntimeError:
+        return jsonify({"error": "Could not list the briefs", "code": "BRIEFS_UNAVAILABLE"}), 500
+    return jsonify({"briefs": briefs}), 200
+
+
+@interviewer_bp.route("/analysis-brief", methods=["GET"])
+def analysisBrief() -> Response | tuple[Response, int]:
+    api_key, user_email, _ = _read_headers()
+    missing = _missing_header_response(api_key, user_email)
+    if missing is not None:
+        return missing
+
+    assert_valid_api_key(api_key, user_email)
+
+    brief_id = request.args.get("brief_id", type=int)
+    if brief_id is None:
+        return jsonify({"error": "brief_id must be an integer"}), 400
+
+    try:
+        brief = get_brief(brief_id, str(user_email))
+    except RuntimeError:
+        return jsonify({"error": "Could not load the brief", "code": "BRIEF_UNAVAILABLE"}), 500
+    # Another user's brief is not found, rather than forbidden: its id says nothing.
+    if brief is None:
+        return jsonify({"error": "Brief not found", "code": "BRIEF_NOT_FOUND"}), 404
+
+    # The timestamps as ISO strings, as in the list, not jsonify's HTTP dates.
+    return jsonify(
+        {"brief": {k: v.isoformat() if isinstance(v, datetime) else v for k, v in brief.items()}}
+    ), 200
