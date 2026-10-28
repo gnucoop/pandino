@@ -23,7 +23,6 @@ starts analysing it in the background (routes.analyst follows the run). A user
 only ever sees their own briefs.
 """
 
-from datetime import datetime
 from typing import Any, Optional
 
 from flask import Blueprint, Response, jsonify, request, current_app
@@ -34,7 +33,7 @@ from datachat.sql_datasource import get_datasource as get_sql_datasource
 from interviewer.engine_factory import create_interviewer_engine
 from services.analysis_brief_service import get_brief, list_briefs, save_approved_brief
 from analyst.service import start_analysis_payload
-from routes.utils import assert_valid_api_key
+from routes.utils import assert_valid_api_key, iso_timestamps
 
 interviewer_bp = Blueprint("interviewer", __name__)
 
@@ -341,7 +340,4 @@ def analysisBrief() -> Response | tuple[Response, int]:
     if brief is None:
         return jsonify({"error": "Brief not found", "code": "BRIEF_NOT_FOUND"}), 404
 
-    # The timestamps as ISO strings, as in the list, not jsonify's HTTP dates.
-    return jsonify(
-        {"brief": {k: v.isoformat() if isinstance(v, datetime) else v for k, v in brief.items()}}
-    ), 200
+    return jsonify({"brief": iso_timestamps(brief)}), 200
