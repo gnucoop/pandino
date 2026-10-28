@@ -574,7 +574,7 @@ def load_config() -> AppConfig:
         task_retries=_env_int("ANALYST_TASK_RETRIES", 1, minimum=0, maximum=3),
         max_extra_tasks=_env_int("ANALYST_MAX_EXTRA_TASKS", 2, minimum=0, maximum=5),
         max_insights=_env_int("ANALYST_MAX_INSIGHTS", 12, minimum=0, maximum=50),
-        sql_max_rows=_env_int("ANALYST_SQL_MAX_ROWS", 50, minimum=1, maximum=1000),
+        sql_max_rows=_env_int("ANALYST_SQL_MAX_ROWS", 200, minimum=1, maximum=1000),
         dataset_max_rows=_env_int(
             "ANALYST_DATASET_MAX_ROWS", 100000, minimum=1, maximum=1000000
         ),
