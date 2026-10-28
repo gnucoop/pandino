@@ -1738,6 +1738,30 @@ def build_get_analysis_report_html_query(
     return query, (run_id, user_email)
 
 
+def build_get_analysis_report_query(
+    run_id: str,
+    user_email: str,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to retrieve one analysis run of a user, every column
+    included: its report, metadata, plan and state.
+
+    :param run_id: ID of the run.
+    :param user_email: The run must belong to this user.
+    :return: Tuple of SQL query and parameters.
+    """
+    columns = ("id", *_ANALYSIS_REPORT_COLUMNS, "created_at", "updated_at")
+    query = sql.SQL(
+        "SELECT {columns} FROM {table} WHERE {col_run} = %s AND {col_user} = %s"
+    ).format(
+        columns=sql.SQL(", ").join(sql.Identifier(c) for c in columns),
+        table=sql.Identifier("analysis_reports"),
+        col_run=sql.Identifier("run_id"),
+        col_user=sql.Identifier("user_email"),
+    )
+    return query, (run_id, user_email)
+
+
 def build_list_analysis_reports_query(
     user_email: str,
     brief_id: Optional[int] = None,
