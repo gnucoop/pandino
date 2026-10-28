@@ -102,7 +102,7 @@ pandino/
 │   ├── ingestion.py            #   /storeragfile
 │   ├── rag.py                  #   /completion.json, /agentchat
 │   ├── datachat.py             #   /startdatachat, /datachat, /enddatachat
-│   ├── interviewer.py          #   /start-analysis-interview, /analysis-interview, /end-analysis-interview
+│   ├── interviewer.py          #   /start-analysis-interview, /analysis-interview, /end-analysis-interview, /analysis-briefs, /analysis-brief
 │   ├── analyst.py              #   /start-analysis, /analysis-status, /analysis-report, /end-analysis
 │   ├── admin.py                #   /admin/* (web UI)
 │   └── utils.py                #   assert_valid_api_key() shared helper
@@ -817,6 +817,8 @@ must be enabled. See [§11b](#11b-analysis-interviewer).
 | `POST` | `/start-analysis-interview` | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | JSON or form: `lang?`                                                                  | `{Agent active:"active", welcome}` (ends with the goal question). 400 when the SQL datasource is disabled |
 | `POST` | `/analysis-interview`       | `X-API-KEY`, `X-USER-EMAIL`                | `{answer:"..."}` · `{action:"approve"}` · `{action:"revise", answer?:"what to change"}` · `{action:"decline"}` | `{response:{type, value}}`; on approval also `brief_id` and `analysis`                    |
 | `POST` | `/end-analysis-interview`   | `X-API-KEY`, `X-USER-EMAIL`, `X-USER-NAME` | –                                                                                      | Deletes the in-memory interviewer                                                         |
+| `GET`  | `/analysis-briefs`          | `X-API-KEY`, `X-USER-EMAIL`                | `?status=ready\|consumed\|archived` `&limit=` (default 50, max 200)                    | `{briefs:[{id, user_email, name, status, approved_at}]}`, the caller's, newest first; 500 `BRIEFS_UNAVAILABLE` |
+| `GET`  | `/analysis-brief`           | `X-API-KEY`, `X-USER-EMAIL`                | `?brief_id=`                                                                           | `{brief:{id, user_email, name, brief, prompt_text, transcript, model, provider, status, approved_at, created_at}}`, to its owner only; 404 `BRIEF_NOT_FOUND` |
 
 `response.type` is one of:
 

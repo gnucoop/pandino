@@ -1217,6 +1217,106 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
 
+  /analysis-briefs:
+    get:
+      tags: [Analysis Interviewer]
+      summary: The user's stored briefs
+      description: >-
+        The caller's approved briefs, newest first, without their content
+        (brief, prompt_text, transcript): fetch one with /analysis-brief.
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+        - name: status
+          in: query
+          required: false
+          description: Only the briefs in this status.
+          schema:
+            type: string
+            enum: [ready, consumed, archived]
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer, default: 50, minimum: 1, maximum: 200}
+      responses:
+        "200":
+          description: The briefs.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  briefs:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: {type: integer}
+                        user_email: {type: string}
+                        name: {type: string}
+                        status:
+                          type: string
+                          enum: [ready, consumed, archived]
+                        approved_at: {type: string, format: date-time}
+        "400":
+          description: Missing header, unknown status, or limit is not an integer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "500":
+          description: The database could not be read (BRIEFS_UNAVAILABLE).
+
+  /analysis-brief:
+    get:
+      tags: [Analysis Interviewer]
+      summary: One stored brief
+      description: A brief of the caller, with its content, prompt text and interview transcript.
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+        - name: brief_id
+          in: query
+          required: true
+          schema: {type: integer}
+      responses:
+        "200":
+          description: The brief.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  brief:
+                    type: object
+                    properties:
+                      id: {type: integer}
+                      user_email: {type: string}
+                      name: {type: string}
+                      brief:
+                        type: object
+                        description: The validated analysis brief, as approved.
+                      prompt_text: {type: string}
+                      transcript:
+                        type: array
+                        nullable: true
+                        items: {type: object}
+                      model: {type: string, nullable: true}
+                      provider: {type: string, nullable: true}
+                      status:
+                        type: string
+                        enum: [ready, consumed, archived]
+                      approved_at: {type: string, format: date-time}
+                      created_at: {type: string, format: date-time}
+        "400":
+          description: Missing header, or brief_id is not an integer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        "404":
+          description: No brief with this id for the caller (BRIEF_NOT_FOUND).
+        "500":
+          description: The database could not be read (BRIEF_UNAVAILABLE).
+
   /start-analysis:
     post:
       tags: [Data Analyst]
