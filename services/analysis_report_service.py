@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from infrastructure.database_pg import (
+    get_analysis_report,
     get_analysis_report_html,
     get_previous_analysis_report_metadata,
     list_analysis_reports,
@@ -82,6 +83,20 @@ def get_report_html(run_id: str, user_email: str) -> Optional[str]:
         return get_analysis_report_html(run_id, user_email)
     except Exception as e:
         raise RuntimeError(f"Failed to load the report of run {run_id}: {e}") from e
+
+
+def get_report(run_id: str, user_email: str) -> Optional[dict[str, Any]]:
+    """
+    One run of the user, with every stored column: its HTML report (None until
+    it exists), metadata, plan, state and timestamps.
+
+    :return: the run row, or None (unknown run, someone else's).
+    :raises RuntimeError: if the database could not be read.
+    """
+    try:
+        return get_analysis_report(run_id, user_email)
+    except Exception as e:
+        raise RuntimeError(f"Failed to load run {run_id}: {e}") from e
 
 
 def list_reports(user_email: str, brief_id: Optional[int] = None, limit: int = 50) -> list[dict[str, Any]]:

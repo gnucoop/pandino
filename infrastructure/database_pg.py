@@ -71,6 +71,7 @@ from infrastructure.database_methods import (
     build_update_analysis_brief_status_query,
     build_upsert_analysis_report_query,
     build_get_analysis_report_html_query,
+    build_get_analysis_report_query,
     build_list_analysis_reports_query,
     build_get_previous_analysis_report_query,
 )
@@ -1617,6 +1618,31 @@ def get_analysis_report_html(run_id: str, user_email: str) -> Optional[str]:
         cursor.execute(query, params)
         row = cursor.fetchone()
         return row[0] if row is not None else None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_analysis_report(run_id: str, user_email: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves one analysis run of a user, with every column.
+
+    :param run_id: ID of the run.
+    :param user_email: The run must belong to this user.
+    :return: The run row as a dictionary (html is None until the report exists),
+        or None if the run is unknown or someone else's.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_get_analysis_report_query(run_id, user_email)
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        if row is None or cursor.description is None:
+            return None
+        columns = [desc[0] for desc in cursor.description]
+        return dict(zip(columns, row))
     finally:
         cursor.close()
         conn.close()
