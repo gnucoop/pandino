@@ -1379,6 +1379,57 @@ paths:
   /analysis-report:
     get:
       tags: [Data Analyst]
+      summary: A run with every stored column
+      description: >-
+        One analysis_reports row of the caller, as JSON: the HTML report (null until it
+        exists), metadata, plan, state and timestamps. The html is the model's own
+        document, without the CSP /analysis-report-html sends: show it in a sandboxed
+        iframe (sandbox="allow-scripts", srcdoc).
+      parameters:
+        - $ref: '#/components/parameters/UserEmailHeader'
+        - name: run_id
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: The run.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  report:
+                    type: object
+                    properties:
+                      id: {type: integer}
+                      run_id: {type: string}
+                      brief_id: {type: integer}
+                      user_email: {type: string}
+                      title: {type: string, nullable: true}
+                      status:
+                        type: string
+                        enum: [queued, planning, running, charting, writing_report, completed, failed, cancelled]
+                      metadata:
+                        type: object
+                        description: >-
+                          Timestamps, error, metrics, task statuses, tokens, models, and the
+                          planner, chart and report agents' outcomes.
+                      plan: {type: object, nullable: true}
+                      state: {type: object, nullable: true}
+                      html: {type: string, nullable: true}
+                      started_at: {type: string, format: date-time, nullable: true}
+                      finished_at: {type: string, format: date-time, nullable: true}
+                      created_at: {type: string, format: date-time}
+                      updated_at: {type: string, format: date-time}
+        "404":
+          description: Unknown run, or another user's run (NO_REPORT).
+        "500":
+          description: The database could not be read (REPORT_UNAVAILABLE).
+
+  /analysis-report-html:
+    get:
+      tags: [Data Analyst]
       summary: The HTML report of a run
       description: >-
         Read from the analysis_reports table and served to the user who started the

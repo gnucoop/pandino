@@ -528,14 +528,16 @@ The client polls:
 GET /analysis-status?since=0      → {status, current_task, tasks_done, events[…], next_since: 7}
 GET /analysis-status?since=7      → only the new events
 … until status is completed / failed / cancelled
-GET /analysis-report?run_id=…     → the HTML
-GET /analysis-reports?brief_id=…  → the user's runs (no HTML), newest first
+GET /analysis-report?run_id=…       → the whole run as JSON (html, metadata, plan, state, …)
+GET /analysis-report-html?run_id=…  → the HTML
+GET /analysis-reports?brief_id=…    → the user's runs (no HTML), newest first
 ```
 
-Both report endpoints check the API key (`assert_valid_api_key`) and only ever return the
-caller's own runs. The report comes with `X-Content-Type-Options: nosniff` and a
-`Content-Security-Policy` allowing only its inline scripts and Chart.js from jsDelivr; a
-frontend should show it in a sandboxed `<iframe sandbox="allow-scripts" [srcdoc]>`.
+The report endpoints check the API key (`assert_valid_api_key`) and only ever return the
+caller's own runs. The HTML comes with `X-Content-Type-Options: nosniff` and a
+`Content-Security-Policy` allowing only its inline scripts and Chart.js from jsDelivr; the
+JSON's `html` has no such header around it. Either way, a frontend should show it in a
+sandboxed `<iframe sandbox="allow-scripts" [srcdoc]>`.
 
 An Angular service can expose it as an Observable:
 
@@ -560,7 +562,7 @@ created by `database_pg.init`). Nothing is written to disk.
 | `metadata` (JSONB) | timestamps, **metrics**, task statuses, tokens per agent, models; `planner` (plan used?, error, last step errors), `chart_agent` (done?, error, reasons for skipped charts, step errors), `report_agent` (fallback report?, error, step errors) | the **next run of the same brief** compares its metrics with the latest completed run's |
 | `plan` (JSONB) | the plan the run followed | inspection: what the planner made of the brief |
 | `state` (JSONB) | every task's status, summary, outputs, `step_errors` (the last 5 across attempts, first line each); insights; chart and table names | debugging / inspection: why a task failed |
-| `html` (TEXT) | the report, once it exists | `GET /analysis-report` |
+| `html` (TEXT) | the report, once it exists | `GET /analysis-report-html`; `GET /analysis-report` returns it with every other column |
 | `started_at`, `finished_at`, `created_at`, `updated_at` | timestamps | ordering, the previous-run lookup |
 
 The row is saved after planning, after each task, after the charts and at the end, so it
@@ -598,7 +600,7 @@ after the run is gone.
 | `config.py` | `AnalystConfig` (`ANALYST_*`) | everything |
 | `infrastructure/agent_manager.py` | `getAnalyst` / `createAnalyst` / `deleteAnalyst` | service |
 | `services/analysis_brief_service.py` | `get_brief`, `mark_brief_consumed` | service, orchestrator |
-| `services/analysis_report_service.py` | `save_report`, `get_report_html`, `list_reports`, `previous_report_metadata` | orchestrator, `get_delta_section`, routes |
+| `services/analysis_report_service.py` | `save_report`, `get_report`, `get_report_html`, `list_reports`, `previous_report_metadata` | orchestrator, `get_delta_section`, routes |
 | `infrastructure/database_pg.py` / `database_methods.py` | the `analysis_reports` table and its queries | the report service |
 | `main.py` | registers `analyst_bp` | Flask |
 
@@ -643,7 +645,8 @@ run_analysis() ─► Orchestrator.execute() ◄══════════�
   └─ _mark_consumed() ──► analysis_briefs.status = 'consumed'
 
 GET  /analysis-status ─► get_run() ─► AnalysisRun.status_payload()  (events from step_callback)
-GET  /analysis-report ─► get_report_html(run_id, user) ─► analysis_reports.html
+GET  /analysis-report ─► get_report(run_id, user) ─► analysis_reports (every column)
+GET  /analysis-report-html ─► get_report_html(run_id, user) ─► analysis_reports.html
 GET  /analysis-reports ► list_reports(user, brief_id) ─► analysis_reports (no html)
 POST /end-analysis ────► end_analysis() ─► deleteAnalyst() ─► AnalysisRun.close() ─► cancel
 ```
@@ -708,7 +711,8 @@ H=(-H "Content-Type: application/json" -H "X-API-KEY: $KEY" -H "X-USER-EMAIL: me
 
 curl -X POST http://127.0.0.1:5000/start-analysis "${H[@]}" -d '{"brief_id": 42}'
 curl "http://127.0.0.1:5000/analysis-status?since=0" "${H[@]}"          # repeat with next_since
-curl "http://127.0.0.1:5000/analysis-report?run_id=<run_id>" "${H[@]}" -o report.html
+curl "http://127.0.0.1:5000/analysis-report?run_id=<run_id>" "${H[@]}"                    # the whole run
+curl "http://127.0.0.1:5000/analysis-report-html?run_id=<run_id>" "${H[@]}" -o report.html
 curl "http://127.0.0.1:5000/analysis-reports?brief_id=42" "${H[@]}"     # the runs of a brief
 curl -X POST http://127.0.0.1:5000/end-analysis "${H[@]}"              # cancel / forget
 ```
