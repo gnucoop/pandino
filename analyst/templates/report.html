@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #5d6677; --border: #e2e5eb;
+    --accent: #2f5bd3; --danger: #c2413a; --warning: #b7791f; --success: #2f855a;
+    --info: #2b6cb0; --secondary: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 32px 16px 48px; }
+  header h1 { margin: 0 0 6px; font-size: 1.8rem; line-height: 1.25; }
+  header .subtitle { margin: 0 0 10px; color: var(--muted); font-size: 1.05rem; }
+  header .meta { color: var(--muted); font-size: .85rem; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 24px 0; }
+  .kpi { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .kpi .label { color: var(--muted); font-size: .82rem; }
+  .kpi .value { font-size: 1.45rem; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .kpi .delta { font-size: .8rem; margin-top: 4px; color: var(--muted); }
+  .kpi .delta.good { color: var(--success); } .kpi .delta.bad { color: var(--danger); }
+  section { background: var(--card); border: 1px solid var(--border); border-left: 4px solid var(--accent);
+            border-radius: 10px; padding: 20px 22px; margin: 18px 0; }
+  section.danger { border-left-color: var(--danger); } section.warning { border-left-color: var(--warning); }
+  section.success { border-left-color: var(--success); } section.info { border-left-color: var(--info); }
+  section.secondary { border-left-color: var(--secondary); }
+  section h2 { margin: 0 0 12px; font-size: 1.25rem; }
+  section h3 { font-size: 1.05rem; margin: 18px 0 8px; }
+  .content p { margin: 0 0 10px; }
+  .content table, table.data { border-collapse: collapse; width: 100%; margin: 8px 0 14px; font-size: .9rem; }
+  .content th, .content td, table.data th, table.data td { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: left; }
+  table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .table-wrap { overflow-x: auto; }
+  figure { margin: 16px 0; }
+  figure .chart-box { position: relative; height: 340px; }
+  figcaption, .table-title { font-weight: 600; margin-bottom: 8px; }
+  footer { color: var(--muted); font-size: .8rem; margin-top: 32px; text-align: center; }
+  @media print { body { background: #fff; } section, .kpi { break-inside: avoid; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>{{ title }}</h1>
+    {% if subtitle %}<p class="subtitle">{{ subtitle }}</p>{% endif %}
+    <div class="meta">{{ generated_at }}{% if audience %} · {{ audience }}{% endif %}</div>
+  </header>
+
+  {% if kpis %}
+  <div class="kpis">
+    {% for kpi in kpis %}
+    <div class="kpi">
+      <div class="label">{{ kpi.icon ~ ' ' if kpi.icon }}{{ kpi.label }}</div>
+      <div class="value" data-num="{{ kpi.value if kpi.value is not none }}" data-type="{{ kpi.type }}">{{ kpi.display }}</div>
+      {% if kpi.delta %}
+      <div class="delta {{ kpi.delta.css }}" data-num="{{ kpi.delta.change }}" data-type="{{ kpi.type }}" data-signed="1"
+           data-suffix=" {{ kpi.delta.suffix }}">{{ kpi.delta.text }}</div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% for section in sections %}
+  <section class="{{ section.style }}">
+    <h2>{{ section.title }}</h2>
+    <div class="content">{{ section.html }}</div>
+    {% for chart in section.charts %}
+    <figure>
+      <figcaption>{{ chart.title }}</figcaption>
+      <div class="chart-box"><canvas data-chart="{{ chart.name }}"></canvas></div>
+    </figure>
+    {% endfor %}
+    {% for table in section.tables %}
+    <div class="table-title">{{ table.title }}</div>
+    <div class="table-wrap">
+      <table class="data">
+        <thead><tr>{% for column in table.columns %}<th>{{ column }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for row in table.rows %}
+          <tr>{% for cell in row %}{% if cell is number and cell is not boolean %}<td class="num" data-num="{{ cell }}">{{ cell }}</td>{% else %}<td>{{ cell if cell is not none }}</td>{% endif %}{% endfor %}</tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endfor %}
+  </section>
+  {% endfor %}
+
+  <footer>{{ footer }}</footer>
+</main>
+
+<script type="application/json" id="report-charts">{{ charts|tojson }}</script>
+<script>
+(function () {
+  var locale = {{ locale|tojson }};
+  var currency = {{ currency|tojson }};
+  var palette = ["#2f5bd3", "#e07b39", "#2f855a", "#c2413a", "#7c5cc4", "#1f9bab", "#b7791f", "#6b7280"];
+
+  function format(value, type, signed) {
+    if (value === null || value === undefined || value === "" || isNaN(Number(value))) return null;
+    var n = Number(value);
+    var options = { maximumFractionDigits: 2 };
+    if (type === "currency") { options = { style: "currency", currency: currency, maximumFractionDigits: 0 }; }
+    else if (type === "percent") {
+      // Fractions (0.82) and percentages (82) are both found in the outputs.
+      if (Math.abs(n) > 1.5) n = n / 100;
+      options = { style: "percent", maximumFractionDigits: 1 };
+    } else if (Math.abs(n) >= 1000) { options = { maximumFractionDigits: 0 }; }
+    if (signed) options.signDisplay = "exceptZero";
+    return new Intl.NumberFormat(locale, options).format(n);
+  }
+
+  document.querySelectorAll("[data-num]").forEach(function (el) {
+    var text = format(el.getAttribute("data-num"), el.getAttribute("data-type"), el.hasAttribute("data-signed"));
+    if (text !== null) el.textContent = text + (el.getAttribute("data-suffix") || "");
+  });
+
+  if (typeof Chart === "undefined") return;
+  var charts = JSON.parse(document.getElementById("report-charts").textContent);
+  document.querySelectorAll("canvas[data-chart]").forEach(function (canvas) {
+    var config = charts[canvas.getAttribute("data-chart")];
+    if (!config) return;
+    var round = ["pie", "doughnut", "polarArea"].indexOf(config.type) !== -1;
+    (config.data.datasets || []).forEach(function (dataset, i) {
+      if (round) {
+        if (!dataset.backgroundColor) dataset.backgroundColor = palette;
+      } else {
+        var color = palette[i % palette.length];
+        if (!dataset.borderColor) dataset.borderColor = color;
+        if (!dataset.backgroundColor) dataset.backgroundColor = dataset.fill ? color + "55" : color;
+      }
+    });
+    config.options = config.options || {};
+    config.options.responsive = true;
+    config.options.maintainAspectRatio = false;
+    config.options.locale = locale;
+    new Chart(canvas, config);
+  });
+})();
+</script>
+</body>
+</html>

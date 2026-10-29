@@ -12,10 +12,15 @@ SQL datasource, and ends with a brief the user approves:
     revise   keeps working on the pending draft: Q->A goes on
     decline  drops the pending draft and closes the session, storing nothing
 - POST /end-analysis-interview    closes the session at any point
+- GET  /analysis-briefs           the user's stored briefs, newest first, without
+                                  their content (optionally of one status)
+- GET  /analysis-brief            one stored brief of the user, by brief_id, with
+                                  its content, prompt text and transcript
 
 Only an approved brief is stored (analysis_briefs, status 'ready'); drafts live
-in the session. The stored row, found by the returned brief_id, is what the
-data analyst will run (see services.analysis_brief_service.get_brief).
+in the session. Approval hands the stored brief's id to the data analyst, which
+starts analysing it in the background (routes.analyst follows the run). A user
+only ever sees their own briefs.
 """
 
 from typing import Any, Optional
@@ -26,8 +31,9 @@ from infrastructure.agent_manager import getInterviewer, createInterviewer, dele
 from infrastructure.database_pg import edit_tokens, get_user_tokens
 from datachat.sql_datasource import get_datasource as get_sql_datasource
 from interviewer.engine_factory import create_interviewer_engine
-from services.analysis_brief_service import save_approved_brief
-from routes.utils import assert_valid_api_key
+from services.analysis_brief_service import get_brief, list_briefs, save_approved_brief
+from analyst.service import start_analysis_payload
+from routes.utils import assert_valid_api_key, iso_timestamps
 
 interviewer_bp = Blueprint("interviewer", __name__)
 
@@ -36,6 +42,10 @@ interviewer_bp = Blueprint("interviewer", __name__)
 _ERROR_HTTP_STATUS = {"NO_PENDING_DRAFT": 400, "DRAFT_PENDING": 400, "MISSING_CONFIG": 500}
 
 _ACTIONS = ("answer", "approve", "revise", "decline")
+
+# The statuses of a stored brief (the analysis_briefs CHECK constraint).
+_BRIEF_STATUSES = ("ready", "consumed", "archived")
+_MAX_LISTED_BRIEFS = 200
 
 
 def _read_headers() -> tuple[Optional[str], Optional[str], Optional[str]]:
@@ -190,7 +200,9 @@ def analysisInterview() -> Response | tuple[Response, int]:
         return jsonify({"error": "Interviewer not active for this Api Key"}), 400
 
     if action in ("approve", "decline"):
-        response, status = _approve(engine, user_email) if action == "approve" else _decline(engine)
+        response, status = (
+            _approve(engine, str(api_key), user_email) if action == "approve" else _decline(engine)
+        )
         if status == 200:
             # The interview is over. X-USER-NAME is not required here, and
             # deleteInterviewer only checks that some user is named.
@@ -216,13 +228,16 @@ def _no_pending_draft_response(verb: str) -> tuple[Response, int]:
     )
 
 
-def _approve(engine, user_email: str) -> tuple[Response, int]:
+def _approve(engine, api_key: str, user_email: str) -> tuple[Response, int]:
     """
-    Store the pending draft, then mark it approved.
+    Store the pending draft, mark it approved, and start the data analyst on it.
 
     Stored first: should the database refuse it, the draft is still pending
-    and the user can simply approve again. No model call, no tokens spent.
-    The stored row (status 'ready') is the hand-off to the data analyst.
+    and the user can simply approve again. No model call, no tokens spent by
+    the interviewer; the analysis spends its own (ANALYST_TOKEN_COST). Should
+    it not start (no tokens, a run already going), the approval still stands:
+    the response says why under "analysis", and the stored brief (status
+    'ready') can be run later with /start-analysis.
     """
     draft = engine.pending_draft
     if draft is None:
@@ -241,7 +256,16 @@ def _approve(engine, user_email: str) -> tuple[Response, int]:
         return jsonify({"error": "Failed to save the analysis brief"}), 500
 
     result = engine.approve()
-    return jsonify({"response": _to_response(result), "brief_id": saved["brief_id"]}), 200
+    analysis, _ = start_analysis_payload(
+        api_key=api_key,
+        user_email=user_email,
+        brief_id=saved["brief_id"],
+        config=current_app.config["MAUI_CONFIG"],
+    )
+    return (
+        jsonify({"response": _to_response(result), "brief_id": saved["brief_id"], "analysis": analysis}),
+        200,
+    )
 
 
 def _decline(engine) -> tuple[Response, int]:
@@ -269,3 +293,51 @@ def endAnalysisInterview() -> Response | tuple[Response, int]:
         return jsonify({"Agent deleted succesfully": "active"})
     else:
         return jsonify({"Agent was not active for this key": api_key})
+
+
+@interviewer_bp.route("/analysis-briefs", methods=["GET"])
+def analysisBriefs() -> Response | tuple[Response, int]:
+    api_key, user_email, _ = _read_headers()
+    missing = _missing_header_response(api_key, user_email)
+    if missing is not None:
+        return missing
+
+    assert_valid_api_key(api_key, user_email)
+
+    status = request.args.get("status") or None
+    if status is not None and status not in _BRIEF_STATUSES:
+        return jsonify({"error": "status must be one of " + ", ".join(_BRIEF_STATUSES)}), 400
+    try:
+        limit = min(max(int(request.args.get("limit", 50)), 1), _MAX_LISTED_BRIEFS)
+    except ValueError:
+        return jsonify({"error": "limit must be an integer"}), 400
+
+    try:
+        briefs = list_briefs(user_email=str(user_email), status=status, limit=limit)
+    except RuntimeError:
+        return jsonify({"error": "Could not list the briefs", "code": "BRIEFS_UNAVAILABLE"}), 500
+    return jsonify({"briefs": briefs}), 200
+
+
+@interviewer_bp.route("/analysis-brief", methods=["GET"])
+def analysisBrief() -> Response | tuple[Response, int]:
+    api_key, user_email, _ = _read_headers()
+    missing = _missing_header_response(api_key, user_email)
+    if missing is not None:
+        return missing
+
+    assert_valid_api_key(api_key, user_email)
+
+    brief_id = request.args.get("brief_id", type=int)
+    if brief_id is None:
+        return jsonify({"error": "brief_id must be an integer"}), 400
+
+    try:
+        brief = get_brief(brief_id, str(user_email))
+    except RuntimeError:
+        return jsonify({"error": "Could not load the brief", "code": "BRIEF_UNAVAILABLE"}), 500
+    # Another user's brief is not found, rather than forbidden: its id says nothing.
+    if brief is None:
+        return jsonify({"error": "Brief not found", "code": "BRIEF_NOT_FOUND"}), 404
+
+    return jsonify({"brief": iso_timestamps(brief)}), 200

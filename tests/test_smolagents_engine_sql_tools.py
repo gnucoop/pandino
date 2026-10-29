@@ -5,12 +5,16 @@ the schema is rendered into the prompt rather than discovered through tools.
 SmolagentsEngine is built via __new__ so that no LLM model is constructed.
 """
 
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
+from flask import Flask
+from smolagents.local_python_executor import LocalPythonExecutor
 
 import datachat.schema_snapshot_loader as loader
+from datachat.chart_registry import get_recorded_charts
 from datachat.smolagents_engine import SmolagentsEngine
 from tests.fake_sql_datasource import FakeDatasource, operational_error
 
@@ -140,6 +144,66 @@ def test_enabling_sql_only_appends_to_the_existing_instructions(engine):
     extended = engine._build_instructions(make_datasource())
 
     assert extended.startswith(base)
+
+
+def test_a_sql_only_session_is_taught_to_analyze_the_query_results(engine):
+    """
+    Without a dataframe the analysis tools are still registered, on the rows
+    passed in their data argument: the prompt must say so, and teach the charts.
+    """
+    engine.data = None
+    datasource = make_datasource()
+    instructions = engine._build_instructions(datasource)
+
+    assert "ANALYZING QUERY RESULTS" in instructions
+    assert "CHARTS" in instructions
+    assert "ANALYTICAL HONESTY" in instructions
+    assert "chart" in [t.name for t in engine._data_tools()]
+
+
+def test_a_sql_only_session_chains_sql_engine_into_chart(engine):
+    """
+    The agent's code, run by the smolagents executor DataChat uses, inside a
+    request: the sql_engine rows reach chart, whose spec is recorded for the route.
+    """
+    engine.data = None
+    datasource = make_datasource(
+        result_columns=["country", "total"],
+        rows=[("IT", Decimal("10.5")), ("FR", Decimal("20")), ("DE", None)],
+    )
+    engine._build_instructions(datasource)
+    tools = engine._data_tools() + engine._sql_tools(datasource)
+
+    with Flask(__name__).test_request_context("/datachat"):
+        executor = LocalPythonExecutor(additional_authorized_imports=["json"])
+        executor.send_tools({tool.name: tool for tool in tools})
+        result = executor(
+            'rows = sql_engine(query=\'SELECT "country", SUM("amount") AS total FROM "orders" GROUP BY "country"\')\n'
+            'chart(kind="bar", x="country", y="total", data=rows)'
+        )
+        charts = get_recorded_charts()
+
+    assert result.output["kind"] == "text"
+    assert len(charts) == 1
+    assert charts[0].spec["labels"] == ["IT", "FR", "DE"]
+    assert charts[0].spec["datasets"] == [{"label": "total", "data": [10.5, 20.0, None]}]
+
+
+def test_a_csv_session_with_sql_is_not_told_there_is_no_dataset(engine):
+    instructions = engine._build_instructions(make_datasource())
+
+    assert "ANALYZING QUERY RESULTS" not in instructions
+    assert instructions.count("CHARTS") == 1
+
+
+def test_a_sql_only_session_without_schema_has_no_dataframe_tools(engine):
+    """Reflection failed: no SQL, so the tools would have no rows to work on."""
+    engine.data = None
+    with patch.object(loader, "get_schema_snapshot", return_value=None):
+        instructions = engine._build_instructions(make_datasource())
+
+    assert "ANALYZING QUERY RESULTS" not in instructions
+    assert engine._data_tools() == []
 
 
 def test_dataset_columns_are_actually_substituted(engine):

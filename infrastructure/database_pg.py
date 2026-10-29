@@ -68,6 +68,12 @@ from infrastructure.database_methods import (
     build_insert_analysis_brief_query,
     build_get_analysis_brief_query,
     build_list_analysis_briefs_query,
+    build_update_analysis_brief_status_query,
+    build_upsert_analysis_report_query,
+    build_get_analysis_report_html_query,
+    build_get_analysis_report_query,
+    build_list_analysis_reports_query,
+    build_get_previous_analysis_report_query,
 )
 
 logger = logging.getLogger(__name__)
@@ -212,6 +218,26 @@ def init_db():
             approved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+        CREATE TABLE IF NOT EXISTS analysis_reports (
+            id SERIAL PRIMARY KEY,
+            run_id TEXT UNIQUE NOT NULL,
+            brief_id INTEGER REFERENCES analysis_briefs(id),
+            user_email TEXT NOT NULL,
+            title TEXT,
+            status TEXT NOT NULL,
+            metadata JSONB NOT NULL,
+            plan JSONB,
+            state JSONB,
+            html TEXT,
+            started_at TIMESTAMPTZ,
+            finished_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS analysis_reports_user_idx
+            ON analysis_reports (user_email, created_at DESC);
+        CREATE INDEX IF NOT EXISTS analysis_reports_brief_idx
+            ON analysis_reports (brief_id, finished_at DESC);
     """
     # Execute the SQL script
     try:
@@ -1490,6 +1516,200 @@ def list_analysis_briefs(
         }
         for brief_id, owner, name, status_value, approved_at in rows
     ]
+
+
+def set_analysis_brief_status(brief_id: int, status: str) -> bool:
+    """
+    Changes the status of an analysis brief.
+
+    :param brief_id: ID of the brief.
+    :param status: New status ('ready', 'consumed' or 'archived').
+    :return: True if the brief exists.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_update_analysis_brief_status_query(brief_id, status)
+        cursor.execute(query, params)
+        updated = cursor.rowcount > 0
+        conn.commit()
+        return updated
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def save_analysis_report(
+    run_id: str,
+    brief_id: int,
+    user_email: str,
+    title: Optional[str],
+    status: str,
+    metadata: Dict[str, Any],
+    plan: Optional[Dict[str, Any]],
+    state: Optional[Dict[str, Any]],
+    html: Optional[str],
+    started_at: Optional[datetime],
+    finished_at: Optional[datetime],
+) -> None:
+    """
+    Inserts an analysis run, or updates it when its run_id is already stored.
+
+    :param run_id: ID of the run.
+    :param brief_id: ID of the brief the run analyses.
+    :param user_email: Username (email) of the user who started the run.
+    :param title: Title of the analysis.
+    :param status: Run status (planning ... completed, failed, cancelled).
+    :param metadata: Run metadata: metrics, task statuses, tokens, agents' errors.
+    :param plan: The plan the run follows, if any.
+    :param state: The run state: task outputs, insights, step errors, if any.
+    :param html: The report, once it exists.
+    :param started_at: When the run started.
+    :param finished_at: When the run ended, if it has.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_upsert_analysis_report_query(
+            run_id=run_id,
+            brief_id=brief_id,
+            user_email=user_email,
+            title=title,
+            status=status,
+            metadata=metadata,
+            plan=plan,
+            state=state,
+            html=html,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+        cursor.execute(query, params)
+        conn.commit()
+
+    except Exception:
+        conn.rollback()
+        raise
+
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_analysis_report_html(run_id: str, user_email: str) -> Optional[str]:
+    """
+    Retrieves the report of one analysis run of a user.
+
+    :param run_id: ID of the run.
+    :param user_email: The run must belong to this user.
+    :return: The report HTML, or None if the run is unknown, someone else's, or has no report.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_get_analysis_report_html_query(run_id, user_email)
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        return row[0] if row is not None else None
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def get_analysis_report(run_id: str, user_email: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves one analysis run of a user, with every column.
+
+    :param run_id: ID of the run.
+    :param user_email: The run must belong to this user.
+    :return: The run row as a dictionary (html is None until the report exists),
+        or None if the run is unknown or someone else's.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_get_analysis_report_query(run_id, user_email)
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        if row is None or cursor.description is None:
+            return None
+        columns = [desc[0] for desc in cursor.description]
+        return dict(zip(columns, row))
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def list_analysis_reports(
+    user_email: str,
+    brief_id: Optional[int] = None,
+    limit: int = 50,
+) -> list:
+    """
+    Lists a user's analysis runs, newest first.
+
+    :param user_email: The owning user.
+    :param brief_id: Optional filter on the analysed brief.
+    :param limit: Maximum number of rows returned.
+    :return: List of dictionaries with run_id, brief_id, title, status, started_at,
+        finished_at, metrics and has_report.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_list_analysis_reports_query(user_email, brief_id, limit)
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+    def _iso(value: Any) -> Any:
+        return value.isoformat() if hasattr(value, "isoformat") else value
+
+    return [
+        {
+            "run_id": run_id,
+            "brief_id": brief,
+            "title": title,
+            "status": status,
+            "started_at": _iso(started_at),
+            "finished_at": _iso(finished_at),
+            "metrics": metrics,
+            "has_report": has_report,
+        }
+        for run_id, brief, title, status, started_at, finished_at, metrics, has_report in rows
+    ]
+
+
+def get_previous_analysis_report_metadata(brief_id: int, run_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieves the metadata of the latest completed run of a brief other than `run_id`.
+
+    :param brief_id: ID of the brief.
+    :param run_id: The current run, left out.
+    :return: The run metadata, or None when the brief has no other completed run.
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_get_previous_analysis_report_query(brief_id, run_id)
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        return row[0] if row is not None else None
+    finally:
+        cursor.close()
+        conn.close()
 
 
 def get_users_for_admin(page=1, limit=50, search=None):

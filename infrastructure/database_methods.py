@@ -3,6 +3,7 @@ This module contains functions for safely building SQL queries.
 Each function returns a composable SQL object (psycopg.sql) and its parameters.
 """
 
+from datetime import datetime
 from psycopg import sql
 from psycopg.types.json import Jsonb
 from typing import Tuple, Any, Optional, List
@@ -1616,3 +1617,214 @@ def build_list_analysis_briefs_query(
         col_approved=sql.Identifier("approved_at"),
     )
     return query, tuple(params)
+
+
+def build_update_analysis_brief_status_query(
+    brief_id: int,
+    status: str,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to change the status of an analysis brief.
+
+    :param brief_id: ID of the brief.
+    :param status: New status ('ready', 'consumed' or 'archived'; the table
+        CHECK constraint refuses anything else).
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL("UPDATE {table} SET {col_status} = %s WHERE {col_id} = %s").format(
+        table=sql.Identifier("analysis_briefs"),
+        col_status=sql.Identifier("status"),
+        col_id=sql.Identifier("id"),
+    )
+    return query, (status, brief_id)
+
+
+# Columns an analysis run writes; every one but run_id is replaced on update.
+_ANALYSIS_REPORT_COLUMNS = (
+    "run_id",
+    "brief_id",
+    "user_email",
+    "title",
+    "status",
+    "metadata",
+    "plan",
+    "state",
+    "html",
+    "started_at",
+    "finished_at",
+)
+
+
+def build_upsert_analysis_report_query(
+    run_id: str,
+    brief_id: int,
+    user_email: str,
+    title: Optional[str],
+    status: str,
+    metadata: dict,
+    plan: Optional[dict],
+    state: Optional[dict],
+    html: Optional[str],
+    started_at: Optional[datetime],
+    finished_at: Optional[datetime],
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to insert an analysis run, or update it when its
+    run_id is already stored: a run is saved as it progresses.
+
+    :param run_id: ID of the run.
+    :param brief_id: ID of the brief the run analyses.
+    :param user_email: Username (email) of the user who started the run.
+    :param title: Title of the analysis.
+    :param status: Run status (planning ... completed, failed, cancelled).
+    :param metadata: Run metadata: metrics, task statuses, tokens, agents' errors (JSONB).
+    :param plan: The plan the run follows (JSONB), if any.
+    :param state: The run state: task outputs, insights, step errors (JSONB), if any.
+    :param html: The report, once it exists.
+    :param started_at: When the run started.
+    :param finished_at: When the run ended, if it has.
+    :return: Tuple of SQL query and parameters.
+    """
+    updated = [c for c in _ANALYSIS_REPORT_COLUMNS if c != "run_id"]
+    query = sql.SQL(
+        "INSERT INTO {table} ({columns}) VALUES ({values}) "
+        "ON CONFLICT ({col_run}) DO UPDATE SET {updates}, {col_updated} = NOW()"
+    ).format(
+        table=sql.Identifier("analysis_reports"),
+        columns=sql.SQL(", ").join(sql.Identifier(c) for c in _ANALYSIS_REPORT_COLUMNS),
+        values=sql.SQL(", ").join(sql.Placeholder() for _ in _ANALYSIS_REPORT_COLUMNS),
+        col_run=sql.Identifier("run_id"),
+        updates=sql.SQL(", ").join(
+            sql.SQL("{col} = EXCLUDED.{col}").format(col=sql.Identifier(c)) for c in updated
+        ),
+        col_updated=sql.Identifier("updated_at"),
+    )
+
+    params = (
+        run_id,
+        brief_id,
+        user_email,
+        title,
+        status,
+        Jsonb(metadata),
+        Jsonb(plan) if plan is not None else None,
+        Jsonb(state) if state is not None else None,
+        html,
+        started_at,
+        finished_at,
+    )
+    return query, params
+
+
+def build_get_analysis_report_html_query(
+    run_id: str,
+    user_email: str,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to retrieve the report of one analysis run of a user.
+
+    :param run_id: ID of the run.
+    :param user_email: The run must belong to this user.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "SELECT {col_html} FROM {table} WHERE {col_run} = %s AND {col_user} = %s"
+    ).format(
+        table=sql.Identifier("analysis_reports"),
+        col_html=sql.Identifier("html"),
+        col_run=sql.Identifier("run_id"),
+        col_user=sql.Identifier("user_email"),
+    )
+    return query, (run_id, user_email)
+
+
+def build_get_analysis_report_query(
+    run_id: str,
+    user_email: str,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to retrieve one analysis run of a user, every column
+    included: its report, metadata, plan and state.
+
+    :param run_id: ID of the run.
+    :param user_email: The run must belong to this user.
+    :return: Tuple of SQL query and parameters.
+    """
+    columns = ("id", *_ANALYSIS_REPORT_COLUMNS, "created_at", "updated_at")
+    query = sql.SQL(
+        "SELECT {columns} FROM {table} WHERE {col_run} = %s AND {col_user} = %s"
+    ).format(
+        columns=sql.SQL(", ").join(sql.Identifier(c) for c in columns),
+        table=sql.Identifier("analysis_reports"),
+        col_run=sql.Identifier("run_id"),
+        col_user=sql.Identifier("user_email"),
+    )
+    return query, (run_id, user_email)
+
+
+def build_list_analysis_reports_query(
+    user_email: str,
+    brief_id: Optional[int] = None,
+    limit: int = 50,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to list a user's analysis runs, newest first, without
+    the report and the heavy JSONB columns: only the tracked metrics are read.
+
+    :param user_email: The owning user.
+    :param brief_id: Optional filter on the analysed brief.
+    :param limit: Maximum number of rows returned.
+    :return: Tuple of SQL query and parameters.
+    """
+    where = "{col_user} = %s"
+    params: List[Any] = [user_email]
+    if brief_id is not None:
+        where += " AND {col_brief} = %s"
+        params.append(brief_id)
+    params.append(limit)
+
+    query = sql.SQL(
+        "SELECT {col_run}, {col_brief}, {col_title}, {col_status}, {col_started}, "
+        "{col_finished}, {col_metadata} -> 'metrics', {col_html} IS NOT NULL "
+        "FROM {table} WHERE " + where + " ORDER BY {col_created} DESC LIMIT %s"
+    ).format(
+        table=sql.Identifier("analysis_reports"),
+        col_run=sql.Identifier("run_id"),
+        col_brief=sql.Identifier("brief_id"),
+        col_title=sql.Identifier("title"),
+        col_status=sql.Identifier("status"),
+        col_started=sql.Identifier("started_at"),
+        col_finished=sql.Identifier("finished_at"),
+        col_metadata=sql.Identifier("metadata"),
+        col_html=sql.Identifier("html"),
+        col_user=sql.Identifier("user_email"),
+        col_created=sql.Identifier("created_at"),
+    )
+    return query, tuple(params)
+
+
+def build_get_previous_analysis_report_query(
+    brief_id: int,
+    run_id: str,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query to retrieve the metadata of the latest completed run of
+    a brief other than `run_id`: the baseline a new run compares its metrics to.
+
+    :param brief_id: ID of the brief.
+    :param run_id: The current run, left out.
+    :return: Tuple of SQL query and parameters.
+    """
+    query = sql.SQL(
+        "SELECT {col_metadata} FROM {table} "
+        "WHERE {col_brief} = %s AND {col_status} = %s AND {col_run} <> %s "
+        "ORDER BY {col_finished} DESC NULLS LAST LIMIT 1"
+    ).format(
+        table=sql.Identifier("analysis_reports"),
+        col_metadata=sql.Identifier("metadata"),
+        col_brief=sql.Identifier("brief_id"),
+        col_status=sql.Identifier("status"),
+        col_run=sql.Identifier("run_id"),
+        col_finished=sql.Identifier("finished_at"),
+    )
+    return query, (brief_id, "completed", run_id)

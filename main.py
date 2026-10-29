@@ -8,6 +8,9 @@ from utils.operational_persistence import register_operational_persistence
 
 DATACHAT_RUNTIME_LOGGER = bootstrap_logging()
 
+# import litellm  # noqa: E402
+# litellm._turn_on_debug()
+
 logger = logging.getLogger(__name__)
 
 os.environ["MPLBACKEND"] = "Agg"
@@ -37,6 +40,7 @@ from routes.rag import rag_bp  # noqa: E402
 from routes.datachat import datachat_bp  # noqa: E402
 from routes.admin import admin_bp  # noqa: E402
 from routes.interviewer import interviewer_bp
+from routes.analyst import analyst_bp  # noqa: E402
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -71,6 +75,7 @@ app.register_blueprint(ingestion_bp)
 app.register_blueprint(rag_bp)
 app.register_blueprint(datachat_bp)
 app.register_blueprint(interviewer_bp)
+app.register_blueprint(analyst_bp)
 app.register_blueprint(admin_bp)
 app.config["MAUI_CONFIG"] = (
     config  # Make Maui config available to all Blueprints via current_app
