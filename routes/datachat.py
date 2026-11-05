@@ -379,9 +379,6 @@ def startChat() -> Response | tuple[Response, int]:
         if bootstrap.suggested_questions_html is not None:
             agentResponse["suggested_questions"] = bootstrap.suggested_questions_html
 
-        # Spends User's tokens
-        edit_tokens(user_email, -int(config.datachat_token_cost))
-
         return jsonify(agentResponse)
     except Exception as e:
         return (
