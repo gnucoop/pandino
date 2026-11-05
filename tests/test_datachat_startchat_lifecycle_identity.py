@@ -11,6 +11,7 @@ route reads/uses the email is unchanged.
 import io
 import logging
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from flask import Flask
 
@@ -57,10 +58,9 @@ def _patch_success_dependencies(monkeypatch, captured):
         datachat_route, "createAgent", lambda *a, **k: _StubEngine()
     )
 
-    def fake_edit_tokens(user_email, amount):
-        captured["edit_tokens_arg"] = user_email
-
-    monkeypatch.setattr(datachat_route, "edit_tokens", fake_edit_tokens)
+    edit_tokens_mock = Mock(return_value=(True, "ok"))
+    captured["edit_tokens_mock"] = edit_tokens_mock
+    monkeypatch.setattr(datachat_route, "edit_tokens", edit_tokens_mock)
 
 
 def _post_start_chat(client):
@@ -108,8 +108,13 @@ def test_bootstrap_event_still_emitted_with_language_but_no_identity(
     assert "user=" not in message
 
 
-def test_email_still_reaches_token_check_and_debit(monkeypatch, caplog):
-    """The email is removed only from the log line, not from application logic."""
+def test_email_reaches_token_check_and_start_does_not_debit(monkeypatch, caplog):
+    """Starting DataChat checks the credit with the right email but charges nothing.
+
+    The email is removed only from the log line, not from the credit check.
+    The debit, instead, was intentionally removed from /startdatachat: starting a
+    chat does not involve any LLM provider call, so no Maui token is consumed here.
+    """
     app = _make_app()
     captured = {}
     _patch_success_dependencies(monkeypatch, captured)
@@ -120,4 +125,4 @@ def test_email_still_reaches_token_check_and_debit(monkeypatch, caplog):
 
     assert response.status_code == 200
     assert captured["get_user_tokens_arg"] == DISTINCTIVE_EMAIL
-    assert captured["edit_tokens_arg"] == DISTINCTIVE_EMAIL
+    captured["edit_tokens_mock"].assert_not_called()

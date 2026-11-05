@@ -379,7 +379,7 @@ def test_analyst_defaults_follow_the_datachat_model():
     assert analyst.task_retries == 1
     assert analyst.max_extra_tasks == 2
     assert analyst.max_insights == 12
-    assert analyst.sql_max_rows == 50
+    assert analyst.sql_max_rows == 200
     assert analyst.dataset_max_rows == 100000
     assert analyst.output_max_chars == 20000
     assert analyst.preview_max_chars == 1500
