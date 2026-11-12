@@ -275,17 +275,32 @@ def build_insert_rag_file_query(
     return query, params
 
 
-def build_get_all_rag_files_query() -> Tuple[sql.Composed, Tuple[()]]:
+def build_get_rag_files_page_query(
+    limit: int, offset: int
+) -> Tuple[sql.SQL, Tuple[int, int]]:
     """
-    Builds a SQL query to retrieve all records from the rag_files table.
+    Builds a SQL query to retrieve one page of the rag_files table, newest
+    first. ``id`` breaks ties on ``created_at`` so pages are stable.
 
-    :return: Tuple with SQL query and empty parameter tuple.
+    :param limit: Maximum number of rows to return.
+    :param offset: Number of rows to skip.
+    :return: Tuple with SQL query and parameters.
     """
     query = sql.SQL(
         "SELECT id, file_name, namespace, chunk_count, language, created_at "
-        "FROM rag_files ORDER BY created_at DESC"
+        "FROM rag_files ORDER BY created_at DESC, id ASC "
+        "LIMIT %s OFFSET %s"
     )
-    return query, ()
+    return query, (limit, offset)
+
+
+def build_count_rag_files_query() -> Tuple[sql.SQL, Tuple[()]]:
+    """
+    Builds a SQL query to count the records in the rag_files table.
+
+    :return: Tuple with SQL query and empty parameter tuple.
+    """
+    return sql.SQL("SELECT COUNT(*) FROM rag_files"), ()
 
 
 def build_get_rag_file_for_delete_query(

@@ -28,7 +28,7 @@ from infrastructure.database_pg import (
     delete_rag_file,
     get_all_costs,
     get_all_prompts,
-    get_all_rag_files,
+    get_rag_files_page,
     get_cost_by_id,
     get_daily_stats,
     get_feedback_for_admin,
@@ -737,15 +737,69 @@ def admin_delete_prompt(prompt_id):
     return redirect(url_for("admin.admin_prompts"))
 
 
+RAG_FILES_DEFAULT_PER_PAGE = 25
+RAG_FILES_PER_PAGE_OPTIONS = (10, 25, 50, 100)
+
+
+def _parse_rag_files_paging(source) -> tuple[int, int]:
+    """
+    Read ``page`` / ``per_page`` from a request mapping (args or form).
+
+    Non-numeric or out-of-range values fall back to the defaults: page 1 and
+    RAG_FILES_DEFAULT_PER_PAGE. ``per_page`` must be one of
+    RAG_FILES_PER_PAGE_OPTIONS. A page past the end is clamped later, once the
+    total is known.
+    """
+    page = source.get("page", type=int)
+    if page is None or page < 1:
+        page = 1
+    per_page = source.get("per_page", type=int)
+    if per_page not in RAG_FILES_PER_PAGE_OPTIONS:
+        per_page = RAG_FILES_DEFAULT_PER_PAGE
+    return page, per_page
+
+
+def _rag_files_redirect(page: int = 1, per_page: int = RAG_FILES_DEFAULT_PER_PAGE):
+    params = {}
+    if page != 1:
+        params["page"] = page
+    if per_page != RAG_FILES_DEFAULT_PER_PAGE:
+        params["per_page"] = per_page
+    return redirect(url_for("admin.admin_rag_files", **params))
+
+
 @admin_bp.route("/admin/rag-files")
 @admin_required
 def admin_rag_files():
+    page, per_page = _parse_rag_files_paging(request.args)
     try:
-        rag_files = get_all_rag_files()
-        return render_template("admin/rag_files.html", rag_files=rag_files)
+        data = get_rag_files_page(page=page, per_page=per_page)
     except Exception as e:
         flash(f"Error loading RAG files: {str(e)}", "danger")
-        return render_template("admin/rag_files.html", rag_files=[])
+        data = {
+            "rag_files": [],
+            "page": 1,
+            "per_page": per_page,
+            "total_count": 0,
+            "total_pages": 1,
+        }
+
+    pagination = {
+        "page": data["page"],
+        "per_page": data["per_page"],
+        "total_count": data["total_count"],
+        "total_pages": data["total_pages"],
+        "first_index": (data["page"] - 1) * data["per_page"] + 1
+        if data["rag_files"]
+        else 0,
+        "last_index": (data["page"] - 1) * data["per_page"] + len(data["rag_files"]),
+    }
+    return render_template(
+        "admin/rag_files.html",
+        rag_files=data["rag_files"],
+        pagination=pagination,
+        per_page_options=RAG_FILES_PER_PAGE_OPTIONS,
+    )
 
 
 @admin_bp.route("/admin/rag-files/upload", methods=["POST"])
@@ -755,10 +809,12 @@ def admin_upload_rag_file():
     file = request.files.get("file")
     namespace = request.form.get("namespace", "").strip()
     language = request.form.get("language", "").strip() or None
+    # New files sort first, so land on page 1 with the viewer's page size.
+    _page, per_page = _parse_rag_files_paging(request.form)
 
     if not file or not namespace:
         flash("File and namespace are required", "danger")
-        return redirect(url_for("admin.admin_rag_files"))
+        return _rag_files_redirect(per_page=per_page)
 
     # Declared after validation - a request that cannot embed anything
     # resolves no identity - and before every line of the ingestion attempt,
@@ -812,7 +868,7 @@ def admin_upload_rag_file():
     except Exception as e:
         flash(f"Error processing file: {str(e)}", "danger")
 
-    return redirect(url_for("admin.admin_rag_files"))
+    return _rag_files_redirect(per_page=per_page)
 
 
 @admin_bp.route("/admin/rag-files/delete", methods=["POST"])
@@ -820,10 +876,13 @@ def admin_upload_rag_file():
 def admin_delete_rag_file():
     file_id = request.form.get("file_id")
     namespace = request.form.get("namespace")
+    # Return to the page the delete came from; the listing clamps it if that
+    # page no longer exists after the delete.
+    page, per_page = _parse_rag_files_paging(request.form)
 
     if not file_id or not namespace:
         flash("Missing file id or namespace", "danger")
-        return redirect(url_for("admin.admin_rag_files"))
+        return _rag_files_redirect(page, per_page)
 
     try:
         result = delete_rag_file(file_id, namespace)
@@ -837,4 +896,4 @@ def admin_delete_rag_file():
     except Exception as e:
         flash(f"Error deleting RAG file: {str(e)}", "danger")
 
-    return redirect(url_for("admin.admin_rag_files"))
+    return _rag_files_redirect(page, per_page)

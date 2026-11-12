@@ -59,7 +59,8 @@ from infrastructure.database_methods import (
     build_check_column_exists_query,
     build_add_column_query,
     build_insert_rag_file_query,
-    build_get_all_rag_files_query,
+    build_get_rag_files_page_query,
+    build_count_rag_files_query,
     build_get_rag_file_for_delete_query,
     build_delete_rag_file_query,
     build_delete_pgvector_by_file_id_query,
@@ -851,19 +852,36 @@ def insert_rag_file(
         conn.close()
 
 
-def get_all_rag_files() -> list:
+def get_rag_files_page(page: int = 1, per_page: int = 25) -> dict:
     """
-    Retrieves all records from the rag_files table.
+    Retrieves one page of the rag_files table, newest first.
 
-    :return: List of dictionaries with RAG file info.
+    The total is counted first so an out-of-range ``page`` is clamped to the
+    last page (or 1 when the table is empty) before LIMIT/OFFSET is applied.
+
+    :param page: Requested 1-based page number.
+    :param per_page: Rows per page (must be >= 1).
+    :return: {"rag_files", "page", "per_page", "total_count", "total_pages"}.
     """
+    per_page = max(1, int(per_page))
     conn = connect()
     cursor = conn.cursor()
 
     try:
-        query, params = build_get_all_rag_files_query()
-        cursor.execute(query, params)
-        rows = cursor.fetchall()
+        count_query, count_params = build_count_rag_files_query()
+        cursor.execute(count_query, count_params)
+        total_count = cursor.fetchone()[0] or 0
+
+        total_pages = max(1, -(-total_count // per_page))
+        page = min(max(1, int(page)), total_pages)
+
+        rows = []
+        if total_count:
+            query, params = build_get_rag_files_page_query(
+                per_page, (page - 1) * per_page
+            )
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
     finally:
         conn.close()
 
@@ -885,7 +903,13 @@ def get_all_rag_files() -> list:
             }
         )
 
-    return rag_files
+    return {
+        "rag_files": rag_files,
+        "page": page,
+        "per_page": per_page,
+        "total_count": total_count,
+        "total_pages": total_pages,
+    }
 
 
 def delete_rag_file(file_id: str, namespace: str) -> dict:
