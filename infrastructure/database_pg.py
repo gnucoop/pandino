@@ -53,6 +53,9 @@ from infrastructure.database_methods import (
     build_get_feedback_model_stats_query,
     build_get_total_feedback_count_query,
     build_get_total_logs_count_query,
+    build_get_log_filter_values_query,
+    build_get_log_filter_users_query,
+    LOG_FILTER_COLUMNS,
     build_get_total_users_count_query,
     build_check_pgvector_maui_id_exists_query,
     build_check_table_exists_query,
@@ -1874,35 +1877,48 @@ def get_users_stats():
     return {"total_users": total_users, "total_tokens": total_tokens}
 
 
-def get_logs_for_admin(page=1, limit=50, start_date=None, end_date=None, search=None):
+def get_logs_for_admin(
+    page=1, limit=50, start_date=None, end_date=None, search=None, filters=None
+):
     """
     Retrieves logs from the database for the admin panel with pagination.
+
+    The total is counted first so an out-of-range ``page`` is clamped to the
+    last page (or 1 when nothing matches) before LIMIT/OFFSET is applied.
 
     :param page: Page number (1-based)
     :param limit: Maximum number of logs per page
     :param start_date: Optional start date filter
     :param end_date: Optional end date filter
+    :param search: Optional free-text search (username, model, provider)
+    :param filters: Optional exact-match filters: user_id, service, source,
+        model, provider
     :return: Dictionary with logs list and pagination info
     """
+    limit = max(1, int(limit))
     conn = connect()
     cursor = conn.cursor()
 
-    offset = (page - 1) * limit
-
     try:
-        # Get logs
+        query_count, params_count = build_get_total_logs_count_query(
+            start_date, end_date, search=search, filters=filters
+        )
+        cursor.execute(query_count, params_count)
+        total_count = cursor.fetchone()[0] or 0
+
+        total_pages = max(1, (total_count + limit - 1) // limit)
+        page = min(max(1, int(page)), total_pages)
+
         query, params = build_get_logs_for_admin_query(
-            limit, offset, start_date, end_date, search=search
+            limit,
+            (page - 1) * limit,
+            start_date,
+            end_date,
+            search=search,
+            filters=filters,
         )
         cursor.execute(query, params)
         logs_raw = cursor.fetchall()
-
-        # Get total count
-        query_count, params_count = build_get_total_logs_count_query(
-            start_date, end_date, search=search
-        )
-        cursor.execute(query_count, params_count)
-        total_count = cursor.fetchone()[0]
 
     finally:
         conn.close()
@@ -1947,8 +1963,6 @@ def get_logs_for_admin(page=1, limit=50, start_date=None, end_date=None, search=
                     "source": source or "N/A",
                 }
             )
-
-    total_pages = (total_count + limit - 1) // limit
 
     return {
         "logs": logs,
@@ -2052,12 +2066,15 @@ def update_usage_duration(log_id: int, duration_ms: int) -> bool:
         conn.close()
 
 
-def get_logs_stats(start_date=None, end_date=None):
+def get_logs_stats(start_date=None, end_date=None, search=None, filters=None):
     """
-    Get statistics about logs for charts and dashboard.
+    Get statistics about logs for charts and dashboard. Takes the same
+    filters as get_logs_for_admin, so the cards and charts match the table.
 
     :param start_date: Optional start date for stats
     :param end_date: Optional end date for stats
+    :param search: Optional free-text search (username, model, provider)
+    :param filters: Optional exact-match filters (see get_logs_for_admin)
     :return: Dictionary with log statistics
     """
     conn = connect()
@@ -2065,17 +2082,23 @@ def get_logs_stats(start_date=None, end_date=None):
 
     try:
         # Total tokens input/output
-        query, params = build_get_total_log_stats_query(start_date, end_date)
+        query, params = build_get_total_log_stats_query(
+            start_date, end_date, search, filters
+        )
         cursor.execute(query, params)
         totals = cursor.fetchone()
 
         # Tokens by day (filtered by date range)
-        query, params = build_get_daily_log_stats_query(start_date, end_date)
+        query, params = build_get_daily_log_stats_query(
+            start_date, end_date, search, filters
+        )
         cursor.execute(query, params)
         daily_stats = cursor.fetchall()
 
         # Top users by token usage
-        query, params = build_get_top_users_by_token_usage_query(start_date, end_date)
+        query, params = build_get_top_users_by_token_usage_query(
+            start_date, end_date, search, filters
+        )
         cursor.execute(query, params)
         top_users = cursor.fetchall()
 
@@ -2107,6 +2130,40 @@ def get_logs_stats(start_date=None, end_date=None):
         "daily_stats": daily_data,
         "top_users": top_users_data,
     }
+
+
+def get_log_filter_options(start_date=None, end_date=None):
+    """
+    Values for the Usage admin filter dropdowns: the users, services, sources,
+    models and providers that appear in logs within the date range.
+
+    :param start_date: Optional start date (YYYY-MM-DD)
+    :param end_date: Optional end date (YYYY-MM-DD)
+    :return: {"users": [{"id", "username"}], "service": [...], "source": [...],
+        "model": [...], "provider": [...]}
+    """
+    conn = connect()
+    cursor = conn.cursor()
+
+    try:
+        query, params = build_get_log_filter_users_query(start_date, end_date)
+        cursor.execute(query, params)
+        options = {
+            "users": [
+                {"id": user_id, "username": username}
+                for user_id, username in cursor.fetchall()
+            ]
+        }
+        for column in LOG_FILTER_COLUMNS:
+            query, params = build_get_log_filter_values_query(
+                column, start_date, end_date
+            )
+            cursor.execute(query, params)
+            options[column] = [row[0] for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+    return options
 
 
 def get_user_by_id(user_id):
