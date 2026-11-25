@@ -275,17 +275,32 @@ def build_insert_rag_file_query(
     return query, params
 
 
-def build_get_all_rag_files_query() -> Tuple[sql.Composed, Tuple[()]]:
+def build_get_rag_files_page_query(
+    limit: int, offset: int
+) -> Tuple[sql.SQL, Tuple[int, int]]:
     """
-    Builds a SQL query to retrieve all records from the rag_files table.
+    Builds a SQL query to retrieve one page of the rag_files table, newest
+    first. ``id`` breaks ties on ``created_at`` so pages are stable.
 
-    :return: Tuple with SQL query and empty parameter tuple.
+    :param limit: Maximum number of rows to return.
+    :param offset: Number of rows to skip.
+    :return: Tuple with SQL query and parameters.
     """
     query = sql.SQL(
         "SELECT id, file_name, namespace, chunk_count, language, created_at "
-        "FROM rag_files ORDER BY created_at DESC"
+        "FROM rag_files ORDER BY created_at DESC, id ASC "
+        "LIMIT %s OFFSET %s"
     )
-    return query, ()
+    return query, (limit, offset)
+
+
+def build_count_rag_files_query() -> Tuple[sql.SQL, Tuple[()]]:
+    """
+    Builds a SQL query to count the records in the rag_files table.
+
+    :return: Tuple with SQL query and empty parameter tuple.
+    """
+    return sql.SQL("SELECT COUNT(*) FROM rag_files"), ()
 
 
 def build_get_rag_file_for_delete_query(
@@ -492,38 +507,85 @@ def build_get_total_tokens_query() -> Tuple[sql.Composed, Tuple[()]]:
     return query, ()
 
 
+# Columns of the logs table the Usage admin page can filter on by exact
+# value. Keys are trusted identifiers (never user input) and are inlined as
+# SQL; the values are always bound as parameters.
+LOG_FILTER_COLUMNS: Tuple[str, ...] = ("service", "source", "model", "provider")
+
+
+def build_logs_filter_clause(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    search: Optional[str] = None,
+    filters: Optional[dict] = None,
+) -> Tuple[sql.Composable, List[Any]]:
+    """
+    Builds the WHERE clause shared by every Usage admin query, so the table,
+    its count, the stats cards, the daily chart and Top Users always describe
+    the same rows. Queries using it alias logs as ``l`` and LEFT JOIN users as
+    ``u``.
+
+    :param start_date: Start date string (YYYY-MM-DD); used with end_date.
+    :param end_date: End date string (YYYY-MM-DD), inclusive.
+    :param search: Free-text term matched against username, model, provider.
+    :param filters: Exact-match filters: ``user_id`` (int) and any key of
+        LOG_FILTER_COLUMNS. Empty values are ignored.
+    :return: Tuple with the clause (empty when unfiltered) and its parameters.
+    """
+    conditions: List[sql.Composable] = []
+    params: List[Any] = []
+
+    if start_date and end_date:
+        conditions.append(
+            sql.SQL(
+                "l.date::timestamp >= %s::timestamp AND l.date::timestamp <= %s::timestamp"
+            )
+        )
+        params.extend([start_date, end_date + " 23:59:59"])
+
+    if search:
+        conditions.append(
+            sql.SQL("(u.username ILIKE %s OR l.model ILIKE %s OR l.provider ILIKE %s)")
+        )
+        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+
+    filters = filters or {}
+    if filters.get("user_id") is not None:
+        conditions.append(sql.SQL("l.user_id = %s"))
+        params.append(filters["user_id"])
+    for column in LOG_FILTER_COLUMNS:
+        value = filters.get(column)
+        if value:
+            conditions.append(sql.SQL("l." + column + " = %s"))
+            params.append(value)
+
+    if not conditions:
+        return sql.SQL(""), params
+    return sql.SQL("WHERE ") + sql.SQL(" AND ").join(conditions), params
+
+
 def build_get_logs_for_admin_query(
     limit: int,
     offset: int = 0,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     search: Optional[str] = None,
+    filters: Optional[dict] = None,
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
-    Builds a SQL query to retrieve logs for the admin panel with pagination and date filtering.
+    Builds a SQL query to retrieve one page of logs for the admin panel.
 
     :param limit: Maximum number of logs to retrieve.
     :param offset: Number of logs to skip.
     :param start_date: Start date string (YYYY-MM-DD).
     :param end_date: End date string (YYYY-MM-DD).
     :param search: Optional search term to filter by username, model, or provider.
+    :param filters: Optional exact-match filters (see build_logs_filter_clause).
     :return: Tuple with SQL query and parameters.
     """
-    conditions: List[sql.Composable] = []
-    params: List[Any] = []
-
-    if start_date and end_date:
-        conditions.append(sql.SQL("l.date::timestamp >= %s::timestamp AND l.date::timestamp <= %s::timestamp"))
-        params.extend([start_date, end_date + " 23:59:59"])
-
-    if search:
-        conditions.append(sql.SQL("(u.username ILIKE %s OR l.model ILIKE %s OR l.provider ILIKE %s)"))
-        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
-
-    where_clause = sql.SQL("")
-    if conditions:
-        where_clause = sql.SQL("WHERE ") + sql.SQL(" AND ").join(conditions)
-
+    where_clause, params = build_logs_filter_clause(
+        start_date, end_date, search, filters
+    )
     params.extend([limit, offset])
 
     query = sql.SQL(
@@ -534,7 +596,7 @@ def build_get_logs_for_admin_query(
         FROM {logs} l
         LEFT JOIN {users} u ON l.user_id = u.id
         {where_clause}
-        ORDER BY l.date DESC
+        ORDER BY l.date DESC, l.id DESC
         LIMIT %s OFFSET %s
     """
     ).format(
@@ -546,42 +608,93 @@ def build_get_logs_for_admin_query(
 
 
 def build_get_total_logs_count_query(
-    start_date: Optional[str] = None, end_date: Optional[str] = None, search: Optional[str] = None
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    search: Optional[str] = None,
+    filters: Optional[dict] = None,
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
-    Builds a SQL query to count total logs for pagination with date filtering.
+    Builds a SQL query to count the logs matching the admin filters.
 
     :param start_date: Start date string (YYYY-MM-DD).
     :param end_date: End date string (YYYY-MM-DD).
     :param search: Optional search term to filter by username, model, or provider.
+    :param filters: Optional exact-match filters (see build_logs_filter_clause).
     :return: Tuple with SQL query and parameter tuple.
     """
-    conditions: List[sql.Composable] = []
-    params: List[Any] = []
+    where_clause, params = build_logs_filter_clause(
+        start_date, end_date, search, filters
+    )
+    query = sql.SQL(
+        "SELECT COUNT(*) FROM {logs} l LEFT JOIN {users} u ON l.user_id = u.id {where_clause}"
+    ).format(
+        logs=sql.Identifier("logs"),
+        users=sql.Identifier("users"),
+        where_clause=where_clause,
+    )
+    return query, tuple(params)
 
-    if start_date and end_date:
-        conditions.append(sql.SQL("l.date::timestamp >= %s::timestamp AND l.date::timestamp <= %s::timestamp"))
-        params.extend([start_date, end_date + " 23:59:59"])
 
-    if search:
-        conditions.append(sql.SQL("(u.username ILIKE %s OR l.model ILIKE %s OR l.provider ILIKE %s)"))
-        params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
+def build_get_log_filter_values_query(
+    column: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query listing the distinct non-empty values of one filterable
+    logs column within the date range, for the admin filter dropdowns.
 
-    where_clause = sql.SQL("")
-    if conditions:
-        where_clause = sql.SQL("WHERE ") + sql.SQL(" AND ").join(conditions)
+    :param column: One of LOG_FILTER_COLUMNS.
+    :param start_date: Start date string (YYYY-MM-DD).
+    :param end_date: End date string (YYYY-MM-DD).
+    :return: Tuple with SQL query and parameter tuple.
+    :raises ValueError: when column is not filterable.
+    """
+    if column not in LOG_FILTER_COLUMNS:
+        raise ValueError(f"Unsupported logs filter column: {column}")
+    where_clause, params = build_logs_filter_clause(start_date, end_date)
+    not_empty = sql.SQL("l." + column + " IS NOT NULL AND l." + column + " <> ''")
+    where_clause = (
+        where_clause + sql.SQL(" AND ") + not_empty
+        if params
+        else sql.SQL("WHERE ") + not_empty
+    )
+    query = sql.SQL(
+        "SELECT DISTINCT {col} FROM {logs} l {where_clause} ORDER BY 1"
+    ).format(
+        col=sql.SQL("l." + column),
+        logs=sql.Identifier("logs"),
+        where_clause=where_clause,
+    )
+    return query, tuple(params)
 
-    if search:
-        query = sql.SQL("SELECT COUNT(*) FROM {logs} l LEFT JOIN {users} u ON l.user_id = u.id {where_clause}").format(
-            logs=sql.Identifier("logs"),
-            users=sql.Identifier("users"),
-            where_clause=where_clause,
-        )
-    else:
-        query = sql.SQL("SELECT COUNT(*) FROM {logs} l {where_clause}").format(
-            logs=sql.Identifier("logs"),
-            where_clause=where_clause,
-        )
+
+def build_get_log_filter_users_query(
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Tuple[sql.Composed, Tuple[Any, ...]]:
+    """
+    Builds a SQL query listing the users with logs in the date range, for the
+    admin user filter dropdown.
+
+    :param start_date: Start date string (YYYY-MM-DD).
+    :param end_date: End date string (YYYY-MM-DD).
+    :return: Tuple with SQL query and parameter tuple (rows: id, username).
+    """
+    where_clause, params = build_logs_filter_clause(start_date, end_date)
+    query = sql.SQL(
+        """
+        SELECT DISTINCT u.id, u.username
+        FROM {logs} l
+        JOIN {users} u ON l.user_id = u.id
+        {where_clause}
+        ORDER BY u.username
+    """
+    ).format(
+        logs=sql.Identifier("logs"),
+        users=sql.Identifier("users"),
+        where_clause=where_clause,
+    )
     return query, tuple(params)
 
 
@@ -650,108 +763,108 @@ def build_set_user_client_if_missing_query(
 
 
 def build_get_total_log_stats_query(
-    start_date: Optional[str] = None, end_date: Optional[str] = None
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    search: Optional[str] = None,
+    filters: Optional[dict] = None,
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
-    Builds a SQL query to get total log statistics with optional date filtering.
+    Builds a SQL query to get total log statistics for the admin filters.
 
     :param start_date: Start date string (YYYY-MM-DD).
     :param end_date: End date string (YYYY-MM-DD).
+    :param search: Optional search term to filter by username, model, or provider.
+    :param filters: Optional exact-match filters (see build_logs_filter_clause).
     :return: Tuple with SQL query and parameter tuple.
     """
-    where_clause = sql.SQL("")
-    params: Tuple[Any, ...] = ()
-
-    if start_date and end_date:
-        where_clause = sql.SQL(
-            "WHERE date::timestamp >= %s::timestamp AND date::timestamp <= %s::timestamp"
-        )
-        params = (start_date, end_date + " 23:59:59")
-
+    where_clause, params = build_logs_filter_clause(
+        start_date, end_date, search, filters
+    )
     query = sql.SQL(
         """
         SELECT
-            COALESCE(SUM({token_input}), 0) as total_input,
-            COALESCE(SUM({token_output}), 0) as total_output,
-            COALESCE(SUM({cost}), 0.0) as total_cost,
+            COALESCE(SUM(l.token_input), 0) as total_input,
+            COALESCE(SUM(l.token_output), 0) as total_output,
+            COALESCE(SUM(l.cost), 0.0) as total_cost,
             COUNT(*) as total_requests
-        FROM {logs}
+        FROM {logs} l
+        LEFT JOIN {users} u ON l.user_id = u.id
         {where_clause}
     """
     ).format(
-        token_input=sql.Identifier("token_input"),
-        token_output=sql.Identifier("token_output"),
-        cost=sql.Identifier("cost"),
         logs=sql.Identifier("logs"),
+        users=sql.Identifier("users"),
         where_clause=where_clause,
     )
-    return query, params
+    return query, tuple(params)
 
 
 def build_get_daily_log_stats_query(
-    start_date: Optional[str] = None, end_date: Optional[str] = None
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    search: Optional[str] = None,
+    filters: Optional[dict] = None,
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
-    Builds a SQL query to get daily log statistics for a specific date range.
-    If no dates provided, defaults to last 7 days.
+    Builds a SQL query to get daily log statistics for the admin filters.
+    If no dates are provided, defaults to the last 7 days.
 
     :param start_date: Start date string (YYYY-MM-DD).
     :param end_date: End date string (YYYY-MM-DD).
+    :param search: Optional search term to filter by username, model, or provider.
+    :param filters: Optional exact-match filters (see build_logs_filter_clause).
     :return: Tuple with SQL query and parameter tuple.
     """
-
-    if start_date and end_date:
-        # User defined range
-        where_clause = sql.SQL(
-            "WHERE date::timestamp >= %s::timestamp AND date::timestamp <= %s::timestamp"
+    where_clause, params = build_logs_filter_clause(
+        start_date, end_date, search, filters
+    )
+    if not (start_date and end_date):
+        default_range = sql.SQL("l.date::timestamp >= CURRENT_DATE - INTERVAL '7 days'")
+        where_clause = (
+            where_clause + sql.SQL(" AND ") + default_range
+            if params
+            else sql.SQL("WHERE ") + default_range
         )
-        params = (start_date, end_date + " 23:59:59")  # Include full end day
-    else:
-        # Default last 7 days
-        where_clause = sql.SQL(
-            "WHERE date::timestamp >= CURRENT_DATE - INTERVAL '7 days'"
-        )
-        params = ()
 
     query = sql.SQL(
         """
         SELECT
-            DATE(date::timestamp) as day,
-            SUM({token_input}) as input_tokens,
-            SUM({token_output}) as output_tokens
-        FROM {logs}
+            DATE(l.date::timestamp) as day,
+            SUM(l.token_input) as input_tokens,
+            SUM(l.token_output) as output_tokens
+        FROM {logs} l
+        LEFT JOIN {users} u ON l.user_id = u.id
         {where_clause}
-        GROUP BY DATE(date::timestamp)
+        GROUP BY DATE(l.date::timestamp)
         ORDER BY day
     """
     ).format(
-        token_input=sql.Identifier("token_input"),
-        token_output=sql.Identifier("token_output"),
         logs=sql.Identifier("logs"),
+        users=sql.Identifier("users"),
         where_clause=where_clause,
     )
-    return query, params
+    return query, tuple(params)
 
 
 def build_get_top_users_by_token_usage_query(
-    start_date: Optional[str] = None, end_date: Optional[str] = None
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    search: Optional[str] = None,
+    filters: Optional[dict] = None,
 ) -> Tuple[sql.Composed, Tuple[Any, ...]]:
     """
-    Builds a SQL query to get top 5 users by token usage with optional date filtering.
+    Builds a SQL query to get the top 5 users by token usage for the admin
+    filters.
 
     :param start_date: Start date string (YYYY-MM-DD).
     :param end_date: End date string (YYYY-MM-DD).
+    :param search: Optional search term to filter by username, model, or provider.
+    :param filters: Optional exact-match filters (see build_logs_filter_clause).
     :return: Tuple with SQL query and parameter tuple.
     """
-    where_clause = sql.SQL("")
-    params: Tuple[Any, ...] = ()
-
-    if start_date and end_date:
-        where_clause = sql.SQL(
-            "WHERE l.date::timestamp >= %s::timestamp AND l.date::timestamp <= %s::timestamp"
-        )
-        params = (start_date, end_date + " 23:59:59")
-
+    where_clause, params = build_logs_filter_clause(
+        start_date, end_date, search, filters
+    )
     query = sql.SQL(
         """
         SELECT
@@ -769,7 +882,7 @@ def build_get_top_users_by_token_usage_query(
         users=sql.Identifier("users"),
         where_clause=where_clause,
     )
-    return query, params
+    return query, tuple(params)
 
 
 def build_get_user_by_id_query(user_id: int) -> Tuple[sql.Composed, Tuple[int]]:

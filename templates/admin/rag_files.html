@@ -13,6 +13,7 @@
     </div>
     <div class="card-body">
         <form method="POST" action="{{ url_for('admin.admin_upload_rag_file') }}" enctype="multipart/form-data">
+            <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
             <div class="row">
                 <div class="col-md-4 mb-3">
                     <label for="file" class="form-label">File</label>
@@ -39,8 +40,21 @@
 </div>
 
 <div class="card mt-4">
-    <div class="card-header">
-        Indexed Files
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span>
+            Indexed Files
+            <span class="badge bg-secondary ms-1" title="Total indexed files">{{ pagination.total_count }}</span>
+        </span>
+        <form method="GET" action="{{ url_for('admin.admin_rag_files') }}" class="d-flex align-items-center gap-2">
+            <label for="per_page" class="small text-muted mb-0 text-nowrap">Per page</label>
+            <select id="per_page" name="per_page" class="form-select form-select-sm" style="width:auto;"
+                onchange="this.form.submit()">
+                {% for option in per_page_options %}
+                <option value="{{ option }}" {{ 'selected' if option == pagination.per_page else '' }}>{{ option }}</option>
+                {% endfor %}
+            </select>
+            <noscript><button type="submit" class="btn btn-sm btn-outline-secondary">Apply</button></noscript>
+        </form>
     </div>
     <div class="card-body">
         {% if rag_files %}
@@ -67,9 +81,11 @@
                         <td class="text-end">
                             <form method="POST" action="{{ url_for('admin.admin_delete_rag_file') }}"
                                 style="display:inline;"
-                                onsubmit="return confirm('Delete {{ file.file_name }} and all its indexed chunks?');">
+                                onsubmit='return confirm({{ ("Delete " ~ file.file_name ~ " and all its indexed chunks?") | tojson }});'>
                                 <input type="hidden" name="file_id" value="{{ file.id }}">
                                 <input type="hidden" name="namespace" value="{{ file.namespace }}">
+                                <input type="hidden" name="page" value="{{ pagination.page }}">
+                                <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
                                 <button type="submit" class="btn btn-sm btn-outline-danger">
                                     <i class="fas fa-trash me-1"></i>Delete
                                 </button>
@@ -80,6 +96,39 @@
                 </tbody>
             </table>
         </div>
+
+        <p class="small text-muted text-center mb-0">
+            Showing {{ pagination.first_index }}&ndash;{{ pagination.last_index }} of {{ pagination.total_count }} files
+        </p>
+
+        <!-- Pagination -->
+        {% if pagination.total_pages > 1 %}
+        <nav aria-label="Indexed files navigation" class="mt-3">
+            <ul class="pagination justify-content-center">
+                <li class="page-item {{ 'disabled' if pagination.page == 1 else '' }}">
+                    <a class="page-link"
+                        href="{{ url_for('admin.admin_rag_files', page=1, per_page=pagination.per_page) }}">&laquo; First</a>
+                </li>
+                <li class="page-item {{ 'disabled' if pagination.page == 1 else '' }}">
+                    <a class="page-link"
+                        href="{{ url_for('admin.admin_rag_files', page=pagination.page-1, per_page=pagination.per_page) }}">Previous</a>
+                </li>
+
+                <li class="page-item disabled">
+                    <span class="page-link">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
+                </li>
+
+                <li class="page-item {{ 'disabled' if pagination.page == pagination.total_pages else '' }}">
+                    <a class="page-link"
+                        href="{{ url_for('admin.admin_rag_files', page=pagination.page+1, per_page=pagination.per_page) }}">Next</a>
+                </li>
+                <li class="page-item {{ 'disabled' if pagination.page == pagination.total_pages else '' }}">
+                    <a class="page-link"
+                        href="{{ url_for('admin.admin_rag_files', page=pagination.total_pages, per_page=pagination.per_page) }}">Last &raquo;</a>
+                </li>
+            </ul>
+        </nav>
+        {% endif %}
         {% else %}
         <div class="text-center py-5">
             <i class="fas fa-database fa-4x text-muted mb-3"></i>

@@ -1,6 +1,7 @@
 import logging
 import os
-from datetime import datetime, timedelta
+import zlib
+from datetime import date, datetime, timedelta
 from functools import wraps
 
 import bcrypt
@@ -20,6 +21,7 @@ from flask import (
 )
 
 from config import PROVIDER_API_KEY_MAP
+from infrastructure.database_methods import LOG_FILTER_COLUMNS
 from infrastructure.database_pg import (
     add_cost,
     add_prompt,
@@ -28,11 +30,12 @@ from infrastructure.database_pg import (
     delete_rag_file,
     get_all_costs,
     get_all_prompts,
-    get_all_rag_files,
+    get_rag_files_page,
     get_cost_by_id,
     get_daily_stats,
     get_feedback_for_admin,
     get_feedback_stats,
+    get_log_filter_options,
     get_logs_for_admin,
     get_logs_stats,
     get_operational_events_by_request_id,
@@ -450,65 +453,236 @@ def admin_users():
         )
 
 
+LOGS_DEFAULT_PER_PAGE = 50
+LOGS_PER_PAGE_OPTIONS = (25, 50, 100, 200)
+LOGS_DEFAULT_DAYS = 7
+LOGS_MAX_FILTER_LENGTH = 200
+LOGS_FILTER_LABELS = {
+    "user": "User",
+    "service": "Service",
+    "source": "Source",
+    "model": "Model",
+    "provider": "Provider",
+    "search": "Search",
+}
+
+# Soft Bootstrap 5.3 colour pairs for value badges (service, source, ...).
+_BADGE_PALETTE = (
+    "primary",
+    "success",
+    "info",
+    "warning",
+    "danger",
+    "secondary",
+    "dark",
+)
+
+
+def badge_class(value) -> str:
+    """Stable badge colour for a value, so e.g. a service keeps its colour."""
+    if value in (None, "", "N/A", "Unknown"):
+        return "bg-light text-muted border"
+    color = _BADGE_PALETTE[zlib.crc32(str(value).encode()) % len(_BADGE_PALETTE)]
+    return f"bg-{color}-subtle text-{color}-emphasis border border-{color}-subtle"
+
+
+def _parse_iso_date(value):
+    try:
+        return datetime.strptime((value or "").strip(), "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _clean_filter_value(value):
+    value = (value or "").strip()
+    if not value or len(value) > LOGS_MAX_FILTER_LENGTH:
+        return None
+    return value
+
+
+def _logs_quick_ranges(today: date):
+    return [
+        ("today", "Today", today, today),
+        ("7d", "Last 7 days", today - timedelta(days=LOGS_DEFAULT_DAYS - 1), today),
+        ("30d", "Last 30 days", today - timedelta(days=29), today),
+        ("month", "This month", today.replace(day=1), today),
+    ]
+
+
+def _parse_logs_query(args, today: date) -> dict:
+    """
+    Validate the Usage page query string. Anything malformed falls back to
+    its default rather than reaching SQL: dates must be YYYY-MM-DD (missing or
+    invalid -> the last LOGS_DEFAULT_DAYS days; reversed -> swapped), ``user``
+    must be a positive integer id, text filters are trimmed and capped at
+    LOGS_MAX_FILTER_LENGTH, ``page`` >= 1 and ``per_page`` one of
+    LOGS_PER_PAGE_OPTIONS.
+    """
+    start = _parse_iso_date(args.get("start_date"))
+    end = _parse_iso_date(args.get("end_date"))
+    dates_defaulted = False
+    if start and not end:
+        end = max(start, today)
+    elif end and not start:
+        start = end - timedelta(days=LOGS_DEFAULT_DAYS - 1)
+    elif not start and not end:
+        start = today - timedelta(days=LOGS_DEFAULT_DAYS - 1)
+        end = today
+        dates_defaulted = True
+    if start > end:
+        start, end = end, start
+
+    filters = {}
+    user_id = args.get("user", type=int)
+    if user_id is not None and user_id > 0:
+        filters["user_id"] = user_id
+    for column in LOG_FILTER_COLUMNS:
+        value = _clean_filter_value(args.get(column))
+        if value:
+            filters[column] = value
+
+    page = args.get("page", type=int)
+    if page is None or page < 1:
+        page = 1
+    per_page = args.get("per_page", type=int)
+    if per_page not in LOGS_PER_PAGE_OPTIONS:
+        per_page = LOGS_DEFAULT_PER_PAGE
+
+    return {
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "dates_defaulted": dates_defaulted,
+        "search": _clean_filter_value(args.get("search")),
+        "filters": filters,
+        "page": page,
+        "per_page": per_page,
+    }
+
+
+def _logs_filter_args(q: dict) -> dict:
+    """URL parameters reproducing the current view (without ``page``)."""
+    args = {}
+    if not q["dates_defaulted"]:
+        args["start_date"] = q["start_date"]
+        args["end_date"] = q["end_date"]
+    if q["search"]:
+        args["search"] = q["search"]
+    if "user_id" in q["filters"]:
+        args["user"] = q["filters"]["user_id"]
+    for column in LOG_FILTER_COLUMNS:
+        if column in q["filters"]:
+            args[column] = q["filters"][column]
+    if q["per_page"] != LOGS_DEFAULT_PER_PAGE:
+        args["per_page"] = q["per_page"]
+    return args
+
+
+def _empty_log_filter_options() -> dict:
+    options = {"users": []}
+    options.update({column: [] for column in LOG_FILTER_COLUMNS})
+    return options
+
+
+def _include_selected_options(options: dict, filters: dict) -> dict:
+    """Keep a selected value listed even when it has no rows in the range."""
+    for column in LOG_FILTER_COLUMNS:
+        value = filters.get(column)
+        if value and value not in options[column]:
+            options[column] = [value] + options[column]
+    user_id = filters.get("user_id")
+    if user_id is not None and all(u["id"] != user_id for u in options["users"]):
+        options["users"] = [{"id": user_id, "username": f"#{user_id}"}] + options[
+            "users"
+        ]
+    return options
+
+
 @admin_bp.route("/admin/logs")
 @admin_required
 def admin_logs():
+    today = date.today()
+    q = _parse_logs_query(request.args, today)
+    filter_args = _logs_filter_args(q)
+    query_kwargs = {
+        "start_date": q["start_date"],
+        "end_date": q["end_date"],
+        "search": q["search"],
+        "filters": q["filters"],
+    }
+
     try:
-        # Get query parameters
-        page = request.args.get("page", 1, type=int)
-
-        # Date filter
-        start_date = request.args.get("start_date")
-        end_date = request.args.get("end_date")
-        search = request.args.get("search", "").strip() or None
-
-        # Calculate default dates if not provided (for charts)
-        if not start_date or not end_date:
-            default_end = datetime.now()
-            default_start = default_end - timedelta(days=7)
-            chart_start = default_start.strftime("%Y-%m-%d")
-            chart_end = default_end.strftime("%Y-%m-%d")
-        else:
-            chart_start = start_date
-            chart_end = end_date
-
         logs_data = get_logs_for_admin(
-            page=page,
-            limit=50,
-            start_date=chart_start,
-            end_date=chart_end,
-            search=search,
+            page=q["page"], limit=q["per_page"], **query_kwargs
         )
-        logs = logs_data["logs"]
-        pagination = {
-            "page": logs_data["page"],
-            "total_pages": logs_data["total_pages"],
-            "total_count": logs_data["total_count"],
-        }
-
-        stats = get_logs_stats(start_date=chart_start, end_date=chart_end)
-
-        return render_template(
-            "admin/logs.html",
-            logs=logs,
-            stats=stats,
-            pagination=pagination,
-            current_start_date=chart_start,
-            current_end_date=chart_end,
-            current_search=search or "",
-        )
-
+        stats = get_logs_stats(**query_kwargs)
+        options = get_log_filter_options(q["start_date"], q["end_date"])
     except Exception as e:
         flash(f"Errore nel recupero logs: {str(e)}", "danger")
-        return render_template(
-            "admin/logs.html",
-            logs=[],
-            stats={},
-            pagination={"page": 1, "total_pages": 1},
-            current_start_date="",
-            current_end_date="",
-            current_search="",
+        logs_data = {"logs": [], "page": 1, "total_pages": 1, "total_count": 0}
+        stats = {}
+        options = _empty_log_filter_options()
+
+    options = _include_selected_options(options, q["filters"])
+    logs = logs_data["logs"]
+    page = logs_data["page"]
+    pagination = {
+        "page": page,
+        "total_pages": logs_data["total_pages"],
+        "total_count": logs_data["total_count"],
+        "per_page": q["per_page"],
+        "first_index": (page - 1) * q["per_page"] + 1 if logs else 0,
+        "last_index": (page - 1) * q["per_page"] + len(logs),
+    }
+
+    usernames = {u["id"]: u["username"] for u in options["users"]}
+    active_filters = []
+    for key in ("user", *LOG_FILTER_COLUMNS, "search"):
+        if key not in filter_args:
+            continue
+        value = filter_args[key]
+        remaining = {k: v for k, v in filter_args.items() if k != key}
+        active_filters.append(
+            {
+                "key": key,
+                "label": LOGS_FILTER_LABELS[key],
+                "value": usernames.get(value, value) if key == "user" else value,
+                "remove_url": url_for("admin.admin_logs", **remaining),
+            }
         )
+
+    quick_ranges = []
+    for key, label, start, end in _logs_quick_ranges(today):
+        args = dict(filter_args, start_date=start.isoformat(), end_date=end.isoformat())
+        quick_ranges.append(
+            {
+                "key": key,
+                "label": label,
+                "url": url_for("admin.admin_logs", **args),
+                "active": start.isoformat() == q["start_date"]
+                and end.isoformat() == q["end_date"],
+            }
+        )
+
+    return render_template(
+        "admin/logs.html",
+        logs=logs,
+        stats=stats,
+        pagination=pagination,
+        current_start_date=q["start_date"],
+        current_end_date=q["end_date"],
+        current_search=q["search"] or "",
+        dates_defaulted=q["dates_defaulted"],
+        current_filters={
+            "user": q["filters"].get("user_id"),
+            **{column: q["filters"].get(column, "") for column in LOG_FILTER_COLUMNS},
+        },
+        filter_options=options,
+        filter_args=filter_args,
+        active_filters=active_filters,
+        quick_ranges=quick_ranges,
+        per_page_options=LOGS_PER_PAGE_OPTIONS,
+        badge_class=badge_class,
+    )
 
 
 @admin_bp.route("/admin/logs/<request_id>/operational", methods=["GET"])
@@ -737,15 +911,69 @@ def admin_delete_prompt(prompt_id):
     return redirect(url_for("admin.admin_prompts"))
 
 
+RAG_FILES_DEFAULT_PER_PAGE = 25
+RAG_FILES_PER_PAGE_OPTIONS = (10, 25, 50, 100)
+
+
+def _parse_rag_files_paging(source) -> tuple[int, int]:
+    """
+    Read ``page`` / ``per_page`` from a request mapping (args or form).
+
+    Non-numeric or out-of-range values fall back to the defaults: page 1 and
+    RAG_FILES_DEFAULT_PER_PAGE. ``per_page`` must be one of
+    RAG_FILES_PER_PAGE_OPTIONS. A page past the end is clamped later, once the
+    total is known.
+    """
+    page = source.get("page", type=int)
+    if page is None or page < 1:
+        page = 1
+    per_page = source.get("per_page", type=int)
+    if per_page not in RAG_FILES_PER_PAGE_OPTIONS:
+        per_page = RAG_FILES_DEFAULT_PER_PAGE
+    return page, per_page
+
+
+def _rag_files_redirect(page: int = 1, per_page: int = RAG_FILES_DEFAULT_PER_PAGE):
+    params = {}
+    if page != 1:
+        params["page"] = page
+    if per_page != RAG_FILES_DEFAULT_PER_PAGE:
+        params["per_page"] = per_page
+    return redirect(url_for("admin.admin_rag_files", **params))
+
+
 @admin_bp.route("/admin/rag-files")
 @admin_required
 def admin_rag_files():
+    page, per_page = _parse_rag_files_paging(request.args)
     try:
-        rag_files = get_all_rag_files()
-        return render_template("admin/rag_files.html", rag_files=rag_files)
+        data = get_rag_files_page(page=page, per_page=per_page)
     except Exception as e:
         flash(f"Error loading RAG files: {str(e)}", "danger")
-        return render_template("admin/rag_files.html", rag_files=[])
+        data = {
+            "rag_files": [],
+            "page": 1,
+            "per_page": per_page,
+            "total_count": 0,
+            "total_pages": 1,
+        }
+
+    pagination = {
+        "page": data["page"],
+        "per_page": data["per_page"],
+        "total_count": data["total_count"],
+        "total_pages": data["total_pages"],
+        "first_index": (data["page"] - 1) * data["per_page"] + 1
+        if data["rag_files"]
+        else 0,
+        "last_index": (data["page"] - 1) * data["per_page"] + len(data["rag_files"]),
+    }
+    return render_template(
+        "admin/rag_files.html",
+        rag_files=data["rag_files"],
+        pagination=pagination,
+        per_page_options=RAG_FILES_PER_PAGE_OPTIONS,
+    )
 
 
 @admin_bp.route("/admin/rag-files/upload", methods=["POST"])
@@ -755,10 +983,12 @@ def admin_upload_rag_file():
     file = request.files.get("file")
     namespace = request.form.get("namespace", "").strip()
     language = request.form.get("language", "").strip() or None
+    # New files sort first, so land on page 1 with the viewer's page size.
+    _page, per_page = _parse_rag_files_paging(request.form)
 
     if not file or not namespace:
         flash("File and namespace are required", "danger")
-        return redirect(url_for("admin.admin_rag_files"))
+        return _rag_files_redirect(per_page=per_page)
 
     # Declared after validation - a request that cannot embed anything
     # resolves no identity - and before every line of the ingestion attempt,
@@ -812,7 +1042,7 @@ def admin_upload_rag_file():
     except Exception as e:
         flash(f"Error processing file: {str(e)}", "danger")
 
-    return redirect(url_for("admin.admin_rag_files"))
+    return _rag_files_redirect(per_page=per_page)
 
 
 @admin_bp.route("/admin/rag-files/delete", methods=["POST"])
@@ -820,10 +1050,13 @@ def admin_upload_rag_file():
 def admin_delete_rag_file():
     file_id = request.form.get("file_id")
     namespace = request.form.get("namespace")
+    # Return to the page the delete came from; the listing clamps it if that
+    # page no longer exists after the delete.
+    page, per_page = _parse_rag_files_paging(request.form)
 
     if not file_id or not namespace:
         flash("Missing file id or namespace", "danger")
-        return redirect(url_for("admin.admin_rag_files"))
+        return _rag_files_redirect(page, per_page)
 
     try:
         result = delete_rag_file(file_id, namespace)
@@ -837,4 +1070,4 @@ def admin_delete_rag_file():
     except Exception as e:
         flash(f"Error deleting RAG file: {str(e)}", "danger")
 
-    return redirect(url_for("admin.admin_rag_files"))
+    return _rag_files_redirect(page, per_page)

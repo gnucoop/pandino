@@ -2,21 +2,105 @@
 
 {% block title %}Usage - Admin Panel{% endblock %}
 
+{% set filter_args = filter_args or {} %}
+{% set current_filters = current_filters or {} %}
+{% set filter_options = filter_options or {} %}
+
+{% macro badge(value) -%}
+{{ badge_class(value) if badge_class is defined else 'bg-secondary' }}
+{%- endmacro %}
+
+{# A value badge that, when the value is real, links to the page filtered by it. #}
+{% macro filter_badge(param, value, display=None, title='') -%}
+{% if value and value not in ('N/A', 'Unknown') and filter_args is mapping and url_for is defined -%}
+<a href="{{ url_for('admin.admin_logs', **dict(filter_args, **{param: value})) }}"
+    class="badge text-decoration-none {{ badge(display or value) }}" title="Filter by {{ title or param }}">{{ display or value }}</a>
+{%- else -%}
+<span class="badge {{ badge(display or value) }}">{{ display or value }}</span>
+{%- endif %}
+{%- endmacro %}
+
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
+<style>
+    .usage-filters .form-label { font-size: .75rem; text-transform: uppercase; letter-spacing: .03em; color: var(--bs-secondary-color); margin-bottom: .25rem; }
+    .usage-table td, .usage-table th { vertical-align: middle; white-space: nowrap; }
+    .usage-table .badge { font-weight: 500; }
+    .filter-chip { font-weight: 500; }
+    .filter-chip a { color: inherit; text-decoration: none; opacity: .7; }
+    .filter-chip a:hover { opacity: 1; }
+</style>
+
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
     <h1 class="mb-0">API Usage Logs</h1>
-    <form class="d-flex gap-2 align-items-center" method="GET" action="{{ url_for('admin.admin_logs') }}">
-        <input type="hidden" name="search" value="{{ current_search }}">
-        <div class="input-group">
-            <span class="input-group-text">Start</span>
-            <input type="date" class="form-control" name="start_date" value="{{ current_start_date }}">
+    {% if quick_ranges %}
+    <div class="btn-group btn-group-sm" role="group" aria-label="Quick date ranges">
+        {% for r in quick_ranges %}
+        <a href="{{ r.url }}" class="btn {{ 'btn-primary' if r.active else 'btn-outline-primary' }}">{{ r.label }}</a>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+
+<!-- Filters -->
+<div class="card mb-4 usage-filters">
+    <div class="card-body">
+        <form method="GET" action="{{ url_for('admin.admin_logs') }}">
+            {% if pagination and pagination.per_page %}
+            <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
+            {% endif %}
+            <div class="row g-2 align-items-end">
+                <div class="col-6 col-md-3 col-xl-2">
+                    <label for="start_date" class="form-label">Start</label>
+                    <input type="date" class="form-control form-control-sm" id="start_date" name="start_date" value="{{ current_start_date }}">
+                </div>
+                <div class="col-6 col-md-3 col-xl-2">
+                    <label for="end_date" class="form-label">End</label>
+                    <input type="date" class="form-control form-control-sm" id="end_date" name="end_date" value="{{ current_end_date }}">
+                </div>
+                <div class="col-6 col-md-3 col-xl-2">
+                    <label for="filter_user" class="form-label">User</label>
+                    <select id="filter_user" name="user" class="form-select form-select-sm">
+                        <option value="">All users</option>
+                        {% for u in filter_options.users or [] %}
+                        <option value="{{ u.id }}" {{ 'selected' if u.id == current_filters.user else '' }}>{{ u.username }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% for param, label in [('service', 'Service'), ('source', 'Source'), ('model', 'Model'), ('provider', 'Provider')] %}
+                <div class="col-6 col-md-3 col-xl-2">
+                    <label for="filter_{{ param }}" class="form-label">{{ label }}</label>
+                    <select id="filter_{{ param }}" name="{{ param }}" class="form-select form-select-sm">
+                        <option value="">All</option>
+                        {% for value in filter_options[param] or [] %}
+                        <option value="{{ value }}" {{ 'selected' if value == current_filters[param] else '' }}>{{ value }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endfor %}
+                <div class="col-12 col-md-6 col-xl-4">
+                    <label for="search" class="form-label">Search</label>
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text"><i class="fas fa-search"></i></span>
+                        <input type="text" class="form-control" id="search" name="search" placeholder="User, model or provider..." value="{{ current_search }}">
+                    </div>
+                </div>
+                <div class="col-12 col-xl-auto ms-xl-auto d-flex gap-2">
+                    <button type="submit" class="btn btn-sm btn-primary"><i class="fas fa-filter me-1"></i>Apply</button>
+                    <a href="{{ url_for('admin.admin_logs') }}" class="btn btn-sm btn-outline-secondary">Reset</a>
+                </div>
+            </div>
+        </form>
+
+        <div class="d-flex flex-wrap align-items-center gap-2 mt-3 small">
+            <span class="text-muted"><i class="far fa-calendar me-1"></i>{{ current_start_date }} &rarr; {{ current_end_date }}{% if dates_defaulted %} (default: last 7 days){% endif %}</span>
+            {% for f in active_filters or [] %}
+            <span class="badge rounded-pill filter-chip {{ badge(f.value) }}">
+                {{ f.label }}: {{ f.value }}
+                <a href="{{ f.remove_url }}" class="ms-1" aria-label="Remove {{ f.label }} filter">&times;</a>
+            </span>
+            {% endfor %}
         </div>
-        <div class="input-group">
-            <span class="input-group-text">End</span>
-            <input type="date" class="form-control" name="end_date" value="{{ current_end_date }}">
-        </div>
-        <button type="submit" class="btn btn-primary">Filter</button>
-    </form>
+    </div>
 </div>
 
 <!-- Stats Cards -->
@@ -25,7 +109,7 @@
         <div class="card text-white bg-primary">
             <div class="card-body">
                 <h6 class="card-title text-uppercase">Usage Records</h6>
-                <h2 class="mb-0">{{ stats.total_requests if stats else 0 }}</h2>
+                <h2 class="mb-0">{{ "{:,}".format(stats.total_requests|int) if stats else 0 }}</h2>
             </div>
         </div>
     </div>
@@ -92,53 +176,54 @@
 
 <!-- Logs Table -->
 <div class="card">
-    <div class="card-header bg-white">
-        <div class="row align-items-center">
-            <div class="col-md-6">
-                <h5 class="mb-0"><i class="fas fa-list me-2"></i>Recent Usage</h5>
-            </div>
-            <div class="col-md-6">
-                <form method="GET" action="{{ url_for('admin.admin_logs') }}" class="input-group">
-                    <input type="hidden" name="start_date" value="{{ current_start_date }}">
-                    <input type="hidden" name="end_date" value="{{ current_end_date }}">
-                    <span class="input-group-text"><i class="fas fa-search"></i></span>
-                    <input type="text" class="form-control" placeholder="Search logs..." name="search" value="{{ current_search }}">
-                    <button type="submit" class="btn btn-outline-secondary">Search</button>
-                </form>
-            </div>
-        </div>
+    <div class="card-header bg-white d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <h5 class="mb-0">
+            <i class="fas fa-list me-2"></i>Recent Usage
+            {% if pagination and pagination.total_count is defined %}
+            <span class="badge bg-secondary ms-1 fs-6 fw-normal" title="Matching usage records">{{ "{:,}".format(pagination.total_count|int) }}</span>
+            {% endif %}
+        </h5>
+        {% if per_page_options %}
+        <form method="GET" action="{{ url_for('admin.admin_logs') }}" class="d-flex align-items-center gap-2">
+            {% for key, value in filter_args.items() if key != 'per_page' %}
+            <input type="hidden" name="{{ key }}" value="{{ value }}">
+            {% endfor %}
+            <label for="per_page" class="small text-muted mb-0 text-nowrap">Per page</label>
+            <select id="per_page" name="per_page" class="form-select form-select-sm" style="width:auto;" onchange="this.form.submit()">
+                {% for option in per_page_options %}
+                <option value="{{ option }}" {{ 'selected' if option == pagination.per_page else '' }}>{{ option }}</option>
+                {% endfor %}
+            </select>
+            <noscript><button type="submit" class="btn btn-sm btn-outline-secondary">Apply</button></noscript>
+        </form>
+        {% endif %}
     </div>
     <div class="card-body">
         {% if logs %}
         <div class="table-responsive">
-            <table class="table table-hover table-sm">
+            <table class="table table-hover table-sm usage-table">
                 <thead>
                     <tr>
-                        <th>ID</th>
-                        <th>User</th>
+                        <th class="text-muted">ID</th>
                         <th>Date</th>
+                        <th>User</th>
                         <th>Service</th>
                         <th>Source</th>
                         <th>Request ID</th>
                         <th>Duration</th>
-                        <th>Input Tokens</th>
-                        <th>Output Tokens</th>
-                        <th>Total Tokens</th>
-                        <th>Cost</th>
+                        <th class="text-end">Tokens <span class="fw-normal text-muted small">in / out</span></th>
+                        <th class="text-end">Cost</th>
                         <th>Model</th>
-                        <th>Provider</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for log in logs %}
                     <tr>
-                        <td>{{ log.id }}</td>
-                        <td>
-                            <span class="badge bg-secondary">{{ log.username }}</span>
-                        </td>
+                        <td class="small text-muted">{{ log.id }}</td>
                         <td class="small">{{ log.date }}</td>
-                        <td><span class="badge bg-secondary">{{ log.service }}</span></td>
-                        <td><span class="badge bg-secondary">{{ log.source }}</span></td>
+                        <td>{{ filter_badge('user', log.user_id if log.username != 'Unknown' else None, display=log.username, title='user') }}</td>
+                        <td>{{ filter_badge('service', log.service) }}</td>
+                        <td>{{ filter_badge('source', log.source) }}</td>
                         <td>{% if log.request_id != "N/A" %}<a href="{{ url_for('admin.admin_operational_timeline', request_id=log.request_id) }}"><code>{{ log.request_id }}</code></a>{% else %}<code>N/A</code>{% endif %}</td>
                         <td class="text-end">
                             {% if log.duration_ms == "N/A" %}
@@ -149,50 +234,55 @@
                             {{ "%.1f"|format(log.duration_ms / 1000) }} s
                             {% endif %}
                         </td>
-                        <td class="text-end">{{ "{:,}".format(log.token_input|int) }}</td>
-                        <td class="text-end">{{ "{:,}".format(log.token_output|int) }}</td>
-                        <td class="text-end"><strong>{{ "{:,}".format((log.token_input + log.token_output)|int)
-                                }}</strong></td>
+                        <td class="text-end">
+                            <strong>{{ "{:,}".format((log.token_input + log.token_output)|int) }}</strong>
+                            <div class="small text-muted">{{ "{:,}".format(log.token_input|int) }} / {{ "{:,}".format(log.token_output|int) }}</div>
+                        </td>
                         <td class="text-end">${{ "%.4f"|format(log.cost|float) }}</td>
-                        <td><span class="badge bg-info">{{ log.model }}</span></td>
-                        <td><span class="badge bg-primary">{{ log.provider }}</span></td>
+                        <td>
+                            {{ filter_badge('model', log.model) }}
+                            <div class="small">{{ filter_badge('provider', log.provider) }}</div>
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
+
+        {% if pagination and pagination.total_count is defined %}
+        <p class="small text-muted text-center mb-0">
+            Showing {{ pagination.first_index }}&ndash;{{ pagination.last_index }} of {{ "{:,}".format(pagination.total_count|int) }} records
+        </p>
+        {% endif %}
         {% else %}
         <div class="text-center py-5">
             <i class="fas fa-list fa-4x text-muted mb-3"></i>
             <h4 class="text-muted">No logs found</h4>
-            <p class="text-muted">Logs will appear here when API calls are made</p>
+            <p class="text-muted">
+                {% if active_filters %}No usage records match these filters. <a href="{{ url_for('admin.admin_logs') }}">Reset filters</a>
+                {% else %}Logs will appear here when API calls are made{% endif %}
+            </p>
         </div>
         {% endif %}
 
         <!-- Pagination -->
         {% if pagination and pagination.total_pages > 1 %}
-        <nav aria-label="Logs navigation" class="mt-4">
-            <ul class="pagination justify-content-center">
+        <nav aria-label="Logs navigation" class="mt-3">
+            <ul class="pagination pagination-sm justify-content-center">
                 <li class="page-item {{ 'disabled' if pagination.page == 1 else '' }}">
-                    <a class="page-link"
-                        href="{{ url_for('admin.admin_logs', page=1, start_date=current_start_date, end_date=current_end_date, search=current_search) }}">&laquo; First</a>
+                    <a class="page-link" href="{{ url_for('admin.admin_logs', page=1, **filter_args) }}">&laquo; First</a>
                 </li>
                 <li class="page-item {{ 'disabled' if pagination.page == 1 else '' }}">
-                    <a class="page-link"
-                        href="{{ url_for('admin.admin_logs', page=pagination.page-1, start_date=current_start_date, end_date=current_end_date, search=current_search) }}">Previous</a>
+                    <a class="page-link" href="{{ url_for('admin.admin_logs', page=[pagination.page-1, 1]|max, **filter_args) }}">Previous</a>
                 </li>
-
                 <li class="page-item disabled">
                     <span class="page-link">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
                 </li>
-
                 <li class="page-item {{ 'disabled' if pagination.page == pagination.total_pages else '' }}">
-                    <a class="page-link"
-                        href="{{ url_for('admin.admin_logs', page=pagination.page+1, start_date=current_start_date, end_date=current_end_date, search=current_search) }}">Next</a>
+                    <a class="page-link" href="{{ url_for('admin.admin_logs', page=[pagination.page+1, pagination.total_pages]|min, **filter_args) }}">Next</a>
                 </li>
                 <li class="page-item {{ 'disabled' if pagination.page == pagination.total_pages else '' }}">
-                    <a class="page-link"
-                        href="{{ url_for('admin.admin_logs', page=pagination.total_pages, start_date=current_start_date, end_date=current_end_date, search=current_search) }}">Last &raquo;</a>
+                    <a class="page-link" href="{{ url_for('admin.admin_logs', page=pagination.total_pages, **filter_args) }}">Last &raquo;</a>
                 </li>
             </ul>
         </nav>
